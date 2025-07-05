@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from ..db.core import NotFoundError, get_db
 from ..db.users import (
     User,
+    UserInput,
     UserCreate,
     UserUpdate,
     read_db_user,
@@ -21,8 +22,9 @@ router = APIRouter(
 
 # @limiter.limit("1/second")
 @router.post("/")
-def create_user(request: Request, user: UserCreate, db: Session = Depends(get_db)) -> User:
-    db_user = create_db_user(user, db)
+def create_user(request: Request, user: UserInput, db: Session = Depends(get_db)) -> User:
+    user_entry = UserCreate(**user.model_dump(exclude={"confirm_password"}))
+    db_user = create_db_user(user_entry, db)
     return User(**db_user.__dict__)
 
 

@@ -1,23 +1,50 @@
 from typing import Optional
-from pydantic import BaseModel
+from typing_extensions import Self
+from pydantic import BaseModel, model_validator, Field
 from sqlalchemy.orm import Session
 from .core import UserDB, NotFoundError
+from datetime import date
+from uuid import uuid4, UUID
 
 
 class User(BaseModel):
-    id: int
-    name: str
-    description: Optional[str] = None
+    public_id: UUID
+    first_name: str
+    last_name: str
+    email: str
+    date_of_birth: date
 
+
+class UserInput(BaseModel):
+    first_name: str
+    last_name: str
+    email: str
+    password: str
+    confirm_password: str
+    date_of_birth: date
+
+    @model_validator(mode="after")
+    def check_passwords_match(self) -> Self:
+        if self.password != self.confirm_password:
+            raise ValueError("Passwords do not match.")
+        return self
 
 class UserCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
+    public_id: UUID = Field(default_factory=uuid4)
+    first_name: str
+    last_name: str
+    email: str
+    password: str
+    date_of_birth: date
 
 
 class UserUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
+    first_name: Optional[str]
+    last_name: Optional[str]
+    email: Optional[str]
+    password: Optional[str]
+    confirm_password: Optional[str]
+    date_of_birth: Optional[date]
 
 
 def read_db_user(user_id: int, session: Session) -> UserDB:
@@ -28,7 +55,7 @@ def read_db_user(user_id: int, session: Session) -> UserDB:
 
 
 def create_db_user(user: UserCreate, session: Session) -> UserDB:
-    db_user = UserDB(**user.model_dump(exclude_none=True))
+    db_user = UserDB(**user.model_dump())
     session.add(db_user)
     session.commit()
     session.refresh(db_user)

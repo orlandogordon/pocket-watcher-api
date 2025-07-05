@@ -1,10 +1,12 @@
 from typing import Optional
-from sqlalchemy import create_engine, ForeignKey, Boolean, Column, Integer, String, DateTime
+from sqlalchemy import create_engine, ForeignKey, Index, Boolean, Column, Integer, String, DateTime, Date
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, Mapped, mapped_column
 from datetime import datetime
+from datetime import date
+from uuid import UUID
 
-DATABASE_URL = "sqlite:///test.db"
 # DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/pocket_watcher_db"
+DATABASE_URL = "sqlite:///test.db"
 
 
 class NotFoundError(Exception):
@@ -19,7 +21,12 @@ class UserDB(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str]
+    public_id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    first_name: Mapped[str]
+    last_name: Mapped[str]
+    email: Mapped[str] = mapped_column(unique=True)
+    password: Mapped[str]
+    date_of_birth: Mapped[date]
     updated_at: Mapped[Optional[datetime]] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=datetime.now())
 
@@ -28,8 +35,10 @@ class TransactionDB(Base):
     __tablename__ = "transactions"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    public_id: Mapped[str] = mapped_column(unique=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    date: Mapped[datetime]
+    
+    transaction_date: Mapped[datetime]
     description: Mapped[str]
     category: Mapped[str]
     amount: Mapped[float]
@@ -41,13 +50,21 @@ class TransactionDB(Base):
     created_at: Mapped[datetime] = mapped_column(default=datetime.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(default=None)
 
+    __table_args__ = (
+        Index("idx_transactions_userid", "user_id"),
+        Index("idx_transactions_userid_date", "user_id", "transaction_date"),
+        Index('idx_transactions_date', 'transaction_date'),
+    )
+
+
 class InvestmentDB(Base):
     __tablename__ = "investments"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    public_id: Mapped[str] = mapped_column(unique=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
-    date: Mapped[datetime]
+    transaction_date: Mapped[datetime]
     transaction_type: Mapped[str]  # e.g., "buy", "sell"
     symbol: Mapped[str]
     description: Mapped[str]
@@ -60,6 +77,13 @@ class InvestmentDB(Base):
 
     created_at: Mapped[datetime] = mapped_column(default=datetime.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(default=None)
+
+    __table_args__ = (
+        Index("idx_investments_userid", "user_id"),
+        Index("idx_investments_userid_date", "user_id", "transaction_date"),
+        Index('idx_investments_date', 'transaction_date'),
+    )
+
 
 engine = create_engine(DATABASE_URL, echo=True)
 session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
