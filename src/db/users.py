@@ -43,12 +43,11 @@ class UserUpdate(BaseModel):
     last_name: Optional[str]
     email: Optional[str]
     password: Optional[str]
-    confirm_password: Optional[str]
     date_of_birth: Optional[date]
 
 
-def read_db_user(user_id: int, session: Session) -> UserDB:
-    db_user = session.query(UserDB).filter(UserDB.id == user_id).first()
+def read_db_user(user_id: str, session: Session) -> UserDB:
+    db_user = session.query(UserDB).filter(UserDB.public_id == user_id).first()
     if db_user is None:
         raise NotFoundError(f"User with id {user_id} not found.")
     return db_user
@@ -63,7 +62,7 @@ def create_db_user(user: UserCreate, session: Session) -> UserDB:
     return db_user
 
 
-def update_db_user(user_id: int, user: UserUpdate, session: Session) -> UserDB:
+def update_db_user(user_id: str, user: UserUpdate, session: Session) -> UserDB:
     db_user = read_db_user(user_id, session)
     for key, value in user.model_dump(exclude_none=True).items():
         setattr(db_user, key, value)
@@ -73,7 +72,7 @@ def update_db_user(user_id: int, user: UserUpdate, session: Session) -> UserDB:
     return db_user
 
 
-def delete_db_user(user_id: int, session: Session) -> UserDB:
+def delete_db_user(user_id: str, session: Session) -> UserDB:
     db_user = read_db_user(user_id, session)
     session.delete(db_user)
     session.commit()

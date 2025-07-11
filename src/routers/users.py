@@ -29,7 +29,7 @@ def create_user(request: Request, user: UserInput, db: Session = Depends(get_db)
 
 
 @router.get("/{user_id}")
-def read_user(request: Request, user_id: int, db: Session = Depends(get_db)) -> User:
+def read_user(request: Request, user_id: str, db: Session = Depends(get_db)) -> User:
     try:
         db_user = read_db_user(user_id, db)
     except NotFoundError as e:
@@ -50,7 +50,7 @@ def read_user_automations(
 
 
 @router.put("/{user_id}")
-def update_user(request: Request, user_id: int, user: UserUpdate, db: Session = Depends(get_db)) -> User:
+def update_user(request: Request, user_id: str, user: UserUpdate, db: Session = Depends(get_db)) -> User:
     try:
         db_user = update_db_user(user_id, user, db)
     except NotFoundError as e:
@@ -59,7 +59,7 @@ def update_user(request: Request, user_id: int, user: UserUpdate, db: Session = 
 
 
 @router.delete("/{user_id}")
-def delete_user(request: Request, user_id: int, db: Session = Depends(get_db)) -> User:
+def delete_user(request: Request, user_id: str, db: Session = Depends(get_db)) -> User:
     try:
         db_user = delete_db_user(user_id, db)
     except NotFoundError as e:

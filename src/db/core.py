@@ -1,8 +1,7 @@
 from typing import Optional
-from sqlalchemy import create_engine, ForeignKey, Index, Boolean, Column, Integer, String, DateTime, Date
+from sqlalchemy import create_engine, ForeignKey, Index, UniqueConstraint, Boolean, Column, Integer, String, DateTime, Date
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, Mapped, mapped_column
-from datetime import datetime
-from datetime import date
+from datetime import datetime, date
 from uuid import UUID
 
 # DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/pocket_watcher_db"
@@ -35,17 +34,20 @@ class TransactionDB(Base):
     __tablename__ = "transactions"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    public_id: Mapped[str] = mapped_column(unique=True, nullable=False)
+    public_id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     
-    transaction_date: Mapped[datetime]
+    transaction_date: Mapped[date]
     description: Mapped[str]
-    category: Mapped[str]
+    parsed_description: Mapped[str]
+    category: Mapped[str] = mapped_column(nullable=True)
     amount: Mapped[float]
+    tags: Mapped[str] = mapped_column(default='', nullable=True)  # Comma-separated tags
+    transaction_identifier: Mapped[str]
     transaction_type: Mapped[str]  # e.g., "income", "expense"
-    bank_name: Mapped[str]
-    account_holder: Mapped[str]
-    account_number: Mapped[int]
+    bank_name: Mapped[str] = mapped_column(nullable=True)
+    account_holder: Mapped[str] = mapped_column(nullable=True)
+    account_number: Mapped[int] = mapped_column(nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(default=datetime.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(default=None)
@@ -54,6 +56,7 @@ class TransactionDB(Base):
         Index("idx_transactions_userid", "user_id"),
         Index("idx_transactions_userid_date", "user_id", "transaction_date"),
         Index('idx_transactions_date', 'transaction_date'),
+        UniqueConstraint('user_id', 'transaction_identifier', name='unique_transaction')
     )
 
 
