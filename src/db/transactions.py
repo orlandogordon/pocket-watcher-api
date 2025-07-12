@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from .core import TransactionDB, NotFoundError
@@ -103,6 +103,14 @@ def create_db_transaction(transaction: TransactionCreate, session: Session) -> T
 
     return db_transaction
 
+def create_db_transactions(transactions: List[TransactionCreate], session: Session) -> TransactionDB:
+    db_transactions = [TransactionDB(**transaction.model_dump(exclude_none=True)) for transaction in transactions]  
+    session.bulk_save_objects(db_transactions)
+    session.commit()
+    # TODO: Refresh the objects to get the updated state from the database
+    # for transaction in db_transactions:
+    #     session.refresh(transaction)
+    return db_transactions
 
 def update_db_transaction(transaction_id: str, transaction: TransactionUpdate, session: Session) -> TransactionDB:
     db_transaction = get_db_transaction(transaction_id, session)

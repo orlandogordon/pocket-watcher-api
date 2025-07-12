@@ -1,15 +1,18 @@
 from fastapi import APIRouter, HTTPException, Request
+from typing import List
 from fastapi.params import Depends
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from ..db.core import NotFoundError, get_db
 from ..db.transactions import (
     Transaction,
+    TransactionInput,
     TransactionCreate,
     TransactionUpdate,
     get_db_transaction,
     get_db_transaction_by_identifier,
     create_db_transaction,
+    create_db_transactions,
     update_db_transaction,
     delete_db_transaction,
 )
@@ -42,8 +45,29 @@ def create_transaction(request: Request, transaction: TransactionCreate, db: Ses
             raise HTTPException(status_code=404, detail=str(e)) from e
     except IntegrityError as e:
         raise HTTPException(status_code=400, detail=str("SQL Alchemy Integrity Error: Please ensure the payload matches the expected input format")) from e
+    print({**db_transaction.__dict__})
+    print(Transaction(**db_transaction.__dict__))
     return Transaction(**db_transaction.__dict__)
 
+@router.post("/bulk-upload/")
+def create_transactions(request: Request, transactions: List[TransactionInput], db: Session = Depends(get_db)) -> List[TransactionCreate]:
+    try:
+        # Convert Pydantic models to SQLAlchemy models
+        formated_transactions = [TransactionCreate(**transaction.__dict__) for transaction in transactions]
+        db_transactions = create_db_transactions(formated_transactions, db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except IntegrityError as e:
+        raise HTTPException(status_code=400, detail=str("SQL Alchemy Integrity Error: Please ensure the payload matches the expected input format")) from e
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        breakpoint()
+        raise HTTPException(status_code=500, detail=str("An unexpected error occurred while processing the transactions.")) from e
+    print({**db_transactions[0].__dict__})
+    # print(Transaction(**db_transactions[0].__dict__))
+    # breakpoint()
+    return formated_transactions
+    # return [Transaction(**db_transaction.__dict__) for db_transaction in db_transactions]
 
 @router.get("/{transaction_id}")
 def read_transaction(request: Request, transaction_id: str, db: Session = Depends(get_db)) -> Transaction:
