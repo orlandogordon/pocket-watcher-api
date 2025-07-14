@@ -6,13 +6,16 @@ from datetime import datetime, date
 from uuid import uuid4, UUID
 
 class Transaction(BaseModel):
-    id: int
+    id: UUID
     user_id: int
     transaction_date: date
     description: str
+    parsed_description: str
     category: Optional[str] = None
     amount: float
-    transaction_type: str  # e.g., "income", "expense"
+    tags: Optional[str] = None  # Comma-separated tags
+    transaction_identifier: str
+    transaction_type: str
     bank_name: str
     account_holder: str
     account_number: int
@@ -30,7 +33,7 @@ class TransactionInput(BaseModel):
     account_number: Optional[int] = None
 
 class TransactionCreate(BaseModel):
-    public_id: UUID = Field(default_factory=uuid4)
+    id: UUID = Field(default_factory=uuid4)
     user_id: int
     transaction_date: date
     description: Optional[str] = None
@@ -51,6 +54,7 @@ class TransactionCreate(BaseModel):
             self.description = self.parsed_description
 
 class TransactionUpdate(BaseModel):
+    id: UUID
     user_id: int
     transaction_date: date
     description: str
@@ -105,11 +109,10 @@ def create_db_transaction(transaction: TransactionCreate, session: Session) -> T
 
 def create_db_transactions(transactions: List[TransactionCreate], session: Session) -> TransactionDB:
     db_transactions = [TransactionDB(**transaction.model_dump(exclude_none=True)) for transaction in transactions]  
-    session.bulk_save_objects(db_transactions)
+
+    session.bulk_save_objects(db_transactions, return_defaults=True)
     session.commit()
-    # TODO: Refresh the objects to get the updated state from the database
-    # for transaction in db_transactions:
-    #     session.refresh(transaction)
+
     return db_transactions
 
 def update_db_transaction(transaction_id: str, transaction: TransactionUpdate, session: Session) -> TransactionDB:

@@ -25,3 +25,12 @@ curl -X GET 'http://127.0.0.1:8000/blogs/'
 curl -X GET 'http://127.0.0.1:8000/blogs/2'
 
 curl -X GET http://127.0.0.1:8000/items/0
+
+
+## TODO
+- Add user id validation wherever it is mapped as a foreign key
+- Fix user table to use db_id - id pattern
+- Refine model validation, optional attributes in pydantic models
+- Create update and delete logic
+- Streamlined testing setup? (pre written bash script maybe?)
+- Add model factory to UserCreate pydantic model id field (see transactionCreate)

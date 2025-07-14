@@ -33,8 +33,8 @@ class UserDB(Base):
 class TransactionDB(Base):
     __tablename__ = "transactions"
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    public_id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     
     transaction_date: Mapped[date]
@@ -90,6 +90,7 @@ class InvestmentDB(Base):
 
 engine = create_engine(DATABASE_URL, echo=True)
 session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Base.metadata.drop_all(engine, tables=[TransactionDB.__table__], checkfirst=True)
 Base.metadata.create_all(bind=engine)
 
 

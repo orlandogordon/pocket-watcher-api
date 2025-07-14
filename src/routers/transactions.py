@@ -45,8 +45,7 @@ def create_transaction(request: Request, transaction: TransactionCreate, db: Ses
             raise HTTPException(status_code=404, detail=str(e)) from e
     except IntegrityError as e:
         raise HTTPException(status_code=400, detail=str("SQL Alchemy Integrity Error: Please ensure the payload matches the expected input format")) from e
-    print({**db_transaction.__dict__})
-    print(Transaction(**db_transaction.__dict__))
+
     return Transaction(**db_transaction.__dict__)
 
 @router.post("/bulk-upload/")
@@ -63,11 +62,8 @@ def create_transactions(request: Request, transactions: List[TransactionInput], 
         print(f"An unexpected error occurred: {e}")
         breakpoint()
         raise HTTPException(status_code=500, detail=str("An unexpected error occurred while processing the transactions.")) from e
-    print({**db_transactions[0].__dict__})
-    # print(Transaction(**db_transactions[0].__dict__))
-    # breakpoint()
-    return formated_transactions
-    # return [Transaction(**db_transaction.__dict__) for db_transaction in db_transactions]
+
+    return [Transaction(**db_transaction.__dict__) for db_transaction in db_transactions]
 
 @router.get("/{transaction_id}")
 def read_transaction(request: Request, transaction_id: str, db: Session = Depends(get_db)) -> Transaction:
