@@ -42,8 +42,9 @@ class UserDB(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     
     # Personal Information
-    first_name: Mapped[Optional[str]] = mapped_column(String(100))
-    last_name: Mapped[Optional[str]] = mapped_column(String(100))
+    first_name: Mapped[str] = mapped_column(String(100))
+    last_name: Mapped[str] = mapped_column(String(100))
+    date_of_birth: Mapped[date] = mapped_column(Date)
     
     # Activity Tracking
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
