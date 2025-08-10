@@ -58,6 +58,7 @@ class UserDB(Base):
     transactions = relationship("TransactionDB", back_populates="user")
     tags = relationship("TagDB", back_populates="user")
     budgets = relationship("BudgetDB", back_populates="user")
+    debt_repayment_plans = relationship("DebtRepaymentPlanDB", back_populates="user")
 
 
 class TransactionType(enum.Enum):
@@ -271,6 +272,62 @@ class DebtPaymentDB(Base):
     transaction = relationship("TransactionDB")
 
 
+class DebtStrategy(enum.Enum):
+    AVALANCHE = "AVALANCHE"
+    SNOWBALL = "SNOWBALL"
+    CUSTOM = "CUSTOM"
+
+
+class DebtRepaymentPlanDB(Base):
+    __tablename__ = "debt_repayment_plans"
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "plan_name", name="uq_user_debt_plan_name"),
+    )
+
+    plan_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
+    plan_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    strategy: Mapped[DebtStrategy] = mapped_column(Enum(DebtStrategy), default=DebtStrategy.CUSTOM)
+    target_payoff_date: Mapped[Optional[date]] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(50), default="ACTIVE")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("UserDB", back_populates="debt_repayment_plans")
+    linked_accounts = relationship("DebtPlanAccountLinkDB", back_populates="plan", cascade="all, delete-orphan")
+
+
+class DebtPlanAccountLinkDB(Base):
+    __tablename__ = "debt_plan_account_links"
+
+    plan_id: Mapped[int] = mapped_column(ForeignKey("debt_repayment_plans.plan_id"), primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), primary_key=True)
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+
+    plan = relationship("DebtRepaymentPlanDB", back_populates="linked_accounts")
+    account = relationship("AccountDB", back_populates="debt_repayment_plans_link")
+
+
+class DebtRepaymentScheduleDB(Base):
+    __tablename__ = "debt_repayment_schedules"
+    
+    __table_args__ = (
+        UniqueConstraint("user_id", "account_id", "payment_month", name="uq_user_account_month_payment"),
+    )
+
+    schedule_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    
+    payment_month: Mapped[date] = mapped_column(Date, nullable=False)
+    scheduled_payment_amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
+    
+    user = relationship("UserDB")
+    account = relationship("AccountDB", back_populates="debt_repayment_schedules")
+
+
 class TransactionDB(Base):
     __tablename__ = "transactions"
     
@@ -432,6 +489,8 @@ class AccountDB(Base):
     account_number_last4: Mapped[Optional[str]] = mapped_column(String(4))
     
     # Loan-specific fields (only used for LOAN account types)
+    original_principal: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))
+    minimum_payment: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))
     interest_rate: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(5, 4))  # e.g., 0.0525 for 5.25%
     interest_rate_type: Mapped[Optional[str]] = mapped_column(String(20))  # "FIXED" or "VARIABLE"
     
@@ -453,6 +512,8 @@ class AccountDB(Base):
     investment_transactions = relationship("InvestmentTransactionDB", back_populates="account")
     debt_payments = relationship("DebtPaymentDB", foreign_keys="DebtPaymentDB.loan_account_id", back_populates="loan_account")
     debt_payments_from = relationship("DebtPaymentDB", foreign_keys="DebtPaymentDB.payment_source_account_id", back_populates="payment_source_account")
+    debt_repayment_plans_link = relationship("DebtPlanAccountLinkDB", back_populates="account", cascade="all, delete-orphan")
+    debt_repayment_schedules = relationship("DebtRepaymentScheduleDB", back_populates="account", cascade="all, delete-orphan")
 
 
 engine = create_engine(DATABASE_URL, echo=True)
