@@ -4,172 +4,13 @@ from sqlalchemy import and_, or_, desc, asc
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
 from decimal import Decimal
-from uuid import uuid4
+from uuid import uuid4, UUID
 import hashlib
-import json
 
 # Import your database models
-from .core import TransactionDB, AccountDB, UserDB, NotFoundError, TransactionType, SourceType
-from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List, Dict, Any
-from datetime import datetime, date
-from decimal import Decimal
-from uuid import UUID
-from enum import Enum
-
-
-# ===== TRANSACTION PYDANTIC MODELS =====
-
-class TransactionTypeEnum(str, Enum):
-    DEBIT = "DEBIT"
-    CREDIT = "CREDIT"
-    TRANSFER = "TRANSFER"
-    DEPOSIT = "DEPOSIT"
-    WITHDRAWAL = "WITHDRAWAL"
-    FEE = "FEE"
-    INTEREST = "INTEREST"
-
-
-class SourceTypeEnum(str, Enum):
-    CSV = "CSV"
-    PDF = "PDF"
-    MANUAL = "MANUAL"
-    API = "API"
-
-
-class TransactionCreate(BaseModel):
-    account_id: int = Field(..., description="Account ID for this transaction")
-    transaction_date: date = Field(..., description="Date of the transaction")
-    posted_date: Optional[date] = Field(None, description="Date transaction was posted")
-    amount: Decimal = Field(..., description="Transaction amount")
-    transaction_type: TransactionTypeEnum = Field(..., description="Type of transaction")
-    description: Optional[str] = Field(None, max_length=500, description="Transaction description")
-    merchant_name: Optional[str] = Field(None, max_length=255, description="Merchant name")
-    category: Optional[str] = Field(None, max_length=100, description="Transaction category")
-    subcategory: Optional[str] = Field(None, max_length=100, description="Transaction subcategory")
-    comments: Optional[str] = Field(None, description="User comments")
-    external_transaction_id: Optional[str] = Field(None, max_length=255, description="External transaction ID")
-    source_type: SourceTypeEnum = Field(default=SourceTypeEnum.MANUAL, description="Source of transaction data")
-    raw_data: Optional[Dict[str, Any]] = Field(None, description="Raw transaction data from source")
-
-    @field_validator('amount')
-    @classmethod
-    def validate_amount(cls, v: Decimal) -> Decimal:
-        return round(v, 2)
-
-    @field_validator('description')
-    @classmethod
-    def validate_description(cls, v: Optional[str]) -> Optional[str]:
-        return v.strip() if v else v
-
-    @field_validator('merchant_name')
-    @classmethod
-    def validate_merchant_name(cls, v: Optional[str]) -> Optional[str]:
-        return v.strip() if v else v
-
-
-class TransactionUpdate(BaseModel):
-    """Update transaction - all fields optional except IDs"""
-    transaction_date: Optional[date] = None
-    posted_date: Optional[date] = None
-    amount: Optional[Decimal] = None
-    transaction_type: Optional[TransactionTypeEnum] = None
-    description: Optional[str] = Field(None, max_length=500)
-    merchant_name: Optional[str] = Field(None, max_length=255)
-    category: Optional[str] = Field(None, max_length=100)
-    subcategory: Optional[str] = Field(None, max_length=100)
-    comments: Optional[str] = None
-    needs_review: Optional[bool] = None
-
-    @field_validator('amount')
-    @classmethod
-    def validate_amount(cls, v: Optional[Decimal]) -> Optional[Decimal]:
-        return round(v, 2) if v is not None else v
-
-    @field_validator('description')
-    @classmethod
-    def validate_description(cls, v: Optional[str]) -> Optional[str]:
-        return v.strip() if v else v
-
-    @field_validator('merchant_name')
-    @classmethod
-    def validate_merchant_name(cls, v: Optional[str]) -> Optional[str]:
-        return v.strip() if v else v
-
-
-class TransactionResponse(BaseModel):
-    """Transaction data returned to client"""
-    id: UUID
-    db_id: int
-    external_transaction_id: Optional[str]
-    account_id: int
-    transaction_date: date
-    posted_date: Optional[date]
-    amount: Decimal
-    transaction_type: TransactionTypeEnum
-    category: Optional[str]
-    subcategory: Optional[str]
-    description: Optional[str]
-    parsed_description: Optional[str]
-    merchant_name: Optional[str]
-    comments: Optional[str]
-    institution_name: Optional[str]
-    account_number_last4: Optional[str]
-    source_type: SourceTypeEnum
-    needs_review: bool
-    created_at: datetime
-    updated_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-class TransactionSummary(BaseModel):
-    """Lightweight transaction summary"""
-    id: UUID
-    db_id: int
-    transaction_date: date
-    amount: Decimal
-    transaction_type: TransactionTypeEnum
-    description: Optional[str]
-    merchant_name: Optional[str]
-    category: Optional[str]
-
-    class Config:
-        from_attributes = True
-
-
-class TransactionImport(BaseModel):
-    """Bulk transaction import"""
-    account_id: int
-    transactions: List[TransactionCreate]
-    source_type: SourceTypeEnum = Field(default=SourceTypeEnum.CSV)
-
-
-class TransactionFilter(BaseModel):
-    """Filter parameters for transaction queries"""
-    account_id: Optional[int] = None
-    account_ids: Optional[List[int]] = None
-    transaction_type: Optional[TransactionTypeEnum] = None
-    category: Optional[str] = None
-    subcategory: Optional[str] = None
-    merchant_name: Optional[str] = None
-    date_from: Optional[date] = None
-    date_to: Optional[date] = None
-    amount_min: Optional[Decimal] = None
-    amount_max: Optional[Decimal] = None
-    needs_review: Optional[bool] = None
-    description_search: Optional[str] = None
-
-
-class TransactionStats(BaseModel):
-    """Transaction statistics"""
-    total_transactions: int
-    total_income: Decimal
-    total_expenses: Decimal
-    net_amount: Decimal
-    transactions_by_type: Dict[str, int]
-    transactions_by_category: Dict[str, Decimal]
+from src.db.core import TransactionDB, AccountDB, UserDB, NotFoundError, TransactionType, SourceType
+from src.models.transaction import TransactionCreate, TransactionUpdate, TransactionFilter, TransactionStats, TransactionImport
+from src.crud.crud_account import update_account_balance
 
 
 # ===== UTILITY FUNCTIONS =====
@@ -397,7 +238,6 @@ def update_db_transaction(db: Session, transaction_id: int, user_id: int,
                 # Reverse old amount and apply new amount
                 balance_adjustment = db_transaction.amount - old_amount
                 new_balance = account.balance + balance_adjustment
-                from .accounts import update_account_balance
                 update_account_balance(db, account.id, new_balance)
         
         return db_transaction
@@ -430,7 +270,6 @@ def delete_db_transaction(db: Session, transaction_id: int, user_id: int) -> boo
         # Update account balance (reverse the transaction)
         if account:
             new_balance = account.balance - transaction_amount
-            from .accounts import update_account_balance
             update_account_balance(db, account.id, new_balance)
         
         return True
@@ -529,7 +368,6 @@ def bulk_create_transactions(db: Session, user_id: int, transaction_import: Tran
             # Update account balance based on all imported transactions
             balance_change = sum(t.amount for t in created_transactions)
             new_balance = account.balance + balance_change
-            from .accounts import update_account_balance
             update_account_balance(db, account.id, new_balance)
         
         # Log import results (you might want to return this info)
@@ -562,7 +400,6 @@ def update_account_balance_from_transaction(db: Session, account: AccountDB, tra
         # For TRANSFER and INTEREST, you might need special handling
         new_balance = account.balance + transaction.amount
     
-    from .accounts import update_account_balance
     update_account_balance(db, account.id, new_balance)
 
 

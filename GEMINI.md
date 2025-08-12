@@ -20,11 +20,16 @@ This document provides a technical overview of the Pocket Watcher API project, i
 ## Architectural Notes
 
 - Database schema is defined in `src/db/core.py`.
-- Each core app function (i.e. Users, Accounts, Transactions) has models and crud logic defined in it's own file like so: `src/db/transactions.py`.
+- Each core app function (i.e. Users, Accounts, Transactions, Investments) has models and crud logic defined in it's own file like so: `src/db/transactions.py`.
 - Each core app function has it's own file with routes defined in  `src/routers`.
 - PDF and CSV parsing logic is defined in `src/parser`.
 - The application is an API service that will support a personal finance application.
-- Core application features include tracking transactions for a given user, allowing the user to create custom tags for transactions, allowing users to create custom budgets, allowing users to track debt/create debt repayment plans, and allowing users to track investment transactions and holdings to formulate their own "net worth" calculation.
+- Core application features include: 
+    - Tracking transactions for a given user.
+    - Allowing the user to create custom tags for transactions. This could serve as a custom category or as a way of creating custom filtering for specific events that might span multiple months (like a vacation or wedding preparations). 
+    - Allowing users to create custom budgets.
+    - Allowing users to track debt payments and create debt repayment plans.
+    - Allowing users to track investment transactions and holdings to formulate their own "net worth" calculation.
 
 ## Implementation standard.
 
