@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 from sqlalchemy import create_engine, ForeignKey, Index, UniqueConstraint, Boolean, Column, Integer, String, Text, JSON, DECIMAL, DateTime, Date
 from sqlalchemy.types import Enum
@@ -8,8 +9,7 @@ from decimal import Decimal
 import enum
 
 
-# DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/pocket_watcher_db"
-DATABASE_URL = "sqlite:///test.db"
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///test.db")
 
 
 class NotFoundError(Exception):
@@ -518,8 +518,6 @@ class AccountDB(Base):
 
 engine = create_engine(DATABASE_URL, echo=True)
 session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base.metadata.drop_all(engine, tables=[TransactionDB.__table__], checkfirst=True)
-Base.metadata.create_all(bind=engine)
 
 
 # Dependency to get the database session
