@@ -1,59 +1,111 @@
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.params import Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from src.db.core import NotFoundError, get_db
-from src.models.user import UserCreate, UserUpdate, UserResponse
-from src.crud.crud_user import create_db_user, read_db_user, update_db_user, delete_db_user
+from typing import List
+from uuid import UUID
 
-# from .limiter import limiter
-
+from src.crud import crud_user
+from src.models import user as user_models
+from src.db.core import get_db, NotFoundError
 
 router = APIRouter(
     prefix="/users",
+    tags=["users"],
 )
 
-
-# @limiter.limit("1/second")
-@router.post("/")
-def create_user(request: Request, user: UserCreate, db: Session = Depends(get_db)) -> UserResponse:
-    db_user = create_db_user(db, user)
-    return UserResponse(**db_user.__dict__)
-
-
-@router.get("/{user_id}")
-def read_user(request: Request, user_id: str, db: Session = Depends(get_db)) -> UserResponse:
+@router.post("/", response_model=user_models.UserResponse, status_code=status.HTTP_201_CREATED)
+def create_user(user: user_models.UserCreate, db: Session = Depends(get_db)):
+    """
+    Create a new user.
+    """
     try:
-        db_user = read_db_user(db, user_id=int(user_id))
-    except NotFoundError as e:
-        raise HTTPException(status_code=404) from e
-    return UserResponse(**db_user.__dict__)
+        db_user = crud_user.create_db_user(db=db, user_data=user)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return db_user
 
+@router.post("/login")
+def login_for_access_token(user_login: user_models.UserLogin, db: Session = Depends(get_db)):
+    """
+    Authenticate user and return a token.
+    (Note: Token implementation is a placeholder).
+    """
+    user = crud_user.authenticate_user(db, email=user_login.email, password=user_login.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    # In a real application, you would create and return a JWT token here.
+    return {"access_token": user.username, "token_type": "bearer"}
 
-@router.get("/{user_id}/automations")
-def read_user_automations(
-    request: Request, user_id: int, db: Session = Depends(get_db)
-) -> list[UserResponse]:
-    # try:
-    #     transactions = read_db_transactions_for_user(user_id, db)
-    # except NotFoundError as e:
-    #     raise HTTPException(status_code=404) from e
-    # return [Automation(**automation.__dict__) for automation in automations]
-    return []
+@router.get("/", response_model=List[user_models.UserResponse])
+def read_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """
+    Retrieve a list of users.
+    """
+    users = crud_user.read_db_users(db, skip=skip, limit=limit)
+    return users
 
+@router.get("/{user_id}", response_model=user_models.UserResponse)
+def read_user(user_id: int, db: Session = Depends(get_db)):
+    """
+    Retrieve a single user by their integer ID.
+    """
+    db_user = crud_user.read_db_user(db, user_id=user_id)
+    if db_user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return db_user
 
-@router.put("/{user_id}")
-def update_user(request: Request, user_id: str, user: UserUpdate, db: Session = Depends(get_db)) -> UserResponse:
+@router.get("/uuid/{user_uuid}", response_model=user_models.UserResponse)
+def read_user_by_uuid(user_uuid: UUID, db: Session = Depends(get_db)):
+    """
+    Retrieve a single user by their UUID.
+    """
+    db_user = crud_user.read_db_user(db, user_uuid=user_uuid)
+    if db_user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return db_user
+
+@router.put("/{user_id}", response_model=user_models.UserResponse)
+def update_user(user_id: int, user: user_models.UserUpdate, db: Session = Depends(get_db)):
+    """
+    Update a user's profile.
+    """
     try:
-        db_user = update_db_user(db, user_id=int(user_id), user_updates=user)
+        updated_user = crud_user.update_db_user(db=db, user_id=user_id, user_updates=user)
     except NotFoundError as e:
-        raise HTTPException(status_code=404) from e
-    return UserResponse(**db_user.__dict__)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return updated_user
 
-
-@router.delete("/{user_id}")
-def delete_user(request: Request, user_id: str, db: Session = Depends(get_db)) -> UserResponse:
+@router.delete("/{user_id}", response_model=user_models.UserResponse)
+def delete_user(user_id: int, db: Session = Depends(get_db)):
+    """
+    Delete a user.
+    """
+    db_user = crud_user.read_db_user(db, user_id=user_id)
+    if db_user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    
     try:
-        db_user = delete_db_user(db, user_id=int(user_id))
+        crud_user.delete_db_user(db=db, user_id=user_id)
+    except ValueError as e:
+        # This might happen if there are constraints preventing deletion.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    return db_user
+
+@router.post("/{user_id}/change-password", status_code=status.HTTP_200_OK)
+def change_password(user_id: int, password_change: user_models.PasswordChange, db: Session = Depends(get_db)):
+    """
+    Change a user's password.
+    """
+    try:
+        crud_user.change_user_password(db=db, user_id=user_id, password_change=password_change)
     except NotFoundError as e:
-        raise HTTPException(status_code=404) from e
-    return UserResponse(**db_user.__dict__)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    
+    return {"message": "Password changed successfully"}
