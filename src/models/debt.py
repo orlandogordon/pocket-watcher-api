@@ -62,3 +62,42 @@ class DebtRepaymentScheduleResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+# ===== DEBT PAYMENT MODELS =====
+
+class DebtPaymentCreate(BaseModel):
+    loan_account_id: int
+    payment_source_account_id: Optional[int] = None
+    transaction_id: Optional[int] = None
+    payment_amount: Decimal
+    principal_amount: Optional[Decimal] = None
+    interest_amount: Optional[Decimal] = None
+    remaining_balance_after_payment: Optional[Decimal] = None
+    payment_date: date
+    description: Optional[str] = Field(None, max_length=500)
+
+class DebtPaymentUpdate(BaseModel):
+    payment_source_account_id: Optional[int] = None
+    transaction_id: Optional[int] = None
+    payment_amount: Optional[Decimal] = None
+    principal_amount: Optional[Decimal] = None
+    interest_amount: Optional[Decimal] = None
+    remaining_balance_after_payment: Optional[Decimal] = None
+    payment_date: Optional[date] = None
+    description: Optional[str] = Field(None, max_length=500)
+
+class DebtPaymentResponse(BaseModel):
+    payment_id: int
+    loan_account_id: int
+    payment_source_account_id: Optional[int]
+    transaction_id: Optional[int]
+    payment_amount: Decimal
+    principal_amount: Optional[Decimal]
+    interest_amount: Optional[Decimal]
+    remaining_balance_after_payment: Optional[Decimal]
+    payment_date: date
+    description: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

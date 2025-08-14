@@ -1,3 +1,37 @@
+# Project Status Update - 2025-08-14
+
+This document records the state of the project and the last interaction to ensure continuity.
+
+## User's Last Request:
+
+> can you update progress_log.md? I'm about to shut down for tn
+
+## Summary of Work Completed:
+
+Today's session focused on implementing the missing functionality for tracking individual debt payments and ensuring the database migration system is robust and flexible.
+
+**Key Accomplishments:**
+
+1.  **Database Migration Overhaul:**
+    *   Reconfigured the Alembic environment to be independent of the database engine, allowing seamless switching between SQLite for development and PostgreSQL for production.
+    *   Consolidated the entire database schema into a single, clean initial migration file, providing a solid foundation for future schema changes.
+
+2.  **Debt Payment Feature Implementation:**
+    *   Added the necessary Pydantic models (`DebtPaymentCreate`, `DebtPaymentUpdate`, `DebtPaymentResponse`) to `src/models/debt.py`.
+    *   Implemented the backend logic for creating, reading, updating, and deleting debt payments in `src/crud/crud_debt.py`.
+    *   Exposed this functionality through a full suite of RESTful API endpoints in `src/routers/debts.py`.
+
+## Current Project Status:
+
+The API now fully supports all core features outlined in `GEMINI.md`, including the previously missing individual debt payment tracking. The project's database foundation is significantly more robust.
+
+**Next Steps:**
+
+*   The new endpoints for debt payments are ready for testing.
+*   The application can be run using the command: `uvicorn src.main:app --reload`.
+
+---
+
 # Project Status Update - 2025-08-12
 
 This document records the state of the project and the last interaction to ensure continuity.

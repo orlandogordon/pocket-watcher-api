@@ -113,3 +113,74 @@ def read_payment_schedule_for_account(
         return crud_debt.read_schedule_for_account(db=db, user_id=user_id, account_id=account_id)
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+# ===== DEBT PAYMENTS =====
+
+@router.post("/payments/", response_model=debt_models.DebtPaymentResponse, status_code=status.HTTP_201_CREATED)
+def create_debt_payment(
+    payment_data: debt_models.DebtPaymentCreate,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Record a new debt payment against a loan account.
+    """
+    try:
+        return crud_debt.create_debt_payment(db=db, user_id=user_id, payment_data=payment_data)
+    except NotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+@router.get("/accounts/{account_id}/payments/", response_model=List[debt_models.DebtPaymentResponse])
+def read_debt_payments_for_account(
+    account_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Retrieve all debt payments for a specific loan account.
+    """
+    try:
+        return crud_debt.read_all_debt_payments_for_account(db=db, user_id=user_id, account_id=account_id)
+    except NotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+@router.get("/payments/{payment_id}/", response_model=debt_models.DebtPaymentResponse)
+def read_debt_payment(
+    payment_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Retrieve a specific debt payment by its ID.
+    """
+    db_payment = crud_debt.read_debt_payment(db=db, payment_id=payment_id, user_id=user_id)
+    if db_payment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment not found")
+    return db_payment
+
+@router.put("/payments/{payment_id}/", response_model=debt_models.DebtPaymentResponse)
+def update_debt_payment(
+    payment_id: int,
+    payment_data: debt_models.DebtPaymentUpdate,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Update a debt payment.
+    """
+    updated_payment = crud_debt.update_debt_payment(db=db, payment_id=payment_id, user_id=user_id, payment_data=payment_data)
+    if updated_payment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment not found")
+    return updated_payment
+
+@router.delete("/payments/{payment_id}/", status_code=status.HTTP_204_NO_CONTENT)
+def delete_debt_payment(
+    payment_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Delete a debt payment.
+    """
+    if not crud_debt.delete_debt_payment(db=db, payment_id=payment_id, user_id=user_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment not found")
