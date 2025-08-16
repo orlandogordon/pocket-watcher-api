@@ -5,6 +5,7 @@ from decimal import Decimal
 from uuid import UUID
 from enum import Enum
 
+from src.models.category import CategoryResponse
 
 # ===== TRANSACTION PYDANTIC MODELS =====
 
@@ -33,8 +34,8 @@ class TransactionCreate(BaseModel):
     transaction_type: TransactionTypeEnum = Field(..., description="Type of transaction")
     description: Optional[str] = Field(None, max_length=500, description="Transaction description")
     merchant_name: Optional[str] = Field(None, max_length=255, description="Merchant name")
-    category: Optional[str] = Field(None, max_length=100, description="Transaction category")
-    subcategory: Optional[str] = Field(None, max_length=100, description="Transaction subcategory")
+    category_id: Optional[int] = Field(None, description="The ID of the transaction's category")
+    subcategory_id: Optional[int] = Field(None, description="The ID of the transaction's sub-category")
     comments: Optional[str] = Field(None, description="User comments")
     external_transaction_id: Optional[str] = Field(None, max_length=255, description="External transaction ID")
     source_type: SourceTypeEnum = Field(default=SourceTypeEnum.MANUAL, description="Source of transaction data")
@@ -57,15 +58,15 @@ class TransactionCreate(BaseModel):
 
 
 class TransactionUpdate(BaseModel):
-    """Update transaction - all fields optional except IDs"""
+    """Update transaction - all fields optional"""
     transaction_date: Optional[date] = None
     posted_date: Optional[date] = None
     amount: Optional[Decimal] = None
     transaction_type: Optional[TransactionTypeEnum] = None
     description: Optional[str] = Field(None, max_length=500)
     merchant_name: Optional[str] = Field(None, max_length=255)
-    category: Optional[str] = Field(None, max_length=100)
-    subcategory: Optional[str] = Field(None, max_length=100)
+    category_id: Optional[int] = Field(None, description="The ID of the transaction's category")
+    subcategory_id: Optional[int] = Field(None, description="The ID of the transaction's sub-category")
     comments: Optional[str] = None
     needs_review: Optional[bool] = None
 
@@ -95,8 +96,8 @@ class TransactionResponse(BaseModel):
     posted_date: Optional[date]
     amount: Decimal
     transaction_type: TransactionTypeEnum
-    category: Optional[str]
-    subcategory: Optional[str]
+    category: Optional[CategoryResponse] = None
+    subcategory: Optional[CategoryResponse] = None
     description: Optional[str]
     parsed_description: Optional[str]
     merchant_name: Optional[str]
@@ -121,7 +122,8 @@ class TransactionSummary(BaseModel):
     transaction_type: TransactionTypeEnum
     description: Optional[str]
     merchant_name: Optional[str]
-    category: Optional[str]
+    category: Optional[CategoryResponse] = None
+    subcategory: Optional[CategoryResponse] = None
 
     class Config:
         from_attributes = True
@@ -139,8 +141,8 @@ class TransactionFilter(BaseModel):
     account_id: Optional[int] = None
     account_ids: Optional[List[int]] = None
     transaction_type: Optional[TransactionTypeEnum] = None
-    category: Optional[str] = None
-    subcategory: Optional[str] = None
+    category_id: Optional[int] = None
+    subcategory_id: Optional[int] = None
     merchant_name: Optional[str] = None
     date_from: Optional[date] = None
     date_to: Optional[date] = None

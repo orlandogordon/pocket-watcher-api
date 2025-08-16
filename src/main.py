@@ -2,6 +2,8 @@ from fastapi import FastAPI, APIRouter
 from .routers.users import router as users_router
 from .routers.transactions import router as transactions_router
 from .routers.investments import router as investments_router
+from .routers.budgets import router as budgets_router
+from .routers.categories import router as categories_router
 
 # @asynccontextmanager
 # async def lifespan(_: FastAPI):
@@ -21,6 +23,8 @@ async def posts():
 app.include_router(users_router)
 app.include_router(transactions_router)
 app.include_router(investments_router)
+app.include_router(budgets_router)
+app.include_router(categories_router)
 app.include_router(test_router)
 
 # app.state.limiter = limiter

@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import and_, or_, desc, asc
 from typing import Optional, List, Dict, Any
@@ -8,7 +8,7 @@ from uuid import uuid4, UUID
 import hashlib
 
 # Import your database models
-from src.db.core import TransactionDB, AccountDB, UserDB, NotFoundError, TransactionType, SourceType
+from src.db.core import TransactionDB, AccountDB, UserDB, NotFoundError, TransactionType, SourceType, CategoryDB
 from src.models.transaction import TransactionCreate, TransactionUpdate, TransactionFilter, TransactionStats, TransactionImport
 from src.crud.crud_account import update_account_balance
 
@@ -59,7 +59,22 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
     ).first()
     if not account:
         raise NotFoundError(f"Account with id {transaction_data.account_id} not found")
-    
+
+    # Verify category and subcategory exist and are valid
+    if transaction_data.category_id:
+        category = db.query(CategoryDB).filter(CategoryDB.id == transaction_data.category_id).first()
+        if not category:
+            raise NotFoundError(f"Category with id {transaction_data.category_id} not found")
+        if category.parent_category_id is not None:
+            raise ValueError(f"Category with id {transaction_data.category_id} is a sub-category and cannot be a primary category.")
+
+    if transaction_data.subcategory_id:
+        subcategory = db.query(CategoryDB).filter(CategoryDB.id == transaction_data.subcategory_id).first()
+        if not subcategory:
+            raise NotFoundError(f"Sub-category with id {transaction_data.subcategory_id} not found")
+        if subcategory.parent_category_id != transaction_data.category_id:
+            raise ValueError(f"Sub-category '{subcategory.name}' does not belong to category ID {transaction_data.category_id}")
+
     # Generate transaction hash for deduplication
     transaction_hash = generate_transaction_hash(transaction_data, user_id)
     
@@ -77,6 +92,8 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
         external_transaction_id=transaction_data.external_transaction_id,
         user_id=user_id,
         account_id=transaction_data.account_id,
+        category_id=transaction_data.category_id,
+        subcategory_id=transaction_data.subcategory_id,
         transaction_hash=transaction_hash,
         source_type=SourceType(transaction_data.source_type.value),
         raw_data_json=transaction_data.raw_data,
@@ -84,8 +101,6 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
         posted_date=transaction_data.posted_date,
         amount=transaction_data.amount,
         transaction_type=TransactionType(transaction_data.transaction_type.value),
-        category=transaction_data.category,
-        subcategory=transaction_data.subcategory,
         description=transaction_data.description,
         parsed_description=parse_transaction_description(transaction_data.description or ""),
         merchant_name=transaction_data.merchant_name,
@@ -119,7 +134,7 @@ def read_db_transaction(db: Session, transaction_id: int, user_id: Optional[int]
     if user_id:
         query = query.filter(TransactionDB.user_id == user_id)
     
-    return query.first()
+    return query.options(joinedload(TransactionDB.category), joinedload(TransactionDB.subcategory)).first()
 
 
 def read_db_transaction_by_uuid(db: Session, transaction_uuid: UUID, user_id: Optional[int] = None) -> Optional[TransactionDB]:
@@ -130,7 +145,7 @@ def read_db_transaction_by_uuid(db: Session, transaction_uuid: UUID, user_id: Op
     if user_id:
         query = query.filter(TransactionDB.user_id == user_id)
     
-    return query.first()
+    return query.options(joinedload(TransactionDB.category), joinedload(TransactionDB.subcategory)).first()
 
 
 def read_db_transactions(db: Session, user_id: int, filters: Optional[TransactionFilter] = None, 
@@ -151,11 +166,11 @@ def read_db_transactions(db: Session, user_id: int, filters: Optional[Transactio
         if filters.transaction_type:
             query = query.filter(TransactionDB.transaction_type == TransactionType(filters.transaction_type.value))
         
-        if filters.category:
-            query = query.filter(TransactionDB.category == filters.category)
-        
-        if filters.subcategory:
-            query = query.filter(TransactionDB.subcategory == filters.subcategory)
+        if filters.category_id:
+            query = query.filter(TransactionDB.category_id == filters.category_id)
+
+        if filters.subcategory_id:
+            query = query.filter(TransactionDB.subcategory_id == filters.subcategory_id)
         
         if filters.merchant_name:
             query = query.filter(TransactionDB.merchant_name.ilike(f"%{filters.merchant_name}%"))
@@ -194,7 +209,7 @@ def read_db_transactions(db: Session, user_id: int, filters: Optional[Transactio
         # Default ordering
         query = query.order_by(desc(TransactionDB.transaction_date))
     
-    return query.offset(skip).limit(limit).all()
+    return query.options(joinedload(TransactionDB.category), joinedload(TransactionDB.subcategory)).offset(skip).limit(limit).all()
 
 
 def update_db_transaction(db: Session, transaction_id: int, user_id: int, 
@@ -215,6 +230,28 @@ def update_db_transaction(db: Session, transaction_id: int, user_id: int,
     
     # Update only the fields that are provided
     update_data = transaction_updates.model_dump(exclude_unset=True)
+
+    # Verify category and subcategory exist and are valid if updated
+    if 'category_id' in update_data or 'subcategory_id' in update_data:
+        category_id = update_data.get('category_id', db_transaction.category_id)
+        subcategory_id = update_data.get('subcategory_id', db_transaction.subcategory_id)
+
+        if category_id:
+            category = db.query(CategoryDB).filter(CategoryDB.id == category_id).first()
+            if not category:
+                raise NotFoundError(f"Category with id {category_id} not found")
+            if category.parent_category_id is not None:
+                raise ValueError(f"Category with id {category_id} is a sub-category and cannot be a primary category.")
+
+        if subcategory_id:
+            if not category_id:
+                raise ValueError("Cannot assign a sub-category without a primary category.")
+            subcategory = db.query(CategoryDB).filter(CategoryDB.id == subcategory_id).first()
+            if not subcategory:
+                raise NotFoundError(f"Sub-category with id {subcategory_id} not found")
+            if subcategory.parent_category_id != category_id:
+                raise ValueError(f"Sub-category ID {subcategory_id} does not belong to category ID {category_id}")
+
     for field, value in update_data.items():
         if field == 'transaction_type' and value:
             setattr(db_transaction, field, TransactionType(value.value))
@@ -327,6 +364,8 @@ def bulk_create_transactions(db: Session, user_id: int, transaction_import: Tran
                 external_transaction_id=transaction_data.external_transaction_id,
                 user_id=user_id,
                 account_id=transaction_data.account_id,
+                category_id=transaction_data.category_id,
+                subcategory_id=transaction_data.subcategory_id,
                 transaction_hash=transaction_hash,
                 source_type=SourceType(transaction_data.source_type.value),
                 raw_data_json=transaction_data.raw_data,
@@ -334,8 +373,6 @@ def bulk_create_transactions(db: Session, user_id: int, transaction_import: Tran
                 posted_date=transaction_data.posted_date,
                 amount=transaction_data.amount,
                 transaction_type=TransactionType(transaction_data.transaction_type.value),
-                category=transaction_data.category,
-                subcategory=transaction_data.subcategory,
                 description=transaction_data.description,
                 parsed_description=parse_transaction_description(transaction_data.description or ""),
                 merchant_name=transaction_data.merchant_name,
@@ -416,14 +453,16 @@ def get_transaction_stats(db: Session, user_id: int, filters: Optional[Transacti
             query = query.filter(TransactionDB.account_id.in_(filters.account_ids))
         if filters.transaction_type:
             query = query.filter(TransactionDB.transaction_type == TransactionType(filters.transaction_type.value))
-        if filters.category:
-            query = query.filter(TransactionDB.category == filters.category)
+        if filters.category_id:
+            query = query.filter(TransactionDB.category_id == filters.category_id)
+        if filters.subcategory_id:
+            query = query.filter(TransactionDB.subcategory_id == filters.subcategory_id)
         if filters.date_from:
             query = query.filter(TransactionDB.transaction_date >= filters.date_from)
         if filters.date_to:
             query = query.filter(TransactionDB.transaction_date <= filters.date_to)
     
-    transactions = query.all()
+    transactions = query.options(joinedload(TransactionDB.category), joinedload(TransactionDB.subcategory)).all()
     
     total_transactions = len(transactions)
     total_income = Decimal('0.00')
@@ -437,10 +476,10 @@ def get_transaction_stats(db: Session, user_id: int, filters: Optional[Transacti
         transactions_by_type[tx_type] = transactions_by_type.get(tx_type, 0) + 1
         
         # Sum by category
-        category = transaction.category or 'Uncategorized'
-        if category not in transactions_by_category:
-            transactions_by_category[category] = Decimal('0.00')
-        transactions_by_category[category] += transaction.amount
+        category_name = transaction.category.name if transaction.category else 'Uncategorized'
+        if category_name not in transactions_by_category:
+            transactions_by_category[category_name] = Decimal('0.00')
+        transactions_by_category[category_name] += transaction.amount
         
         # Calculate income vs expenses
         if transaction.transaction_type in [TransactionType.CREDIT, TransactionType.DEPOSIT, TransactionType.INTEREST]:
@@ -473,10 +512,10 @@ def get_transactions_count(db: Session, user_id: int, filters: Optional[Transact
             query = query.filter(TransactionDB.account_id.in_(filters.account_ids))
         if filters.transaction_type:
             query = query.filter(TransactionDB.transaction_type == TransactionType(filters.transaction_type.value))
-        if filters.category:
-            query = query.filter(TransactionDB.category == filters.category)
-        if filters.subcategory:
-            query = query.filter(TransactionDB.subcategory == filters.subcategory)
+        if filters.category_id:
+            query = query.filter(TransactionDB.category_id == filters.category_id)
+        if filters.subcategory_id:
+            query = query.filter(TransactionDB.subcategory_id == filters.subcategory_id)
         if filters.merchant_name:
             query = query.filter(TransactionDB.merchant_name.ilike(f"%{filters.merchant_name}%"))
         if filters.date_from:
@@ -511,14 +550,14 @@ def get_transactions_by_category(db: Session, user_id: int, date_from: Optional[
     if date_to:
         query = query.filter(TransactionDB.transaction_date <= date_to)
     
-    transactions = query.all()
+    transactions = query.options(joinedload(TransactionDB.category)).all()
     
     category_totals = {}
     for transaction in transactions:
-        category = transaction.category or 'Uncategorized'
-        if category not in category_totals:
-            category_totals[category] = Decimal('0.00')
-        category_totals[category] += transaction.amount
+        category_name = transaction.category.name if transaction.category else 'Uncategorized'
+        if category_name not in category_totals:
+            category_totals[category_name] = Decimal('0.00')
+        category_totals[category_name] += transaction.amount
     
     return category_totals
 
@@ -552,4 +591,5 @@ def get_transactions_needing_review(db: Session, user_id: int, skip: int = 0, li
     return db.query(TransactionDB).filter(
         TransactionDB.user_id == user_id,
         TransactionDB.needs_review == True
-    ).offset(skip).limit(limit).all()
+    ).options(joinedload(TransactionDB.category), joinedload(TransactionDB.subcategory)).offset(skip).limit(limit).all()
+

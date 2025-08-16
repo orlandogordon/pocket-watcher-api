@@ -61,6 +61,30 @@ class UserDB(Base):
     debt_repayment_plans = relationship("DebtRepaymentPlanDB", back_populates="user")
 
 
+class CategoryDB(Base):
+    __tablename__ = "categories"
+    
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_category_name"),
+        Index("idx_category_name", "name"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    parent_category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
+    
+    # Relationship to self for subcategories
+    parent = relationship("CategoryDB", remote_side=[id], back_populates="children")
+    children = relationship("CategoryDB", back_populates="parent")
+
+    # Relationships to budget categories
+    budget_allocations = relationship("BudgetCategoryDB", back_populates="category")
+
+    # Relationships to transactions (as primary and sub-category)
+    primary_transactions = relationship("TransactionDB", foreign_keys="TransactionDB.category_id", back_populates="category")
+    sub_transactions = relationship("TransactionDB", foreign_keys="TransactionDB.subcategory_id", back_populates="subcategory")
+
+
 class TransactionType(enum.Enum):
     DEBIT = "DEBIT"
     CREDIT = "CREDIT"
@@ -139,17 +163,15 @@ class BudgetCategoryDB(Base):
     
     __table_args__ = (
         # Prevent duplicate category allocations per budget
-        UniqueConstraint("budget_id", "category", name="uq_budget_category"),
+        UniqueConstraint("budget_id", "category_id", name="uq_budget_category"),
     )
 
     # Primary Key
     budget_category_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     
-    # Foreign Key
+    # Foreign Keys
     budget_id: Mapped[int] = mapped_column(ForeignKey("budgets.budget_id"))
-    
-    # Category (string-based)
-    category: Mapped[str] = mapped_column(String(100), nullable=False)
+    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"))
     
     # Budget Allocation
     allocated_amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
@@ -159,6 +181,7 @@ class BudgetCategoryDB(Base):
 
     # Relationships
     budget = relationship("BudgetDB", back_populates="budget_categories")
+    category = relationship("CategoryDB", back_populates="budget_allocations")
 
 
 class InvestmentHoldingDB(Base):
@@ -350,6 +373,8 @@ class TransactionDB(Base):
     external_transaction_id: Mapped[Optional[str]] = mapped_column(String(255))
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
+    subcategory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
 
     # Deduplication & Source Tracking
     transaction_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -361,10 +386,6 @@ class TransactionDB(Base):
     posted_date: Mapped[Optional[date]] = mapped_column(Date)
     amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
     transaction_type: Mapped[TransactionType] = mapped_column(Enum(TransactionType))
-    
-    # Categorization (string-based)
-    category: Mapped[Optional[str]] = mapped_column(String(100))
-    subcategory: Mapped[Optional[str]] = mapped_column(String(100))
 
     # Description & Details
     description: Mapped[Optional[str]] = mapped_column(String(500))
@@ -386,6 +407,8 @@ class TransactionDB(Base):
     # Relationships
     user = relationship("UserDB", back_populates="transactions")
     account = relationship("AccountDB", back_populates="transactions")
+    category = relationship("CategoryDB", foreign_keys=[category_id], back_populates="primary_transactions")
+    subcategory = relationship("CategoryDB", foreign_keys=[subcategory_id], back_populates="sub_transactions")
     
     # Relationship tables
     relationship_from = relationship("TransactionRelationshipDB", foreign_keys="TransactionRelationshipDB.from_transaction_id", back_populates="from_transaction")

@@ -1,25 +1,20 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, computed_field
 from typing import Optional, List
 from datetime import datetime, date
 from decimal import Decimal
 
+from src.models.category import CategoryResponse
 
 # ===== BUDGET PYDANTIC MODELS =====
 
 class BudgetCategoryCreate(BaseModel):
-    category: str = Field(..., min_length=1, max_length=100, description="Category name")
+    category_id: int = Field(..., description="The ID of the category")
     allocated_amount: Decimal = Field(..., ge=0, description="Allocated budget amount")
-
-    @field_validator('category')
-    @classmethod
-    def validate_category(cls, v: str) -> str:
-        return v.strip()
 
     @field_validator('allocated_amount')
     @classmethod
     def validate_allocated_amount(cls, v: Decimal) -> Decimal:
         return round(v, 2)
-
 
 class BudgetCategoryUpdate(BaseModel):
     allocated_amount: Decimal = Field(..., ge=0, description="Allocated budget amount")
@@ -29,20 +24,19 @@ class BudgetCategoryUpdate(BaseModel):
     def validate_allocated_amount(cls, v: Decimal) -> Decimal:
         return round(v, 2)
 
-
 class BudgetCategoryResponse(BaseModel):
     budget_category_id: int
     budget_id: int
-    category: str
+    category_id: int
     allocated_amount: Decimal
     spent_amount: Optional[Decimal] = None
     remaining_amount: Optional[Decimal] = None
     percentage_used: Optional[float] = None
     created_at: datetime
+    category: CategoryResponse
 
     class Config:
         from_attributes = True
-
 
 class BudgetCreate(BaseModel):
     budget_name: str = Field(..., min_length=1, max_length=255, description="Budget name")
@@ -65,12 +59,11 @@ class BudgetCreate(BaseModel):
     @field_validator('categories')
     @classmethod
     def validate_categories(cls, v: List[BudgetCategoryCreate]) -> List[BudgetCategoryCreate]:
-        # Check for duplicate categories
-        categories = [cat.category.lower().strip() for cat in v]
-        if len(categories) != len(set(categories)):
-            raise ValueError('Duplicate categories are not allowed')
+        # Check for duplicate category IDs
+        category_ids = [cat.category_id for cat in v]
+        if len(category_ids) != len(set(category_ids)):
+            raise ValueError('Duplicate category IDs are not allowed')
         return v
-
 
 class BudgetUpdate(BaseModel):
     budget_name: Optional[str] = Field(None, min_length=1, max_length=255)
@@ -81,7 +74,6 @@ class BudgetUpdate(BaseModel):
     @classmethod
     def validate_budget_name(cls, v: Optional[str]) -> Optional[str]:
         return v.strip() if v else v
-
 
 class BudgetResponse(BaseModel):
     budget_id: int
@@ -95,11 +87,10 @@ class BudgetResponse(BaseModel):
     is_active: Optional[bool] = None  # Whether budget period is current
     created_at: datetime
     updated_at: datetime
-    categories: Optional[List[BudgetCategoryResponse]] = None
+    budget_categories: Optional[List[BudgetCategoryResponse]] = None
 
     class Config:
         from_attributes = True
-
 
 class BudgetSummary(BaseModel):
     """Lightweight budget summary"""
@@ -114,7 +105,6 @@ class BudgetSummary(BaseModel):
 
     class Config:
         from_attributes = True
-
 
 class BudgetStats(BaseModel):
     """Budget statistics and insights"""
@@ -132,11 +122,11 @@ class BudgetStats(BaseModel):
     daily_burn_rate: Decimal
     projected_total_spend: Decimal
 
-
 class BudgetPerformance(BaseModel):
     """Budget performance analysis"""
     budget_id: int
-    category: str
+    category_id: int
+    category_name: str
     allocated_amount: Decimal
     spent_amount: Decimal
     remaining_amount: Decimal

@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import and_, or_, desc, asc, func
 from typing import Optional, List, Dict, Any
@@ -7,7 +7,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 # Import your database models
-from src.db.core import BudgetDB, BudgetCategoryDB, UserDB, TransactionDB, NotFoundError, TransactionType
+from src.db.core import BudgetDB, BudgetCategoryDB, UserDB, TransactionDB, NotFoundError, TransactionType, CategoryDB
 from src.models.budget import BudgetCreate, BudgetUpdate, BudgetCategoryCreate, BudgetCategoryUpdate, BudgetStats, BudgetPerformance
 
 
@@ -45,9 +45,14 @@ def create_db_budget(db: Session, user_id: int, budget_data: BudgetCreate) -> Bu
         
         # Create budget categories
         for category_data in budget_data.categories:
+            # Verify category exists
+            category = db.query(CategoryDB).filter(CategoryDB.id == category_data.category_id).first()
+            if not category:
+                raise NotFoundError(f"Category with id {category_data.category_id} not found")
+
             db_category = BudgetCategoryDB(
                 budget_id=db_budget.budget_id,
-                category=category_data.category.strip(),
+                category_id=category_data.category_id,
                 allocated_amount=category_data.allocated_amount,
                 created_at=datetime.utcnow()
             )
@@ -69,19 +74,22 @@ def read_db_budget(db: Session, budget_id: int, user_id: Optional[int] = None,
     
     if user_id:
         query = query.filter(BudgetDB.user_id == user_id)
+
+    # Eager load categories and their nested category details
+    query = query.options(joinedload(BudgetDB.budget_categories).joinedload(BudgetCategoryDB.category))
     
     budget = query.first()
     
     if budget and include_spending:
         # Calculate spending for each category
-        for category in budget.budget_categories:
-            spent = calculate_category_spending(db, budget, category.category)
-            category.spent_amount = spent
-            category.remaining_amount = category.allocated_amount - spent
-            if category.allocated_amount > 0:
-                category.percentage_used = float(spent / category.allocated_amount * 100)
+        for category_item in budget.budget_categories:
+            spent = calculate_category_spending(db, budget, category_item.category_id)
+            category_item.spent_amount = spent
+            category_item.remaining_amount = category_item.allocated_amount - spent
+            if category_item.allocated_amount > 0:
+                category_item.percentage_used = float(spent / category_item.allocated_amount * 100)
             else:
-                category.percentage_used = 0.0
+                category_item.percentage_used = 0.0
     
     return budget
 
@@ -100,12 +108,13 @@ def read_db_budgets(db: Session, user_id: int, skip: int = 0, limit: int = 100,
         )
     
     query = query.order_by(desc(BudgetDB.start_date))
+    query = query.options(joinedload(BudgetDB.budget_categories).joinedload(BudgetCategoryDB.category))
     budgets = query.offset(skip).limit(limit).all()
     
     if include_spending:
         for budget in budgets:
             budget.total_allocated = sum(cat.allocated_amount for cat in budget.budget_categories)
-            budget.total_spent = sum(calculate_category_spending(db, budget, cat.category) 
+            budget.total_spent = sum(calculate_category_spending(db, budget, cat.category_id) 
                                    for cat in budget.budget_categories)
             budget.total_remaining = budget.total_allocated - budget.total_spent
             if budget.total_allocated > 0:
@@ -207,15 +216,15 @@ def add_budget_category(db: Session, budget_id: int, user_id: int, category_data
     # Check for duplicate category in this budget
     existing_category = db.query(BudgetCategoryDB).filter(
         BudgetCategoryDB.budget_id == budget_id,
-        BudgetCategoryDB.category.ilike(category_data.category.strip())
+        BudgetCategoryDB.category_id == category_data.category_id
     ).first()
     if existing_category:
-        raise ValueError(f"Category '{category_data.category}' already exists in this budget")
+        raise ValueError(f"Category ID '{category_data.category_id}' already exists in this budget")
     
     # Create new category
     db_category = BudgetCategoryDB(
         budget_id=budget_id,
-        category=category_data.category.strip(),
+        category_id=category_data.category_id,
         allocated_amount=category_data.allocated_amount,
         created_at=datetime.utcnow()
     )
@@ -278,12 +287,12 @@ def delete_budget_category(db: Session, budget_category_id: int, user_id: int) -
         raise ValueError(f"Failed to delete budget category: {str(e)}")
 
 
-def calculate_category_spending(db: Session, budget: BudgetDB, category: str) -> Decimal:
+def calculate_category_spending(db: Session, budget: BudgetDB, category_id: int) -> Decimal:
     """Calculate total spending for a category within budget period"""
     
     result = db.query(func.coalesce(func.sum(TransactionDB.amount), 0)).filter(
         TransactionDB.user_id == budget.user_id,
-        TransactionDB.category.ilike(category),
+        TransactionDB.category_id == category_id,
         TransactionDB.transaction_date >= budget.start_date,
         TransactionDB.transaction_date <= budget.end_date,
         TransactionDB.transaction_type.in_([
@@ -299,10 +308,7 @@ def calculate_category_spending(db: Session, budget: BudgetDB, category: str) ->
 def get_budget_stats(db: Session, budget_id: int, user_id: int) -> BudgetStats:
     """Get detailed budget statistics"""
     
-    budget = db.query(BudgetDB).filter(
-        BudgetDB.budget_id == budget_id,
-        BudgetDB.user_id == user_id
-    ).first()
+    budget = read_db_budget(db, budget_id, user_id)
     
     if not budget:
         raise NotFoundError(f"Budget with id {budget_id} not found")
@@ -328,26 +334,26 @@ def get_budget_stats(db: Session, budget_id: int, user_id: int) -> BudgetStats:
     total_allocated = Decimal('0.00')
     total_spent = Decimal('0.00')
     
-    for category in budget.budget_categories:
-        spent = calculate_category_spending(db, budget, category.category)
-        total_allocated += category.allocated_amount
+    for category_item in budget.budget_categories:
+        spent = category_item.spent_amount # Already calculated in read_db_budget
+        total_allocated += category_item.allocated_amount
         total_spent += spent
         
-        overspend = spent - category.allocated_amount
+        overspend = spent - category_item.allocated_amount
         if overspend > 0:
             categories_over_budget += 1
             if overspend > biggest_overspend_amount:
                 biggest_overspend_amount = overspend
-                biggest_overspend_category = category.category
+                biggest_overspend_category = category_item.category.name
         elif spent == Decimal('0.00'):
             categories_under_budget += 1
-        elif category.allocated_amount > 0:
-            usage_ratio = float(spent / category.allocated_amount)
+        elif category_item.allocated_amount > 0:
+            usage_ratio = float(spent / category_item.allocated_amount)
             if 0.8 <= usage_ratio <= 1.0:  # 80-100% usage considered "on track"
                 categories_on_track += 1
                 if usage_ratio > most_efficient_ratio:
                     most_efficient_ratio = usage_ratio
-                    most_efficient_category = category.category
+                    most_efficient_category = category_item.category.name
             else:
                 categories_under_budget += 1
     
@@ -376,10 +382,7 @@ def get_budget_stats(db: Session, budget_id: int, user_id: int) -> BudgetStats:
 def get_budget_performance(db: Session, budget_id: int, user_id: int) -> List[BudgetPerformance]:
     """Get performance analysis for all categories in a budget"""
     
-    budget = db.query(BudgetDB).filter(
-        BudgetDB.budget_id == budget_id,
-        BudgetDB.user_id == user_id
-    ).first()
+    budget = read_db_budget(db, budget_id, user_id)
     
     if not budget:
         raise NotFoundError(f"Budget with id {budget_id} not found")
@@ -390,17 +393,13 @@ def get_budget_performance(db: Session, budget_id: int, user_id: int) -> List[Bu
     
     performance_list = []
     
-    for category in budget.budget_categories:
-        spent = calculate_category_spending(db, budget, category.category)
-        remaining = category.allocated_amount - spent
-        
-        if category.allocated_amount > 0:
-            percentage_used = float(spent / category.allocated_amount * 100)
-        else:
-            percentage_used = 0.0
+    for category_item in budget.budget_categories:
+        spent = category_item.spent_amount # Already calculated
+        remaining = category_item.remaining_amount # Already calculated
+        percentage_used = category_item.percentage_used # Already calculated
         
         # Determine status
-        if spent > category.allocated_amount:
+        if spent > category_item.allocated_amount:
             status = "over_budget"
         elif percentage_used >= 80:
             status = "on_track"
@@ -412,8 +411,9 @@ def get_budget_performance(db: Session, budget_id: int, user_id: int) -> List[Bu
         
         performance_list.append(BudgetPerformance(
             budget_id=budget.budget_id,
-            category=category.category,
-            allocated_amount=category.allocated_amount,
+            category_id=category_item.category_id,
+            category_name=category_item.category.name,
+            allocated_amount=category_item.allocated_amount,
             spent_amount=spent,
             remaining_amount=remaining,
             percentage_used=percentage_used,
@@ -437,9 +437,9 @@ def get_active_budgets(db: Session, user_id: int) -> List[BudgetDB]:
     ).order_by(BudgetDB.budget_name).all()
 
 
-def get_budget_by_category(db: Session, user_id: int, category: str, 
-                          target_date: Optional[date] = None) -> Optional[BudgetDB]:
-    """Find the active budget that contains a specific category"""
+def get_budget_by_category_id(db: Session, user_id: int, category_id: int, 
+                               target_date: Optional[date] = None) -> Optional[BudgetDB]:
+    """Find the active budget that contains a specific category ID"""
     
     if target_date is None:
         target_date = date.today()
@@ -448,7 +448,7 @@ def get_budget_by_category(db: Session, user_id: int, category: str,
         BudgetDB.user_id == user_id,
         BudgetDB.start_date <= target_date,
         BudgetDB.end_date >= target_date,
-        BudgetCategoryDB.category.ilike(category)
+        BudgetCategoryDB.category_id == category_id
     ).first()
     
     return budget
@@ -497,7 +497,7 @@ def copy_budget(db: Session, budget_id: int, user_id: int, new_budget_name: str,
         for category in source_budget.budget_categories:
             new_category = BudgetCategoryDB(
                 budget_id=new_budget.budget_id,
-                category=category.category,
+                category_id=category.category_id,
                 allocated_amount=category.allocated_amount,
                 created_at=datetime.utcnow()
             )
@@ -524,7 +524,8 @@ def get_budget_variance_report(db: Session, user_id: int,
     if end_date:
         query = query.filter(BudgetDB.start_date <= end_date)
     
-    budgets = query.order_by(BudgetDB.start_date).all()
+    budgets = query.options(joinedload(BudgetDB.budget_categories).joinedload(BudgetCategoryDB.category))
+                   .order_by(BudgetDB.start_date).all()
     
     variance_report = []
     
@@ -534,16 +535,16 @@ def get_budget_variance_report(db: Session, user_id: int,
         
         category_variances = []
         
-        for category in budget.budget_categories:
-            spent = calculate_category_spending(db, budget, category.category)
+        for category_item in budget.budget_categories:
+            spent = calculate_category_spending(db, budget, category_item.category_id)
             budget_total_spent += spent
             
-            variance_amount = spent - category.allocated_amount
-            variance_percentage = float(variance_amount / category.allocated_amount * 100) if category.allocated_amount > 0 else 0.0
+            variance_amount = spent - category_item.allocated_amount
+            variance_percentage = float(variance_amount / category_item.allocated_amount * 100) if category_item.allocated_amount > 0 else 0.0
             
             category_variances.append({
-                'category': category.category,
-                'allocated': float(category.allocated_amount),
+                'category': category_item.category.name,
+                'allocated': float(category_item.allocated_amount),
                 'spent': float(spent),
                 'variance_amount': float(variance_amount),
                 'variance_percentage': variance_percentage
