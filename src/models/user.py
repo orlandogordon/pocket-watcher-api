@@ -20,7 +20,7 @@ class UserCreate(BaseModel):
     @field_validator('email')
     @classmethod
     def validate_email(cls, v: str) -> str:
-        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$''
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         if not re.match(email_pattern, v):
             raise ValueError('Invalid email format')
         return v.lower().strip()
@@ -65,7 +65,7 @@ class UserUpdate(BaseModel):
     def validate_email(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return v
-        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$''
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         if not re.match(email_pattern, v):
             raise ValueError('Invalid email format')
         return v.lower().strip()

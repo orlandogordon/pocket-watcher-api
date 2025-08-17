@@ -4,6 +4,10 @@ from .routers.transactions import router as transactions_router
 from .routers.investments import router as investments_router
 from .routers.budgets import router as budgets_router
 from .routers.categories import router as categories_router
+from .routers.financial_plans import router as financial_plans_router
+from .routers.accounts import router as accounts_router
+from .routers.tags import router as tags_router
+from .routers.debts import router as debts_router
 
 # @asynccontextmanager
 # async def lifespan(_: FastAPI):
@@ -25,6 +29,10 @@ app.include_router(transactions_router)
 app.include_router(investments_router)
 app.include_router(budgets_router)
 app.include_router(categories_router)
+app.include_router(financial_plans_router)
+app.include_router(accounts_router)
+app.include_router(tags_router)
+app.include_router(debts_router)
 app.include_router(test_router)
 
 # app.state.limiter = limiter

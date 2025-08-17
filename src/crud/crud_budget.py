@@ -524,8 +524,7 @@ def get_budget_variance_report(db: Session, user_id: int,
     if end_date:
         query = query.filter(BudgetDB.start_date <= end_date)
     
-    budgets = query.options(joinedload(BudgetDB.budget_categories).joinedload(BudgetCategoryDB.category))
-                   .order_by(BudgetDB.start_date).all()
+    budgets = query.options(joinedload(BudgetDB.budget_categories).joinedload(BudgetCategoryDB.category)).order_by(BudgetDB.start_date).all()
     
     variance_report = []
     

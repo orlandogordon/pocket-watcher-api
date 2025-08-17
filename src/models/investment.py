@@ -66,7 +66,7 @@ class InvestmentTransactionBase(BaseModel):
     quantity: Optional[Decimal] = Field(None, description="Number of shares/units")
     price_per_share: Optional[Decimal] = Field(None, description="Price per share/unit")
     total_amount: Decimal = Field(..., description="Total transaction value")
-    fees: Optional[Decimal] = Field(None, default=0.00)
+    fees: Optional[Decimal] = Field(default=0.00)
     transaction_date: date
     description: Optional[str] = Field(None, max_length=500)
 

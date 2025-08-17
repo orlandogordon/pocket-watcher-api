@@ -1,8 +1,8 @@
-"""Initial schema
+"""initial migration
 
-Revision ID: 6a38b3e95fdd
+Revision ID: 6f2993755c36
 Revises: 
-Create Date: 2025-08-16 01:57:36.987271
+Create Date: 2025-08-17 02:15:33.035062
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '6a38b3e95fdd'
+revision: str = '6f2993755c36'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -36,9 +36,9 @@ def upgrade() -> None:
     sa.Column('email', sa.String(length=255), nullable=False),
     sa.Column('username', sa.String(length=100), nullable=False),
     sa.Column('password_hash', sa.String(length=255), nullable=False),
-    sa.Column('first_name', sa.String(length=100), nullable=False),
-    sa.Column('last_name', sa.String(length=100), nullable=False),
-    sa.Column('date_of_birth', sa.Date(), nullable=False),
+    sa.Column('first_name', sa.String(length=100), nullable=True),
+    sa.Column('last_name', sa.String(length=100), nullable=True),
+    sa.Column('date_of_birth', sa.Date(), nullable=True),
     sa.Column('last_login_at', sa.DateTime(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.Column('updated_at', sa.DateTime(), nullable=False),
@@ -93,6 +93,17 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('plan_id'),
     sa.UniqueConstraint('user_id', 'plan_name', name='uq_user_debt_plan_name')
     )
+    op.create_table('financial_plans',
+    sa.Column('plan_id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('plan_name', sa.String(length=255), nullable=False),
+    sa.Column('monthly_income', sa.DECIMAL(precision=15, scale=2), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['user_id'], ['users.db_id'], ),
+    sa.PrimaryKeyConstraint('plan_id'),
+    sa.UniqueConstraint('user_id', 'plan_name', name='uq_user_financial_plan_name')
+    )
     op.create_table('tags',
     sa.Column('tag_id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=False),
@@ -132,6 +143,17 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['user_id'], ['users.db_id'], ),
     sa.PrimaryKeyConstraint('schedule_id'),
     sa.UniqueConstraint('user_id', 'account_id', 'payment_month', name='uq_user_account_month_payment')
+    )
+    op.create_table('financial_plan_entries',
+    sa.Column('entry_id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('plan_id', sa.Integer(), nullable=False),
+    sa.Column('category_id', sa.Integer(), nullable=False),
+    sa.Column('monthly_amount', sa.DECIMAL(precision=15, scale=2), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['category_id'], ['categories.id'], ),
+    sa.ForeignKeyConstraint(['plan_id'], ['financial_plans.plan_id'], ),
+    sa.PrimaryKeyConstraint('entry_id'),
+    sa.UniqueConstraint('plan_id', 'category_id', name='uq_plan_entry_category')
     )
     op.create_table('investment_holdings',
     sa.Column('holding_id', sa.Integer(), autoincrement=True, nullable=False),
@@ -281,10 +303,12 @@ def downgrade() -> None:
     op.drop_index('idx_holdings_symbol', table_name='investment_holdings')
     op.drop_index('idx_holdings_account', table_name='investment_holdings')
     op.drop_table('investment_holdings')
+    op.drop_table('financial_plan_entries')
     op.drop_table('debt_repayment_schedules')
     op.drop_table('debt_plan_account_links')
     op.drop_table('budget_categories')
     op.drop_table('tags')
+    op.drop_table('financial_plans')
     op.drop_table('debt_repayment_plans')
     op.drop_table('budgets')
     op.drop_table('accounts')

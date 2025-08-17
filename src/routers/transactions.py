@@ -15,6 +15,7 @@ from src.crud.crud_transaction import (
 
 router = APIRouter(
     prefix="/transactions",
+    tags=["transactions"],
 )
 
 # A placeholder for user authentication

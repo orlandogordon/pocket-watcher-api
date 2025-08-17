@@ -42,9 +42,9 @@ class UserDB(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     
     # Personal Information
-    first_name: Mapped[str] = mapped_column(String(100))
-    last_name: Mapped[str] = mapped_column(String(100))
-    date_of_birth: Mapped[date] = mapped_column(Date)
+    first_name: Mapped[Optional[str]] = mapped_column(String(100))
+    last_name: Mapped[Optional[str]] = mapped_column(String(100))
+    date_of_birth: Mapped[Optional[date]] = mapped_column(Date)
     
     # Activity Tracking
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -59,6 +59,7 @@ class UserDB(Base):
     tags = relationship("TagDB", back_populates="user")
     budgets = relationship("BudgetDB", back_populates="user")
     debt_repayment_plans = relationship("DebtRepaymentPlanDB", back_populates="user")
+    financial_plans = relationship("FinancialPlanDB", back_populates="user")
 
 
 class CategoryDB(Base):
@@ -537,6 +538,43 @@ class AccountDB(Base):
     debt_payments_from = relationship("DebtPaymentDB", foreign_keys="DebtPaymentDB.payment_source_account_id", back_populates="payment_source_account")
     debt_repayment_plans_link = relationship("DebtPlanAccountLinkDB", back_populates="account", cascade="all, delete-orphan")
     debt_repayment_schedules = relationship("DebtRepaymentScheduleDB", back_populates="account", cascade="all, delete-orphan")
+
+
+class FinancialPlanDB(Base):
+    __tablename__ = "financial_plans"
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "plan_name", name="uq_user_financial_plan_name"),
+    )
+
+    plan_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
+    plan_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    monthly_income: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("UserDB", back_populates="financial_plans")
+    entries = relationship("FinancialPlanEntryDB", back_populates="plan", cascade="all, delete-orphan")
+
+
+class FinancialPlanEntryDB(Base):
+    __tablename__ = "financial_plan_entries"
+
+    __table_args__ = (
+        UniqueConstraint("plan_id", "category_id", name="uq_plan_entry_category"),
+    )
+
+    entry_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("financial_plans.plan_id"))
+    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"))
+    monthly_amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    plan = relationship("FinancialPlanDB", back_populates="entries")
+    category = relationship("CategoryDB")
 
 
 engine = create_engine(DATABASE_URL, echo=True)
