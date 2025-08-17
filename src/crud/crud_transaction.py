@@ -8,8 +8,8 @@ from uuid import uuid4, UUID
 import hashlib
 
 # Import your database models
-from src.db.core import TransactionDB, AccountDB, UserDB, NotFoundError, TransactionType, SourceType, CategoryDB
-from src.models.transaction import TransactionCreate, TransactionUpdate, TransactionFilter, TransactionStats, TransactionImport
+from src.db.core import TransactionDB, AccountDB, UserDB, NotFoundError, TransactionType, SourceType, CategoryDB, TransactionRelationshipDB
+from src.models.transaction import TransactionCreate, TransactionUpdate, TransactionFilter, TransactionStats, TransactionImport, TransactionRelationshipCreate
 from src.crud.crud_account import update_account_balance
 
 
@@ -124,6 +124,42 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
     except IntegrityError:
         db.rollback()
         raise ValueError("Transaction creation failed due to database constraint")
+
+def create_transaction_relationship(db: Session, user_id: int, from_transaction_id: int, relationship_data: TransactionRelationshipCreate) -> TransactionRelationshipDB:
+    """Create a relationship between two transactions"""
+    # Verify from_transaction exists and belongs to user
+    from_transaction = db.query(TransactionDB).filter(
+        TransactionDB.db_id == from_transaction_id,
+        TransactionDB.user_id == user_id
+    ).first()
+    if not from_transaction:
+        raise NotFoundError(f"Transaction with id {from_transaction_id} not found")
+
+    # Verify to_transaction exists and belongs to user
+    to_transaction = db.query(TransactionDB).filter(
+        TransactionDB.db_id == relationship_data.to_transaction_id,
+        TransactionDB.user_id == user_id
+    ).first()
+    if not to_transaction:
+        raise NotFoundError(f"Transaction with id {relationship_data.to_transaction_id} not found")
+
+    # Create new relationship
+    db_relationship = TransactionRelationshipDB(
+        from_transaction_id=from_transaction_id,
+        to_transaction_id=relationship_data.to_transaction_id,
+        relationship_type=relationship_data.relationship_type,
+        amount_allocated=relationship_data.amount_allocated,
+        notes=relationship_data.notes
+    )
+
+    try:
+        db.add(db_relationship)
+        db.commit()
+        db.refresh(db_relationship)
+        return db_relationship
+    except IntegrityError:
+        db.rollback()
+        raise ValueError("Relationship creation failed due to database constraint")
 
 
 def read_db_transaction(db: Session, transaction_id: int, user_id: Optional[int] = None) -> Optional[TransactionDB]:

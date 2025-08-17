@@ -4,13 +4,14 @@ from fastapi.params import Depends
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from src.db.core import NotFoundError, get_db
-from src.models.transaction import TransactionCreate, TransactionUpdate, TransactionResponse, TransactionImport
+from src.models.transaction import TransactionCreate, TransactionUpdate, TransactionResponse, TransactionImport, TransactionRelationshipCreate, TransactionRelationship
 from src.crud.crud_transaction import (
     create_db_transaction,
     read_db_transaction,
     update_db_transaction,
     delete_db_transaction,
     bulk_create_transactions,
+    create_transaction_relationship
 )
 
 router = APIRouter(
@@ -74,3 +75,14 @@ def delete_transaction(request: Request, transaction_id: str, db: Session = Depe
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return TransactionResponse.model_validate(db_transaction)
+
+@router.post("/{transaction_id}/relationships")
+def create_relationship(transaction_id: int, relationship: TransactionRelationshipCreate, db: Session = Depends(get_db)) -> TransactionRelationship:
+    user_id = get_current_user_id()
+    try:
+        db_relationship = create_transaction_relationship(db, user_id, transaction_id, relationship)
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return TransactionRelationship.model_validate(db_relationship)

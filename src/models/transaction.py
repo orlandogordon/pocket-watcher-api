@@ -6,6 +6,7 @@ from uuid import UUID
 from enum import Enum
 
 from src.models.category import CategoryResponse
+from src.db.core import RelationshipType
 
 # ===== TRANSACTION PYDANTIC MODELS =====
 
@@ -160,3 +161,21 @@ class TransactionStats(BaseModel):
     net_amount: Decimal
     transactions_by_type: Dict[str, int]
     transactions_by_category: Dict[str, Decimal]
+
+class TransactionRelationshipBase(BaseModel):
+    to_transaction_id: int
+    relationship_type: RelationshipType
+    amount_allocated: Optional[Decimal] = None
+    notes: Optional[str] = None
+
+class TransactionRelationshipCreate(TransactionRelationshipBase):
+    pass
+
+class TransactionRelationship(TransactionRelationshipBase):
+    relationship_id: int
+    from_transaction_id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
