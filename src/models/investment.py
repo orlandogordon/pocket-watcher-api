@@ -73,6 +73,9 @@ class InvestmentTransactionBase(BaseModel):
 class InvestmentTransactionCreate(InvestmentTransactionBase):
     account_id: int
 
+class InvestmentTransactionBulkCreate(BaseModel):
+    transactions: List[InvestmentTransactionCreate]
+
 class InvestmentTransactionUpdate(BaseModel):
     transaction_type: Optional[InvestmentTransactionTypeEnum] = None
     quantity: Optional[Decimal] = None

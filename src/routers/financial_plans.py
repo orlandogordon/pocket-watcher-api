@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 
-from src.db.core import get_db
+from src.db.core import get_db, NotFoundError
 from src.crud import crud_financial_plan
 from src.models import financial_plan as financial_plan_models
 
@@ -60,6 +60,13 @@ def create_financial_plan_entry(plan_id: int, entry: financial_plan_models.Finan
     if db_plan is None:
         raise HTTPException(status_code=404, detail="Financial plan not found")
     return crud_financial_plan.create_financial_plan_entry(db=db, plan_id=plan_id, entry=entry)
+
+@router.post("/{plan_id}/entries/bulk-upload", response_model=List[financial_plan_models.FinancialPlanEntry])
+def create_bulk_financial_plan_entries(plan_id: int, bulk_data: financial_plan_models.FinancialPlanEntryBulkCreate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
+    try:
+        return crud_financial_plan.bulk_create_financial_plan_entries(db=db, user_id=user_id, plan_id=plan_id, bulk_data=bulk_data)
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 @router.put("/entries/{entry_id}", response_model=financial_plan_models.FinancialPlanEntry)
 def update_financial_plan_entry(entry_id: int, entry: financial_plan_models.FinancialPlanEntryUpdate, db: Session = Depends(get_db)):

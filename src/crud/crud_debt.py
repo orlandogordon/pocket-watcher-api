@@ -16,7 +16,8 @@ from src.models.debt import (
     DebtPlanAccountLinkCreate,
     DebtRepaymentScheduleBulkCreate,
     DebtPaymentCreate,
-    DebtPaymentUpdate
+    DebtPaymentUpdate,
+    DebtPaymentBulkCreate
 )
 
 # ===== DATABASE OPERATIONS - PLANS =====
@@ -132,6 +133,12 @@ def create_debt_payment(db: Session, user_id: int, payment_data: DebtPaymentCrea
     db.commit()
     db.refresh(db_payment)
     return db_payment
+
+def bulk_create_debt_payments(db: Session, user_id: int, bulk_data: DebtPaymentBulkCreate) -> List[DebtPaymentDB]:
+    db_payments = []
+    for payment_data in bulk_data.payments:
+        db_payments.append(create_debt_payment(db, user_id, payment_data))
+    return db_payments
 
 def read_debt_payment(db: Session, payment_id: int, user_id: int) -> Optional[DebtPaymentDB]:
     return db.query(DebtPaymentDB).join(AccountDB, DebtPaymentDB.loan_account_id == AccountDB.id).filter(

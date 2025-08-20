@@ -31,11 +31,11 @@ def run_api_request(method: str, endpoint: str, data: dict = None):
         return response.json()
     except requests.exceptions.HTTPError as e:
         print(f"Error: HTTP {e.response.status_code} for {url}\nResponse: {e.response.text}")
-        # breakpoint()
+        breakpoint()
         return None
     except requests.exceptions.RequestException as e:
         print(f"An unexpected error occurred: {e}")
-        # breakpoint()
+        breakpoint()
         return None
 
 def seed_categories():

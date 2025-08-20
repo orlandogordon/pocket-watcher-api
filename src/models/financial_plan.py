@@ -12,6 +12,9 @@ class FinancialPlanEntryBase(BaseModel):
 class FinancialPlanEntryCreate(FinancialPlanEntryBase):
     pass
 
+class FinancialPlanEntryBulkCreate(BaseModel):
+    entries: List[FinancialPlanEntryCreate]
+
 class FinancialPlanEntryUpdate(BaseModel):
     monthly_amount: Optional[Decimal] = None
 

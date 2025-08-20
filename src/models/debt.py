@@ -76,6 +76,9 @@ class DebtPaymentCreate(BaseModel):
     payment_date: date
     description: Optional[str] = Field(None, max_length=500)
 
+class DebtPaymentBulkCreate(BaseModel):
+    payments: List[DebtPaymentCreate]
+
 class DebtPaymentUpdate(BaseModel):
     payment_source_account_id: Optional[int] = None
     transaction_id: Optional[int] = None

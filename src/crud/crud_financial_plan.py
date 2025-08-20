@@ -2,8 +2,8 @@ from sqlalchemy.orm import Session
 from decimal import Decimal
 from typing import List, Optional
 
-from src.db.core import FinancialPlanDB, FinancialPlanEntryDB
-from src.models.financial_plan import FinancialPlanCreate, FinancialPlanUpdate, FinancialPlanEntryCreate, FinancialPlanEntryUpdate
+from src.db.core import FinancialPlanDB, FinancialPlanEntryDB, NotFoundError
+from src.models.financial_plan import FinancialPlanCreate, FinancialPlanUpdate, FinancialPlanEntryCreate, FinancialPlanEntryUpdate, FinancialPlanEntryBulkCreate
 
 # Financial Plan CRUD
 
@@ -40,6 +40,17 @@ def create_financial_plan_entry(db: Session, plan_id: int, entry: FinancialPlanE
     db.commit()
     db.refresh(db_entry)
     return db_entry
+
+def bulk_create_financial_plan_entries(db: Session, user_id: int, plan_id: int, bulk_data: FinancialPlanEntryBulkCreate) -> List[FinancialPlanEntryDB]:
+    db_plan = get_financial_plan(db, user_id, plan_id)
+    if not db_plan:
+        raise NotFoundError(f"Financial plan with id {plan_id} not found")
+
+    db_entries = [FinancialPlanEntryDB(**entry.model_dump(), plan_id=plan_id) for entry in bulk_data.entries]
+    db.add_all(db_entries)
+    db.commit()
+    # No refresh for bulk operations, client can re-fetch if needed
+    return db_entries
 
 def get_financial_plan_entry(db: Session, entry_id: int) -> Optional[FinancialPlanEntryDB]:
     return db.query(FinancialPlanEntryDB).filter(FinancialPlanEntryDB.entry_id == entry_id).first()

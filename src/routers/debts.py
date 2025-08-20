@@ -130,6 +130,13 @@ def create_debt_payment(
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
+@router.post("/payments/bulk-upload", response_model=List[debt_models.DebtPaymentResponse])
+def create_bulk_debt_payments(bulk_data: debt_models.DebtPaymentBulkCreate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
+    try:
+        return crud_debt.bulk_create_debt_payments(db=db, user_id=user_id, bulk_data=bulk_data)
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
 @router.get("/accounts/{account_id}/payments/", response_model=List[debt_models.DebtPaymentResponse])
 def read_debt_payments_for_account(
     account_id: int,

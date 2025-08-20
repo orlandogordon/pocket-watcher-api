@@ -19,7 +19,8 @@ from src.models.investment import (
     InvestmentHoldingUpdate,
     InvestmentTransactionCreate,
     InvestmentTransactionUpdate,
-    InvestmentTransactionTypeEnum
+    InvestmentTransactionTypeEnum,
+    InvestmentTransactionBulkCreate
 )
 
 
@@ -144,6 +145,12 @@ def create_db_investment_transaction(db: Session, user_id: int, transaction_data
     except IntegrityError:
         db.rollback()
         raise ValueError("Investment transaction creation failed.")
+
+def bulk_create_investment_transactions(db: Session, user_id: int, bulk_data: InvestmentTransactionBulkCreate) -> List[InvestmentTransactionDB]:
+    db_transactions = []
+    for transaction_data in bulk_data.transactions:
+        db_transactions.append(create_db_investment_transaction(db, user_id, transaction_data))
+    return db_transactions
 
 def read_db_investment_transaction(db: Session, transaction_id: int, user_id: int) -> Optional[InvestmentTransactionDB]:
     return db.query(InvestmentTransactionDB).join(AccountDB).filter(
