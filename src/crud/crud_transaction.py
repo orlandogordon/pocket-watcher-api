@@ -8,22 +8,21 @@ from uuid import uuid4, UUID
 import hashlib
 
 # Import your database models
-from src.db.core import TransactionDB, AccountDB, UserDB, NotFoundError, TransactionType, SourceType, CategoryDB, TransactionRelationshipDB
+from src.db.core import TransactionDB, AccountDB, UserDB, NotFoundError, TransactionType, SourceType, CategoryDB, TransactionRelationshipDB, TagDB
 from src.models.transaction import TransactionCreate, TransactionUpdate, TransactionFilter, TransactionStats, TransactionImport, TransactionRelationshipCreate
 from src.crud.crud_account import update_account_balance
 
 
 # ===== UTILITY FUNCTIONS =====
 
-def generate_transaction_hash(transaction_data: TransactionCreate, user_id: int) -> str:
-    """Generate a hash for transaction deduplication"""
+def generate_transaction_hash(transaction_data: TransactionCreate, user_id: int, institution_name: str) -> str:
+    """Generate a hash for transaction deduplication based on stable data."""
     hash_string = (
         f"{user_id}|"
-        f"{transaction_data.account_id}|"
+        f"{institution_name.lower()}|"
         f"{transaction_data.transaction_date}|"
         f"{transaction_data.amount}|"
-        f"{transaction_data.description or ''}|"
-        f"{transaction_data.external_transaction_id or ''}"
+        f"{transaction_data.description or ''}"
     )
     return hashlib.sha256(hash_string.encode()).hexdigest()
 
@@ -52,13 +51,15 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
     if not user:
         raise NotFoundError(f"User with id {user_id} not found")
     
-    # Verify account exists and belongs to user
-    account = db.query(AccountDB).filter(
-        AccountDB.id == transaction_data.account_id,
-        AccountDB.user_id == user_id
-    ).first()
-    if not account:
-        raise NotFoundError(f"Account with id {transaction_data.account_id} not found")
+    account = None
+    if transaction_data.account_id:
+        # Verify account exists and belongs to user
+        account = db.query(AccountDB).filter(
+            AccountDB.id == transaction_data.account_id,
+            AccountDB.user_id == user_id
+        ).first()
+        if not account:
+            raise NotFoundError(f"Account with id {transaction_data.account_id} not found")
 
     # Verify category and subcategory exist and are valid
     if transaction_data.category_id:
@@ -76,7 +77,8 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
             raise ValueError(f"Sub-category '{subcategory.name}' does not belong to category ID {transaction_data.category_id}")
 
     # Generate transaction hash for deduplication
-    transaction_hash = generate_transaction_hash(transaction_data, user_id)
+    institution_name = account.institution_name if account else ""
+    transaction_hash = generate_transaction_hash(transaction_data, user_id, institution_name)
     
     # Check for duplicate transaction
     existing_transaction = db.query(TransactionDB).filter(
@@ -105,9 +107,9 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
         parsed_description=parse_transaction_description(transaction_data.description or ""),
         merchant_name=transaction_data.merchant_name,
         comments=transaction_data.comments,
-        institution_name=account.institution_name,
-        account_number_last4=account.account_number_last4,
-        needs_review=False,
+        institution_name=institution_name,
+        account_number_last4=account.account_number_last4 if account else None,
+        needs_review=False if account else True,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow()
     )
@@ -117,8 +119,9 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
         db.commit()
         db.refresh(db_transaction)
         
-        # Update account balance (you might want to do this in a separate service)
-        update_account_balance_from_transaction(db, account, db_transaction)
+        if account:
+            # Update account balance (you might want to do this in a separate service)
+            update_account_balance_from_transaction(db, account, db_transaction)
         
         return db_transaction
     except IntegrityError:
@@ -233,6 +236,9 @@ def read_db_transactions(db: Session, user_id: int, filters: Optional[Transactio
                     TransactionDB.parsed_description.ilike(f"%{filters.description_search}%")
                 )
             )
+            
+        if filters.tag_id:
+            query = query.join(TransactionDB.tags).filter(TagDB.id == filters.tag_id)
     
     # Apply ordering
     if hasattr(TransactionDB, order_by):
@@ -305,7 +311,7 @@ def update_db_transaction(db: Session, transaction_id: int, user_id: int,
         db.refresh(db_transaction)
         
         # Update account balance if amount changed
-        if 'amount' in update_data and update_data['amount'] != old_amount:
+        if 'amount' in update_data and update_data['amount'] != old_amount and db_transaction.account_id is not None:
             account = db.query(AccountDB).filter(AccountDB.id == db_transaction.account_id).first()
             if account:
                 # Reverse old amount and apply new amount
@@ -378,7 +384,7 @@ def bulk_create_transactions(db: Session, user_id: int, transaction_import: Tran
             transaction_data.source_type = transaction_import.source_type
             
             # Generate hash for deduplication
-            transaction_hash = generate_transaction_hash(transaction_data, user_id)
+            transaction_hash = generate_transaction_hash(transaction_data, user_id, account.institution_name)
             
             # Check for duplicate
             existing = db.query(TransactionDB).filter(
@@ -629,3 +635,100 @@ def get_transactions_needing_review(db: Session, user_id: int, skip: int = 0, li
         TransactionDB.needs_review == True
     ).options(joinedload(TransactionDB.category), joinedload(TransactionDB.subcategory)).offset(skip).limit(limit).all()
 
+def bulk_create_transactions_from_parsed_data(
+    db: Session, 
+    user_id: int, 
+    transactions: List[TransactionCreate], 
+    institution_name: str,
+    account_id: Optional[int]
+) -> List[TransactionDB]:
+    """Bulk import transactions from a parsed file, with an optional account_id."""
+    account = None
+    if account_id:
+        account = db.query(AccountDB).filter(AccountDB.id == account_id, AccountDB.user_id == user_id).first()
+        if not account:
+            raise NotFoundError(f"Account with id {account_id} not found for this user.")
+
+    created_transactions = []
+    for t_data in transactions:
+        t_data.account_id = account_id
+        transaction_hash = generate_transaction_hash(t_data, user_id, institution_name)
+
+        existing = db.query(TransactionDB).filter(
+            TransactionDB.user_id == user_id,
+            TransactionDB.transaction_hash == transaction_hash
+        ).first()
+        if existing:
+            continue
+
+        db_transaction = TransactionDB(
+            id=uuid4(),
+            user_id=user_id,
+            account_id=t_data.account_id,
+            transaction_hash=transaction_hash,
+            transaction_date=t_data.transaction_date,
+            amount=t_data.amount,
+            transaction_type=TransactionType[t_data.transaction_type],
+            description=t_data.description,
+            institution_name=institution_name,
+            account_number_last4=account.account_number_last4 if account else None,
+            source_type=SourceType.PDF, # Default source
+            needs_review=True if not account_id else False,
+        )
+        db.add(db_transaction)
+        created_transactions.append(db_transaction)
+
+    if not created_transactions:
+        return []
+
+    try:
+        db.commit()
+        for t in created_transactions:
+            db.refresh(t)
+        if account:
+            balance_change = sum(t.amount for t in created_transactions if t.transaction_type in [TransactionType.DEPOSIT, TransactionType.CREDIT])
+            balance_change -= sum(t.amount for t in created_transactions if t.transaction_type in [TransactionType.DEBIT, TransactionType.WITHDRAWAL, TransactionType.FEE])
+            update_account_balance(db, account.id, account.balance + balance_change)
+        return created_transactions
+    except Exception as e:
+        db.rollback()
+        raise ValueError(f"Bulk transaction import failed: {str(e)}")
+
+def bulk_update_db_transactions(db: Session, user_id: int, transaction_ids: List[int], updates: Dict[str, Any]) -> int:
+    """Bulk update transactions for a user."""
+    
+    if not transaction_ids:
+        return 0
+        
+    # Fetch transactions to ensure they belong to the user and exist
+    transactions_to_update = db.query(TransactionDB).filter(
+        TransactionDB.user_id == user_id,
+        TransactionDB.id.in_(transaction_ids)
+    ).all()
+    
+    if len(transactions_to_update) != len(transaction_ids):
+        # This indicates that some transaction IDs were not found or didn't belong to the user
+        found_ids = {t.id for t in transactions_to_update}
+        missing_ids = set(transaction_ids) - found_ids
+        raise NotFoundError(f"Transactions with IDs {missing_ids} not found or not owned by user.")
+
+    # Perform the update
+    # Note: This performs a bulk update, which is more efficient than updating one by one.
+    # However, it does not trigger individual object lifecycle events (e.g., before_update).
+    # For this use case, it's acceptable.
+    update_query = db.query(TransactionDB).filter(
+        TransactionDB.user_id == user_id,
+        TransactionDB.id.in_(transaction_ids)
+    )
+    
+    # Add updated_at timestamp
+    updates_with_timestamp = {**updates, "updated_at": datetime.utcnow()}
+    
+    updated_count = update_query.update(updates_with_timestamp, synchronize_session=False)
+    
+    try:
+        db.commit()
+        return updated_count
+    except Exception as e:
+        db.rollback()
+        raise ValueError(f"Bulk transaction update failed: {str(e)}")

@@ -85,6 +85,21 @@ class InvestmentTransactionUpdate(BaseModel):
     transaction_date: Optional[date] = None
     description: Optional[str] = Field(None, max_length=500)
 
+class InvestmentTransactionBulkUpdate(BaseModel):
+    """
+    Model for bulk updating investment transactions.
+    """
+    transaction_ids: List[int] = Field(..., description="A list of investment transaction database IDs to update.")
+    account_id: Optional[int] = Field(None, description="Set a new account for all specified transactions.")
+    description: Optional[str] = Field(None, max_length=500, description="Set a new description for all specified transactions.")
+
+    @field_validator('transaction_ids')
+    @classmethod
+    def validate_transaction_ids(cls, v: List[int]) -> List[int]:
+        if not v:
+            raise ValueError("transaction_ids list cannot be empty.")
+        return v
+
 class InvestmentTransactionResponse(InvestmentTransactionBase):
     investment_transaction_id: int
     account_id: int

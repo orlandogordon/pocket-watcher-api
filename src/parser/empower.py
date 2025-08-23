@@ -1,3 +1,8 @@
+# WARNING: This parser has not been updated to the new standardized parsing model
+# and is not compatible with the new importer service. It currently returns
+# a raw list of lists and does not support in-memory stream parsing.
+# TODO: Refactor this parser to return a `ParsedData` object from `src/parser/models.py`.
+
 import csv
 import pdfplumber
 from pathlib import Path

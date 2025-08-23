@@ -1,221 +1,171 @@
 import csv
 import pdfplumber
 from pathlib import Path
+from decimal import Decimal, InvalidOperation
+from datetime import datetime
+from typing import List, Optional, Union, IO
+import io
 
-DATES=['01/', '02/', '03/', '04/', '05/', '06/', '07/', '08/', '09/', '10/', '11/', '12/']
+from src.parser.models import ParsedData, ParsedTransaction, ParsedAccountInfo
 
-def _map_transaction_type(line, keywords):
+DATES = ['01/', '02/', '03/', '04/', '05/', '06/', '07/', '08/', '09/', '10/', '11/', '12/']
+
+def _map_transaction_type(line: str, keywords: dict) -> List[bool]:
+    """Determines the type of transactions being tracked based on section headers."""
     if line.startswith(keywords['payments']):
         return [True, False, False, False, False]
     elif line.startswith(keywords['credits']):
-        return [False, True, False, False, False]  
+        return [False, True, False, False, False]
     elif line.startswith(keywords['purchases']):
         return [False, False, True, False, False]
     elif line.startswith(keywords['fees']):
         return [False, False, False, True, False]
     elif line.startswith(keywords['interest']):
         return [False, False, False, False, True]
+    return [False] * 5
 
-def parse_statement(pdf_file):
-    print(f"Parsing transaction data from Amazon (SYF) statement located at: '{pdf_file}'.")
-    # Setting up lists for transaction and credit data
-    transactions = []
-    credits = []
-    # Used to manage application state. When the header of the credits table in the PDF is discovered, 'tracking_credits' will flip to true
-    # and the following lines analyzed will be added to the credits list if they fit the expected format of a transaction entry
-    tracking_payments = False
-    tracking_credits = False
-    tracking_purchases = False
-    tracking_fees = False
-    tracking_interest = False
-    # Parsing logic configuration variables specific to each type of bank statement 
-    parse_keywords = {
-        'payments': 'Payments -$', 
-        'credits': 'Other Credits -$', 
-        'purchases': 'Purchases and Other Debits', 
-        'fees': 'Total Fees Charged This Period', 
-        'interest': 'Total Interest Charged This Period'
-        }
-    skip_lines = ['(Continued on next page)', 'Transaction Detail (Continued)', 'Date Reference # Description Amount']
-    ## Transaction and credit data placeholders
-    transaction_data = []
-    # Setting a years array to complete dates in the data
-    year_map = {}  
-    ## Complimentary Data to be Parsed
-    bank_name = 'amazon-synchrony'
-    account_holder = ''
-    account_number = ''
-    # Initialize pdf text variable
+def _parse_date(date_str: str, year_map: dict) -> Optional[datetime.date]:
+    """Parses a date string like 'MM/DD' using a year map."""
+    try:
+        month_str = date_str[0:2]
+        year = year_map.get(month_str)
+        if not year:
+            return None
+        return datetime.strptime(f"{date_str}/{year}", "%m/%d/%Y").date()
+    except (ValueError, IndexError):
+        return None
+
+def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
+    """Parses an Amazon Synchrony PDF statement from a file path or in-memory stream."""
+    print("Parsing transaction data from Amazon (SYF) statement...")
+    parsed_transactions: List[ParsedTransaction] = []
+    account_number: Optional[str] = None
+    year_map = {}
+
     text = ''
-    
-    with pdfplumber.open(str(pdf_file)) as pdf:
+    with pdfplumber.open(file_source) as pdf:
         for page in pdf.pages:
-            text += page.extract_text()
+            text += page.extract_text(x_tolerance=2) or ''
     lines = text.split('\n')
 
-    for i in range(len(lines)):
-        if lines[i].startswith("Account Number") and (not account_holder or not account_number):
-            account_holder = lines[i-1]
-            account_number = lines[i][-4:]
-        if lines[i].startswith("New Balance as of"):
-            months = lines[i+2].split("to")
-            months[0] = months[0].strip()
-            months[1] = months[1].lstrip()
-            months[0] = months[0].split(" ")[-1]
-            year_map[months[0][0:3]] = months[0][-4:]
-            year_map[months[1][0:3]] = months[1][-4:]
+    # First pass to find account number and establish year from statement period
+    for i, line in enumerate(lines):
+        if line.startswith("Account Number") and not account_number:
+            account_number = lines[i-1].split()[-1] # Heuristic: number is last word on previous line
+        if line.startswith("New Balance as of") and not year_map:
+            try:
+                months_part = lines[i+2]
+                start_month_str, end_month_str = months_part.split(' to ')
+                start_year = start_month_str.strip().split(' ')[-1]
+                end_year = end_month_str.strip().split(' ')[-1]
+                year_map[DATES[start_month_str[0:3]]] = start_year
+                year_map[DATES[end_month_str[0:3]]] = end_year
+            except (ValueError, IndexError):
+                continue
 
-    for i in range(len(lines)):
-        if any(lines[i].startswith(prefix) for prefix in parse_keywords.values()):
-            tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = _map_transaction_type(lines[i], parse_keywords)
-        elif tracking_payments:
-            if lines[i][0:3] in DATES:
-                line_split = lines[i].split(" ")
-                date_split= line_split.pop(0).split("/")
-                date_split.append(year_map[date_split[0] + "/"])
-                date = "/".join(date_split)
-                amount = line_split.pop().replace("-", "").replace("$", "")
-                line_split.pop(0) # Ignore the reference # column/data
-                description = " ".join(line_split)
-                category = ''
-                transaction_type = 'Payment'
-                while lines[i+1][0:3] not in DATES and not any(lines[i+1].startswith(prefix) for prefix in parse_keywords.values()): 
-                    if any(lines[i+1].startswith(prefix) for prefix in skip_lines):
-                        i += 1
-                    else:
-                        description += lines[i+1]
-                        i += 1
-                transaction_data.append([date, description, category, amount, transaction_type, bank_name, account_holder, account_number])
-            elif any(lines[i+1].startswith(prefix) for prefix in parse_keywords.values()):
-                tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = _map_transaction_type(lines[i], parse_keywords)
-        elif tracking_credits:
-            if lines[i][0:3] in DATES:
-                line_split = lines[i].split(" ")
-                date_split= line_split.pop(0).split("/")
-                date_split.append(year_map[date_split[0] + "/"])
-                date = "/".join(date_split)
-                amount = line_split.pop().replace("-", "").replace("$", "")
-                line_split.pop(0) # Ignore the reference # column/data
-                description = " ".join(line_split)
-                category = ''
-                transaction_type = 'Credit'
-                while lines[i+1][0:3] not in DATES and not any(lines[i+1].startswith(prefix) for prefix in parse_keywords.values()): 
-                    if any(lines[i+1].startswith(prefix) for prefix in skip_lines):
-                        i += 1
-                    else:
-                        description += lines[i+1]
-                        i += 1
-                transaction_data.append([date, description, category, amount, transaction_type, bank_name, account_holder, account_number])
-            elif any(lines[i].startswith(prefix) for prefix in parse_keywords.values()):
-                tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = _map_transaction_type(lines[i], parse_keywords)
-        elif tracking_purchases:
-            if lines[i][0:3] in DATES:
-                line_split = lines[i].split(" ")
-                date_split= line_split.pop(0).split("/")
-                date_split.append(year_map[date_split[0] + "/"])
-                date = "/".join(date_split)
-                amount = line_split.pop().replace("-", "").replace("$", "")
-                line_split.pop(0) # Ignore the reference # column/data
-                description = " ".join(line_split)
-                category = ''
-                transaction_type = 'Purchase'
-                while lines[i+1][0:3] not in DATES and not any(lines[i+1].startswith(prefix) for prefix in parse_keywords.values()): 
-                    if any(lines[i+1].startswith(prefix) for prefix in skip_lines):
-                        i += 1
-                    else:
-                        description += lines[i+1]
-                        i += 1
-                transaction_data.append([date, description, category, amount, transaction_type, bank_name, account_holder, account_number])
-            elif any(lines[i].startswith(prefix) for prefix in parse_keywords.values()):
-                tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = _map_transaction_type(lines[i], parse_keywords)
-        elif tracking_fees:
-            if lines[i][0:3] in DATES:
-                line_split = lines[i].split(" ")
-                date_split= line_split.pop(0).split("/")
-                date_split.append(year_map[date_split[0] + "/"])
-                date = "/".join(date_split)
-                amount = line_split.pop().replace("-", "").replace("$", "")
-                line_split.pop(0) # Ignore the reference # column/data
-                description = " ".join(line_split)
-                category = ''
-                transaction_type = 'Fee'
-                while lines[i+1][0:3] not in DATES and not any(lines[i+1].startswith(prefix) for prefix in parse_keywords.values()): 
-                    if any(lines[i+1].startswith(prefix) for prefix in skip_lines):
-                        i += 1
-                    else:
-                        description += lines[i+1]
-                        i += 1
-                transaction_data.append([date, description, category, amount, transaction_type, bank_name, account_holder, account_number])
-            elif any(lines[i].startswith(prefix) for prefix in parse_keywords.values()):
-                tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = _map_transaction_type(lines[i], parse_keywords)
-        elif tracking_interest:
-            if lines[i][0:3] in DATES:
-                line_split = lines[i].split(" ")
-                date_split= line_split.pop(0).split("/")
-                date_split.append(year_map[date_split[0] + "/"])
-                date = "/".join(date_split)
-                amount = line_split.pop().replace("-", "").replace("$", "")
-                line_split.pop(0) # Ignore the reference # column/data
-                description = " ".join(line_split)
-                category = ''
-                transaction_type = 'Interest'
-                while lines[i+1][0:3] not in DATES and "Year-to-Date Fees and Interest" not in lines[i+1]: 
-                    if any(lines[i+1].startswith(prefix) for prefix in skip_lines):
-                        i += 1
-                    else:
-                        description += lines[i+1]
-                        i += 1
-                transaction_data.append([date, description, category, amount, transaction_type, bank_name, account_holder, account_number])
-            elif "Year-to-Date Fees and Interest" in lines[i]:
-                tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = [False] * 5
+    tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = [False] * 5
+    parse_keywords = {
+        'payments': 'Payments -$',
+        'credits': 'Other Credits -$',
+        'purchases': 'Purchases and Other Debits',
+        'fees': 'Total Fees Charged This Period',
+        'interest': 'Total Interest Charged This Period'
+    }
+    skip_lines = ['(Continued on next page)', 'Transaction Detail (Continued)', 'Date Reference # Description Amount']
 
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if any(line.startswith(prefix) for prefix in parse_keywords.values()):
+            tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = _map_transaction_type(line, parse_keywords)
+            i += 1
+            continue
 
-    # pdf_file.rename(f"C:\\Users\\{project path}\\processed_statements\\{pdf_file.parts[-2]}\\{pdf_file.parts[-1]}")
+        if not line or line[0:3] not in DATES:
+            i += 1
+            continue
+
+        try:
+            line_split = line.split()
+            date_str = line_split[0]
+            parsed_date = _parse_date(date_str, year_map)
+            if not parsed_date:
+                i += 1
+                continue
+
+            amount = Decimal(line_split[-1].replace("$", ""))
+            description = " ".join(line_split[2:-1]) # Skip date and ref #
+
+            # Handle multi-line descriptions
+            while (i + 1) < len(lines) and lines[i+1] and lines[i+1][0:3] not in DATES and not any(lines[i+1].startswith(k) for k in parse_keywords.values()):
+                if not any(lines[i+1].startswith(s) for s in skip_lines):
+                    description += " " + lines[i+1].strip()
+                i += 1
+
+            transaction_type = ""
+            if tracking_payments: transaction_type = "Payment"
+            elif tracking_credits: transaction_type = "Credit"
+            elif tracking_purchases: transaction_type = "Purchase"
+            elif tracking_fees: transaction_type = "Fee"
+            elif tracking_interest: transaction_type = "Interest"
+
+            if transaction_type:
+                parsed_transactions.append(
+                    ParsedTransaction(
+                        transaction_date=parsed_date,
+                        description=description.strip(),
+                        amount=amount,
+                        transaction_type=transaction_type
+                    )
+                )
+        except (ValueError, InvalidOperation, IndexError) as e:
+            print(f"Skipping a row in AMZN_SYF statement due to parsing error: {line} -> {e}")
+        i += 1
+
+    account_info = ParsedAccountInfo(account_number_last4=account_number[-4:]) if account_number else None
+    return ParsedData(account_info=account_info, transactions=parsed_transactions)
+
+def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
+    """Parses an Amazon Synchrony CSV from a file path or in-memory stream."""
+    print("Parsing transaction data from Amazon (SYF) csv...")
+    parsed_transactions: List[ParsedTransaction] = []
+    account_info: Optional[ParsedAccountInfo] = None
+
+    text_stream = io.TextIOWrapper(file_source, encoding='utf-8') if isinstance(file_source, io.BytesIO) else open(file_source, 'r')
+    reader = csv.reader(text_stream)
+    next(reader)  # Skip header
+
+    for row in reader:
+        try:
+            date = datetime.strptime(row[0], "%m/%d/%Y").date()
+            description = row[4]
+            amount = Decimal(row[3])
+
+            transaction_type = 'Credit/Payment' if amount < 0 else 'Purchase'
+            amount = abs(amount)
+
+            parsed_transactions.append(
+                ParsedTransaction(
+                    transaction_date=date,
+                    description=description.strip(),
+                    amount=amount,
+                    transaction_type=transaction_type
+                )
+            )
+        except (ValueError, InvalidOperation, IndexError) as e:
+            print(f"Skipping row in AMZN_SYF CSV due to parsing error: {row} -> {e}")
+            continue
     
-    return transaction_data
+    if isinstance(file_source, Path):
+        text_stream.close()
 
-def parse_csv(csv_file):
-    print(f"Parsing transaction data from Amazon (SYF) csv located at: '{csv_file}'.")
-    # Initialize data list to hold csv data
-    data = []
-    ## Transaction data list, will be written to CSV
-    transaction_data = []
-    ## Complimentary Data to be Parsed
-    bank_name = 'amazon-synchrony'
-    account_holder = ''
-    account_number = ''
-    # Column/Index -> Field Mapping
-    date_index = 0
-    description_index = 4
-    amount_index = 3
+    return ParsedData(transactions=parsed_transactions, account_info=account_info)
 
-    # Read the CSV file
-    with open(csv_file, mode='r', newline='') as infile:
-        reader = csv.reader(infile)
-        data = list(reader)[1:]
-
-    for row in data:
-        if float(row[amount_index]) < 0:
-            date = row[date_index]
-            amount = row[amount_index].replace("-", "")
-            description = row[description_index]
-            category = ''
-            transaction_type = 'Credit/Payment'
-            transaction_data.append([date, description, category, amount, transaction_type, bank_name, account_holder, account_number])
-        else:
-            date = row[date_index]
-            amount = row[amount_index]
-            description = row[description_index]
-            category = ''
-            transaction_type = 'Purchase'
-            transaction_data.append([date, description, category, amount, transaction_type, bank_name, account_holder, account_number])
-
-    # pdf_file.rename(f"C:\\Users\\{project path}\\processed_statements\\{pdf_file.parts[-2]}\\{pdf_file.parts[-1]}")
-
-    return transaction_data
-
-def write_csv(transactions_csv_file_path, transaction_data):
-    # Open the file in write mode
-    with open(transactions_csv_file_path, mode='a', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerows(transaction_data)
+def parse(file_source: Union[Path, IO[bytes]], is_csv: bool = False) -> ParsedData:
+    """
+    Parses a Amazon Synchrony statement (PDF or CSV) from a file path or in-memory stream.
+    """
+    if is_csv:
+        return parse_csv(file_source)
+    else:
+        return parse_statement(file_source)

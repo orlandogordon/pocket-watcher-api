@@ -1,8 +1,8 @@
-"""initial migration
+"""Create initial database schema
 
-Revision ID: 6f2993755c36
+Revision ID: cc3cac5e3487
 Revises: 
-Create Date: 2025-08-17 02:15:33.035062
+Create Date: 2025-08-21 23:35:25.178757
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '6f2993755c36'
+revision: str = 'cc3cac5e3487'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -176,7 +176,7 @@ def upgrade() -> None:
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('external_transaction_id', sa.String(length=255), nullable=True),
     sa.Column('user_id', sa.Integer(), nullable=False),
-    sa.Column('account_id', sa.Integer(), nullable=False),
+    sa.Column('account_id', sa.Integer(), nullable=True),
     sa.Column('category_id', sa.Integer(), nullable=True),
     sa.Column('subcategory_id', sa.Integer(), nullable=True),
     sa.Column('transaction_hash', sa.String(length=64), nullable=False),
@@ -230,7 +230,7 @@ def upgrade() -> None:
     op.create_index('idx_debt_payments_transaction', 'debt_payments', ['transaction_id'], unique=False)
     op.create_table('investment_transactions',
     sa.Column('investment_transaction_id', sa.Integer(), autoincrement=True, nullable=False),
-    sa.Column('account_id', sa.Integer(), nullable=False),
+    sa.Column('account_id', sa.Integer(), nullable=True),
     sa.Column('holding_id', sa.Integer(), nullable=True),
     sa.Column('transaction_type', sa.Enum('BUY', 'SELL', 'DIVIDEND', 'INTEREST', 'SPLIT', 'MERGER', 'SPINOFF', 'REINVESTMENT', name='investmenttransactiontype'), nullable=False),
     sa.Column('symbol', sa.String(length=20), nullable=False),

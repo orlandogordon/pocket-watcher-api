@@ -87,6 +87,25 @@ class TransactionUpdate(BaseModel):
         return v.strip() if v else v
 
 
+class TransactionBulkUpdate(BaseModel):
+    """
+    Model for bulk updating transactions.
+    """
+    transaction_ids: List[int] = Field(..., description="A list of transaction database IDs to update.")
+    account_id: Optional[int] = Field(None, description="Set a new account for all specified transactions.")
+    category_id: Optional[int] = Field(None, description="Set a new category for all specified transactions.")
+    subcategory_id: Optional[int] = Field(None, description="Set a new sub-category for all specified transactions.")
+    needs_review: Optional[bool] = Field(None, description="Mark all specified transactions as needing review.")
+    comments: Optional[str] = Field(None, description="Add or overwrite comments for all specified transactions.")
+
+    @field_validator('transaction_ids')
+    @classmethod
+    def validate_transaction_ids(cls, v: List[int]) -> List[int]:
+        if not v:
+            raise ValueError("transaction_ids list cannot be empty.")
+        return v
+
+
 class TransactionResponse(BaseModel):
     """Transaction data returned to client"""
     id: UUID

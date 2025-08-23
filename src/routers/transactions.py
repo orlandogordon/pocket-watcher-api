@@ -1,17 +1,18 @@
 from fastapi import APIRouter, HTTPException, Request
-from typing import List
+from typing import List, Dict, Any
 from fastapi.params import Depends
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from src.db.core import NotFoundError, get_db
-from src.models.transaction import TransactionCreate, TransactionUpdate, TransactionResponse, TransactionImport, TransactionRelationshipCreate, TransactionRelationship
+from src.models.transaction import TransactionCreate, TransactionUpdate, TransactionResponse, TransactionImport, TransactionRelationshipCreate, TransactionRelationship, TransactionBulkUpdate
 from src.crud.crud_transaction import (
     create_db_transaction,
     read_db_transaction,
     update_db_transaction,
     delete_db_transaction,
     bulk_create_transactions,
-    create_transaction_relationship
+    create_transaction_relationship,
+    bulk_update_db_transactions
 )
 
 router = APIRouter(
@@ -33,6 +34,28 @@ def create_transaction(request: Request, transaction: TransactionCreate, db: Ses
     except IntegrityError as e:
         raise HTTPException(status_code=400, detail="Database integrity error.") from e
     return TransactionResponse.model_validate(db_transaction)
+
+@router.patch("/bulk-update")
+def bulk_update_transactions(request: Request, bulk_update_data: TransactionBulkUpdate, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    user_id = get_current_user_id()
+    
+    update_payload = bulk_update_data.model_dump(exclude_unset=True, exclude={"transaction_ids"})
+    
+    if not update_payload:
+        raise HTTPException(status_code=400, detail="No update fields provided.")
+
+    try:
+        updated_count = bulk_update_db_transactions(
+            db=db, 
+            user_id=user_id, 
+            transaction_ids=bulk_update_data.transaction_ids, 
+            updates=update_payload
+        )
+        return {"message": f"Successfully updated {updated_count} transactions."}
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/bulk-upload/")
 def create_transactions(request: Request, transaction_import: TransactionImport, db: Session = Depends(get_db)) -> List[TransactionResponse]:

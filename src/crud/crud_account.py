@@ -226,3 +226,13 @@ def get_account_by_name(db: Session, user_id: int, account_name: str) -> Optiona
         AccountDB.user_id == user_id,
         AccountDB.account_name == account_name
     ).first()
+
+def get_db_account_by_last_four(db: Session, user_id: int, last_four: str) -> AccountDB:
+    """Get account by the last four digits of its number for a specific user."""
+    account = db.query(AccountDB).filter(
+        AccountDB.user_id == user_id,
+        AccountDB.account_number_last4 == last_four
+    ).first()
+    if not account:
+        raise NotFoundError(f"Account with last four digits {last_four} not found.")
+    return account

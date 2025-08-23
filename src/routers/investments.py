@@ -1,12 +1,13 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Dict, Any
 
 from src.crud import crud_investment
 from src.db.core import get_db, NotFoundError
 from src.models.investment import (
     InvestmentHoldingCreate, InvestmentHoldingResponse, InvestmentHoldingUpdate,
-    InvestmentTransactionCreate, InvestmentTransactionResponse, InvestmentTransactionUpdate, InvestmentTransactionBulkCreate
+    InvestmentTransactionCreate, InvestmentTransactionResponse, InvestmentTransactionUpdate, InvestmentTransactionBulkCreate,
+    InvestmentTransactionBulkUpdate
 )
 
 router = APIRouter(
@@ -80,6 +81,24 @@ def create_bulk_transactions(bulk_data: InvestmentTransactionBulkCreate, db: Ses
         return crud_investment.bulk_create_investment_transactions(db=db, user_id=user_id, bulk_data=bulk_data)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+@router.patch("/transactions/bulk-update")
+def bulk_update_transactions(bulk_update_data: InvestmentTransactionBulkUpdate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)) -> Dict[str, Any]:
+    update_payload = bulk_update_data.model_dump(exclude_unset=True, exclude={"transaction_ids"})
+    if not update_payload:
+        raise HTTPException(status_code=400, detail="No update fields provided.")
+    try:
+        updated_count = crud_investment.bulk_update_db_investment_transactions(
+            db=db, 
+            user_id=user_id, 
+            transaction_ids=bulk_update_data.transaction_ids, 
+            updates=update_payload
+        )
+        return {"message": f"Successfully updated {updated_count} transactions."}
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/accounts/{account_id}/transactions/", response_model=List[InvestmentTransactionResponse])
 def read_transactions_for_account(account_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):

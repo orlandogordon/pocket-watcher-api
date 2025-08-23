@@ -1,334 +1,148 @@
-import os
-import re
 import csv
-from PIL import Image
+import re
 import pdfplumber
-from pdfplumber.table import Table, Row, Column
 from pathlib import Path
-import pandas as pd
+from decimal import Decimal, InvalidOperation
+from datetime import datetime
+from typing import List, Optional, Union, IO
+import io
 
-import pdfplumber.structure
+from src.parser.models import ParsedData, ParsedTransaction, ParsedAccountInfo
 
-DATES={
-    'Jan': '01/',
-    'Feb': '02/', 
-    'Mar': '03/', 
-    'Apr': '04/', 
-    'May': '05/', 
-    'Jun': '06/', 
-    'Jul': '07/', 
-    'Aug': '08/', 
-    'Sep': '09/', 
-    'Oct': '10/', 
-    'Nov': '11/', 
-    'Dec': '12/'
-    }
 
-def parse_statement(pdf_file):
-    print(f"Parsing transaction data from TD Bank statement: '{pdf_file}'.")
-    # Used to manage application state. When the header of the deposits table in the PDF is discovered, 'tracking_depositis' will flip to true
-    # and the following lines analyzed will be added to the deposits list if they fit the expected format of a transaction entry
-    tracking_deposits = False
-    tracking_purchases = False
-    # Parsing logic configuration variables specific to each type of bank statement 
-    start_parse_purchases_keywords = ['Payments', 'ElectronicPayments', 'ElectronicPayments(continued)', 'OtherWithdrawals']
-    end_parse_purchases_keywords = ['Call 1-800-937-2000', 'Subtotal:']
-    start_parse_deposits_keywords = ['Deposits', 'ElectronicDeposits', 'ElectronicDeposits(continued)', 'OtherCredits']
-    end_parse_deposits_keywords = ['Call 1-800-937-2000', 'Subtotal:']  
-    # Setting a years array to complete dates in the data
-    months = []
-    years = []
-    # Complimentary Data to be Parsed
-    bank_name = 'tdbank'
-    account_holder = ''
-    account_number = ''
-    # Lines that will be used to create each table and the parsed data from the tables
-    horizontal_lines = []
-    vertical_lines = []
-    deposit_data = []
-    purchase_data = []
+DATES = {
+    'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04', 'May': '05', 'Jun': '06', 
+    'Jul': '07', 'Aug': '08', 'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12'
+}
 
-    with pdfplumber.open(str(pdf_file)) as pdf:
-        pdf_shortcut = str(pdf_file).replace('.pdf', '')
-        lines_dict = {page : [pdf.pages[page].extract_text_lines()] for page in range(len(pdf.pages))}
-        words_dict = {page : [pdf.pages[page].extract_words()] for page in range(len(pdf.pages))}
-        pdfplumber_text = {f'page {page}' : [repr(pdf.pages[page].extract_text())] for page in range(len(pdf.pages))}
-        pdf_extract_dict = {page : pdf.pages[page] for page in range(len(pdf.pages))} 
-        horizontal_lines = []
-        vertical_lines = []
-        deposit_tables = []
-        purchase_tables = []
+def _parse_date_from_month_day(month_day: str, year_map: dict) -> Optional[datetime.date]:
+    """Parses a MM/DD date string using a year map like {'01': '2023'}."""
+    try:
+        month = month_day.split('/')[0]
+        year = year_map.get(month)
+        if not year:
+            return None
+        return datetime.strptime(f"{month}/{year}", "%m/%d/%Y").date()
+    except (ValueError, IndexError):
+        return None
 
-        for page in lines_dict:
-            for line in lines_dict[page][0]:
-                if "StatementPeriod:" in line['text']:
-                    months = [month[0:3] for month in line['text'].split(" ")[-1].split('-')]
-                    months = [DATES[month] for month in months]
-                    years = [f"/{date[-4:]}" for date in line['text'].split(" ")[-1].split('-')]
-                elif " Account# " in line['text']:
-                    text_split = line['text'].split(" ")
-                    account_holder=text_split[0]
-                    account_number=text_split[-1][-4:]
+def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
+    """Parses a TD Bank PDF statement from a file path or in-memory stream."""
+    print("Parsing transaction data from TD Bank statement...")
+    transactions: List[ParsedTransaction] = []
+    account_number: Optional[str] = None
+    year_map = {}
 
-        for page in lines_dict:
-            for line in lines_dict[page][0]:
-                if line['text'] in start_parse_deposits_keywords:
-                    tracking_deposits = True
-                elif line['text'] in start_parse_purchases_keywords:
-                    tracking_purchases = True
-                elif line['text'] == 'POSTINGDATE DESCRIPTION AMOUNT' and (tracking_deposits or tracking_purchases):
-                    vertical_lines.append(line['x0'])
-                    trailing_word = ''
-                    for char in line['chars']:
-                        if trailing_word == 'POSTINGDATE':
-                            vertical_lines.append(char['x0']-5)
-                            trailing_word = ''
-                        elif trailing_word == 'DESCRIPTION':
-                            vertical_lines.append(char['x0']-50)
-                            trailing_word = ''
-                        trailing_word += char['text']
-                    vertical_lines.append(line['x1'])
-                if (tracking_deposits or tracking_purchases) and re.match(r'^\d{2}/\d{2}.*\d.\d{2}$', str(line['text'])):
-                    horizontal_lines.append(line['top'])
-                if (tracking_deposits or tracking_purchases) and any(line['text'].startswith(prefix) for prefix in [*end_parse_purchases_keywords, *end_parse_deposits_keywords]):
-                    horizontal_lines.append(line['top'])
-                    cells = []
-                    
-                    for i in range(len(horizontal_lines) - 1):
-                        for j in range(len(vertical_lines)-1):
-                            cells.append([vertical_lines[j],  horizontal_lines[i], vertical_lines[j+1],  horizontal_lines[i+1]])
-                    
-                    if tracking_deposits:
-                        deposit_tables.append(Table(pdf.pages[page], tuple(cells)))
-                    elif tracking_purchases:
-                        purchase_tables.append(Table(pdf.pages[page], tuple(cells)))
+    with pdfplumber.open(file_source) as pdf:
+        # Extract account number and statement period from the first page
+        first_page_text = pdf.pages[0].extract_text()
+        for line in first_page_text.split('\n'):
+            if "Account #" in line:
+                account_number = line.split('#')[-1].strip()
+            elif "Statement Period:" in line:
+                # Extracts years and maps them to months, e.g., {'01': '2023', '02': '2023'}
+                match = re.search(r'(\d{1,2}/\d{1,2}/\d{4}) - (\d{1,2}/\d{1,2}/\d{4})', line)
+                if match:
+                    start_date = datetime.strptime(match.group(1), '%m/%d/%Y')
+                    end_date = datetime.strptime(match.group(2), '%m/%d/%Y')
+                    year_map[f"{start_date.month:02d}"] = str(start_date.year)
+                    year_map[f"{end_date.month:02d}"] = str(end_date.year)
 
-                    #  Reset tracking variables
-                    vertical_lines = []
-                    horizontal_lines = []
-                    tracking_deposits = False
-                    tracking_purchases = False
-        
-        # Create debugging images and concatenate them
-        images = []
-        prefix = f'finetune_tables_for_{os.path.basename(pdf_shortcut)}'
+        # Find transaction tables across all pages
         for page in pdf.pages:
-            im = page.to_image(resolution=120)
-            for table in deposit_tables:
-                if page == table.page:
-                    for cell in table.cells:
-                        im.draw_rect(cell, stroke='red') 
-            for table in purchase_tables:
-                if page == table.page:
-                    for cell in table.cells:
-                        im.draw_rect(cell, stroke='red')
+            # Use pdfplumber's table finding with explicit settings for TD Bank statements
+            tables = page.find_tables({
+                "vertical_strategy": "lines",
+                "horizontal_strategy": "text",
+                "snap_y_tolerance": 5,
+                "join_y_tolerance": 5,
+            })
+            for table in tables:
+                for row in table.extract():
+                    if not row or not row[0] or not re.match(r'^\d{2}/\d{2}$', row[0]):
+                        continue # Skip headers/invalid rows
+                    
+                    try:
+                        date_str, description, amount_str = row[0], row[1], row[2]
+                        if not description or not amount_str:
+                            continue
 
-            im.save(f"output/{prefix}_page-{page.page_number}.png")
+                        parsed_date = _parse_date_from_month_day(date_str, year_map)
+                        if not parsed_date:
+                            continue
+                        
+                        # Amount can be in a combined column, split it
+                        if ' ' in amount_str:
+                            amount_str = amount_str.split(' ')[-1]
+                        
+                        amount = Decimal(amount_str.replace("$", "").replace(",", ""))
+                        
+                        # Determine transaction type based on which section it's in (heuristic)
+                        # This is simplified; a more robust method would check section headers.
+                        transaction_type = "Deposit" if amount > 0 else "Purchase"
 
-        for file_name in os.listdir('output'):
-            if file_name.startswith(prefix) and file_name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
-                images.append(Image.open(os.path.join('output', file_name)))
+                        transactions.append(
+                            ParsedTransaction(
+                                transaction_date=parsed_date,
+                                description=description.strip().replace('\n', ' '),
+                                amount=amount,
+                                transaction_type=transaction_type
+                            )
+                        )
+                    except (ValueError, InvalidOperation, IndexError) as e:
+                        print(f"Skipping row in TD Bank statement due to parsing error: {row} -> {e}")
+                        continue
+        breakpoint()
+    account_info = ParsedAccountInfo(account_number_last4=account_number[-4:]) if account_number else None
+    return ParsedData(account_info=account_info, transactions=transactions)
 
-        widths, heights = zip(*(i.size for i in images))
+def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
+    """Parses a TD Bank CSV from a file path or in-memory stream."""
+    print("Parsing transaction data from TD Bank csv...")
+    parsed_transactions: List[ParsedTransaction] = []
+    # Account number is not available in TD Bank CSVs, so account_info is None
+    account_info: Optional[ParsedAccountInfo] = None
 
-        max_width = max(widths)
-        total_height = sum(heights)
+    text_stream = io.TextIOWrapper(file_source, encoding='utf-8') if isinstance(file_source, io.BytesIO) else open(file_source, 'r')
+    reader = csv.reader(text_stream)
+    next(reader) # Skip header
 
-        new_image = Image.new('RGB', (max_width, total_height))
+    for row in reader:
+        try:
+            date = datetime.strptime(row[0], "%Y-%m-%d").date()
+            description = row[4]
+            debit = row[5]
+            credit = row[6]
 
-        y_offset = 0
-        for im in images:
-            new_image.paste(im, (0,y_offset))
-            y_offset += im.size[1]
-            im.close()
-            os.remove(os.path.join(im.filename))
+            if credit:
+                amount = Decimal(credit)
+                transaction_type = 'Deposit'
+            else:
+                amount = Decimal(debit)
+                transaction_type = 'Purchase'
 
-        new_image.save(f'output/{os.path.basename(pdf_shortcut)}.png')
+            parsed_transactions.append(
+                ParsedTransaction(
+                    transaction_date=date,
+                    description=description.strip(),
+                    amount=amount,
+                    transaction_type=transaction_type
+                )
+            )
+        except (ValueError, InvalidOperation, IndexError) as e:
+            print(f"Skipping row in TD Bank CSV due to parsing error: {row} -> {e}")
+            continue
 
-    for table in deposit_tables:
-        deposit_data.extend(table.extract())
+    if isinstance(file_source, Path):
+        text_stream.close()
 
-    for table in purchase_tables:
-        purchase_data.extend(table.extract())
+    return ParsedData(transactions=parsed_transactions, account_info=account_info)
 
-    # Refine transaction data and write to CSV
-    for i in range(len(deposit_data)):
-        date = deposit_data[i][0]
-        description = deposit_data[i][1]
-        amount = deposit_data[i][2]
-
-        if date[0:3] == months[0]:
-            date += years[0]
-        elif date[0:3] == months[1]:
-            date += years[1]
-        else:
-            print(f"ERROR: Date format error: {date}")
-        
-        deposit_data[i] = [date, description, '', amount, 'Deposit', bank_name, account_holder, account_number]
-
-    for i in range(len(purchase_data)):
-        date = purchase_data[i][0]
-        description = purchase_data[i][1]
-        amount = purchase_data[i][2]
-
-        if date[0:3] == months[0]:
-            date += years[0]
-        elif date[0:3] == months[1]:
-            date += years[1]
-        else: 
-            print(f"ERROR: Date format error: {date}")
-        
-        purchase_data[i] = [date, description, '', amount, 'Purchase', bank_name, account_holder, account_number]
-        
-    # pdf_file.rename(f"C:\\Users\\{project path}\\processed_statements\\{pdf_file.parts[-2]}\\{pdf_file.parts[-1]}")
-    return deposit_data + purchase_data
-
-def parse_statement_legacy(pdf_file):
-    print(f"Parsing transaction/deposit data from TD Bank statement: '{pdf_file}'.")
-    # Setting up lists for transaction and deposit data
-    transactions = []
-    deposits = []
-    # Used to manage application state. When the header of the deposits table in the PDF is discovered, 'tracking_depositis' will flip to true
-    # and the following lines analyzed will be added to the deposits list if they fit the expected format of a transaction entry
-    tracking_deposits = False
-    tracking_transactions = False
-    # Parsing logic configuration variables specific to each type of bank statement 
-    start_parse_transactions_keywords = ['ElectronicPayments', 'ElectronicPayments(continued)']
-    end_parse_transactions_keywords = ['Call 1-800-937-2000', 'Subtotal:']
-    start_parse_deposits_keywords = ['ElectronicDeposits', 'ElectronicDeposits(continued)']
-    end_parse_deposits_keywords = ['Call 1-800-937-2000', 'Subtotal:']
-    ## Transaction data CSV headers
-    transaction_data = []
-    deposit_data = []    
-    # Setting a years array to complete dates in the data
-    months = []
-    years = []
-    ## Complimentary Data to be Parsed
-    bank_name = 'tdbank'
-    account_holder = ''
-    account_number = ''
-    # Text that will hold the parsed pdf
-    text = ''
-    ## Testing Table Parsing
-    daily_account_activity = {'top': 10000, 'bottom': 10000}
-    electronic_deposits = 0
-    electronic_payments = 0
-    horizontal_lines = []
-    vertical_lines = []
-
-    with pdfplumber.open(str(pdf_file)) as pdf:
-        for page in pdf.pages:
-            text += page.extract_text()
-           
-    lines = text.split('\n')
-    
-    for i in range(len(lines)):
-        if "StatementPeriod:" in lines[i]:
-            months = [month[0:3] for month in lines[i].split(" ")[-1].split('-')]
-            months = [DATES[month] for month in months]
-            years = [f"/{date[-4:]}" for date in lines[i].split(" ")[-1].split('-')]
-        elif " Account# " in lines[i]:
-            text_split = lines[i].split(" ")
-            account_holder=text_split[0]
-            account_number=text_split[-1][-4:]
-
-    for i in range(len(lines)):
-        if lines[i] in start_parse_transactions_keywords:
-            tracking_transactions = True
-        elif lines[i] in start_parse_deposits_keywords:
-            tracking_deposits =True    
-        elif lines[i][0:3] in DATES.values() and (tracking_transactions or tracking_deposits):
-            if lines[i+1][0:3] not in DATES.values() and not any(lines[i+1].startswith(prefix) for prefix in [*end_parse_transactions_keywords, *end_parse_deposits_keywords]):                        
-                entry = lines[i]
-                entry_split=entry.split(',')
-                insert = entry_split[-1].split(' ')[0] + lines[i+1] + " " + entry_split[-1].split(' ')[-1]
-                entry_split[-1] = insert
-                entry = " , ".join(entry_split)
-                lines[i] = entry
-            if tracking_deposits: deposits.append(lines[i])
-            if tracking_transactions: transactions.append(lines[i])
-        elif any(lines[i].startswith(prefix) for prefix in [*end_parse_transactions_keywords, *end_parse_deposits_keywords]):
-            tracking_deposits = False
-            tracking_transactions = False
-
-    # Refine transaction data and write to CSV
-    for transaction in transactions:
-        transaction_split = transaction.split(' ')
-        date = transaction_split.pop(0)
-        if date[0:2] == months[0]:
-            date += years[0]
-        else:
-            date += years[1]
-        amount = transaction_split.pop()
-        transaction_split = " ".join(transaction_split).split(',')
-        description = transaction_split.pop()
-        transaction_data.append([date, description, amount, bank_name, account_holder, account_number])
-
-    # Refine deposit data and write to CSV
-    for deposit in deposits:
-        deposit_split = deposit.split(' ')
-        date = deposit_split.pop(0)
-        if date[0:2] == months[0]:
-            date += years[0]
-        else:
-            date += years[1]
-        amount = deposit_split.pop()
-        description = " ".join(deposit_split)
-        deposit_data.append([date, description, amount, bank_name, account_holder, account_number])
-
-    # pdf_file.rename(f"C:\\Users\\{project path}\\processed_statements\\{pdf_file.parts[-2]}\\{pdf_file.parts[-1]}")
-    
-    return transaction_data + deposit_data
-
-def parse_csv(csv_file):
-    print(f"Parsing transaction data from TD Bank csv located at: '{csv_file}'.")
-    # Initialize data list to hold csv data
-    data = []
-    ## Transaction data CSV headers
-    transaction_data = []
-    ## Complimentary Data to be Parsed
-    bank_name = 'tdbank'
-    account_holder = ''
-    account_number = ''
-    # Column/Index -> Field Matching
-    transaction_type_index = 3
-    date_index = 0
-    description_index = 4
-    debit_amount_index = 5
-    credit_amount_index = 6
-    account_number_index = 2
-
-    # Read the CSV file
-    with open(csv_file, mode='r', newline='') as infile:
-        reader = csv.reader(infile)
-        data = list(reader)[1:]
-
-    for row in data:
-        if row[transaction_type_index] == 'CREDIT':
-            date_parts = row[date_index].split("-")
-            date = f"{date_parts[1]}/{date_parts[2]}/{date_parts[0]}"
-            amount = row[credit_amount_index]
-            description = row[description_index]
-            category = ''
-            transaction_type = 'Deposit'
-            account_number = row[account_number_index][-4:]
-            transaction_data.append([date, description, category, amount, transaction_type, bank_name, account_holder, account_number])
-        else:
-            date_parts = row[date_index].split("-")
-            date = f"{date_parts[1]}/{date_parts[2]}/{date_parts[0]}"
-            amount = row[debit_amount_index]
-            description = row[description_index]
-            category = ''
-            transaction_type = 'Purchase'
-            account_number = row[account_number_index][-4:]
-            transaction_data.append([date, description, category, amount, transaction_type, bank_name, account_holder, account_number])
-
-    # pdf_file.rename(f"C:\\Users\\{project path}\\processed_statements\\{pdf_file.parts[-2]}\\{pdf_file.parts[-1]}")
-
-    return transaction_data
-
-def write_csv(transactions_csv_file_path, transaction_data):
-    # Open the file in write mode
-    with open(transactions_csv_file_path, mode='a', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerows(transaction_data)
+def parse(file_source: Union[Path, IO[bytes]], is_csv: bool = False) -> ParsedData:
+    """
+    Parses a TD Bank statement (PDF or CSV) from a file path or in-memory stream.
+    """
+    if is_csv:
+        return parse_csv(file_source)
+    else:
+        return parse_statement(file_source)

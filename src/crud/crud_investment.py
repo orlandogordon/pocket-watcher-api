@@ -1,9 +1,10 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import desc
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 from decimal import Decimal
+import hashlib
 
 # Import your database models
 from src.db.core import (
@@ -22,6 +23,7 @@ from src.models.investment import (
     InvestmentTransactionTypeEnum,
     InvestmentTransactionBulkCreate
 )
+from src.parser.models import ParsedInvestmentTransaction
 
 
 # ===== DATABASE OPERATIONS - INVESTMENT HOLDINGS =====
@@ -146,6 +148,98 @@ def create_db_investment_transaction(db: Session, user_id: int, transaction_data
         db.rollback()
         raise ValueError("Investment transaction creation failed.")
 
+def generate_investment_transaction_hash(transaction_data: ParsedInvestmentTransaction, user_id: int, institution_name: str) -> str:
+    """Generate a hash for investment transaction deduplication."""
+    hash_string = (
+        f"{user_id}|"
+        f"{institution_name.lower()}|"
+        f"{transaction_data.transaction_date}|"
+        f"{transaction_data.transaction_type.value}|"
+        f"{transaction_data.symbol}|"
+        f"{transaction_data.quantity}|"
+        f"{transaction_data.price_per_share}|"
+        f"{transaction_data.amount}"
+    )
+    return hashlib.sha256(hash_string.encode()).hexdigest()
+
+
+def bulk_create_investment_transactions_from_parsed_data(
+    db: Session,
+    user_id: int,
+    transactions: List[ParsedInvestmentTransaction],
+    institution_name: str,
+    account_id: Optional[int]
+) -> List[InvestmentTransactionDB]:
+    """Bulk import investment transactions from a parsed file, with an optional account_id."""
+    account = None
+    if account_id:
+        account = db.query(AccountDB).filter(AccountDB.id == account_id, AccountDB.user_id == user_id).first()
+        if not account:
+            raise NotFoundError(f"Account with id {account_id} not found for this user.")
+
+    created_transactions = []
+    for t_data in transactions:
+        transaction_hash = generate_investment_transaction_hash(t_data, user_id, institution_name)
+
+        existing = db.query(InvestmentTransactionDB).filter(
+            InvestmentTransactionDB.user_id == user_id,
+            InvestmentTransactionDB.transaction_hash == transaction_hash
+        ).first()
+        if existing:
+            continue
+
+        # Find or create the corresponding holding
+        holding = None
+        if account_id:
+            holding = db.query(InvestmentHoldingDB).filter(
+                InvestmentHoldingDB.account_id == account_id,
+                InvestmentHoldingDB.symbol == t_data.symbol
+            ).first()
+
+            if not holding and t_data.transaction_type in [InvestmentTransactionTypeEnum.BUY, InvestmentTransactionTypeEnum.REINVESTMENT]:
+                holding_create = InvestmentHoldingCreate(
+                    account_id=account_id,
+                    symbol=t_data.symbol,
+                    quantity=Decimal('0'),
+                    average_cost_basis=Decimal('0')
+                )
+                holding = create_db_investment_holding(db, user_id, holding_create)
+
+        db_transaction = InvestmentTransactionDB(
+            user_id=user_id,
+            account_id=account_id,
+            holding_id=holding.holding_id if holding else None,
+            transaction_hash=transaction_hash,
+            transaction_date=t_data.transaction_date,
+            transaction_type=InvestmentTransactionType(t_data.transaction_type.value),
+            symbol=t_data.symbol,
+            quantity=t_data.quantity,
+            price_per_share=t_data.price_per_share,
+            amount=t_data.amount,
+            fees=t_data.fees,
+            description=t_data.description,
+            needs_review=True if not account_id else False,
+        )
+        db.add(db_transaction)
+        created_transactions.append(db_transaction)
+
+    if not created_transactions:
+        return []
+
+    try:
+        db.commit()
+        for t in created_transactions:
+            db.refresh(t)
+            if t.holding_id:
+                holding = db.query(InvestmentHoldingDB).get(t.holding_id)
+                if holding:
+                    update_holding_from_transaction(db, holding, t)
+        return created_transactions
+    except Exception as e:
+        db.rollback()
+        raise ValueError(f"Bulk investment transaction import failed: {str(e)}")
+
+
 def bulk_create_investment_transactions(db: Session, user_id: int, bulk_data: InvestmentTransactionBulkCreate) -> List[InvestmentTransactionDB]:
     db_transactions = []
     for transaction_data in bulk_data.transactions:
@@ -188,6 +282,41 @@ def update_db_investment_transaction(db: Session, transaction_id: int, user_id: 
     except IntegrityError:
         db.rollback()
         raise ValueError("Transaction update failed.")
+
+def bulk_update_db_investment_transactions(db: Session, user_id: int, transaction_ids: List[int], updates: Dict[str, Any]) -> int:
+    """
+    Bulk update multiple investment transactions for a user.
+    """
+    if not transaction_ids:
+        return 0
+
+    # First, get the account_ids for the given transaction_ids to verify ownership
+    transactions_query = db.query(InvestmentTransactionDB.investment_transaction_id, AccountDB.user_id).join(AccountDB).filter(
+        InvestmentTransactionDB.investment_transaction_id.in_(transaction_ids)
+    ).all()
+
+    if len(transactions_query) != len(set(transaction_ids)):
+        found_ids = {t[0] for t in transactions_query}
+        missing_ids = set(transaction_ids) - found_ids
+        raise NotFoundError(f"Investment transactions with the following IDs not found: {missing_ids}")
+
+    for t in transactions_query:
+        if t.user_id != user_id:
+            raise NotFoundError(f"Transaction with ID {t.investment_transaction_id} does not belong to the user.")
+
+    # Perform the bulk update
+    update_data = {**updates, "updated_at": datetime.utcnow()}
+    
+    try:
+        updated_rows = db.query(InvestmentTransactionDB).filter(
+            InvestmentTransactionDB.investment_transaction_id.in_(transaction_ids)
+        ).update(update_data, synchronize_session=False)
+        
+        db.commit()
+        return updated_rows
+    except Exception as e:
+        db.rollback()
+        raise ValueError(f"Failed to bulk update investment transactions: {str(e)}")
 
 def delete_db_investment_transaction(db: Session, transaction_id: int, user_id: int) -> bool:
     db_transaction = read_db_investment_transaction(db, transaction_id, user_id)

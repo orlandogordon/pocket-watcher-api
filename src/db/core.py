@@ -234,7 +234,7 @@ class InvestmentTransactionDB(Base):
     investment_transaction_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     
     # Foreign Keys
-    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))
     holding_id: Mapped[Optional[int]] = mapped_column(ForeignKey("investment_holdings.holding_id"))  # Optional for dividends, etc.
     
     # Transaction Data
@@ -373,7 +373,7 @@ class TransactionDB(Base):
     id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     external_transaction_id: Mapped[Optional[str]] = mapped_column(String(255))
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
-    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
     subcategory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
 

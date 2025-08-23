@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI
 from .routers.users import router as users_router
 from .routers.transactions import router as transactions_router
 from .routers.investments import router as investments_router
@@ -8,21 +8,13 @@ from .routers.financial_plans import router as financial_plans_router
 from .routers.accounts import router as accounts_router
 from .routers.tags import router as tags_router
 from .routers.debts import router as debts_router
+from .routers.uploads import router as uploads_router
 
 # @asynccontextmanager
 # async def lifespan(_: FastAPI):
 #     yield
 
-test_router = APIRouter()
-
-
 app = FastAPI()  # FastAPI(lifespan=lifespan)
-
-
-@test_router.get("/posts")
-async def posts():
-    return {"posts": "test"}
-
 
 app.include_router(users_router)
 app.include_router(transactions_router)
@@ -33,7 +25,7 @@ app.include_router(financial_plans_router)
 app.include_router(accounts_router)
 app.include_router(tags_router)
 app.include_router(debts_router)
-app.include_router(test_router)
+app.include_router(uploads_router)
 
 # app.state.limiter = limiter
 # app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
