@@ -12,6 +12,7 @@ from src.db.core import RelationshipType
 
 class TransactionTypeEnum(str, Enum):
     DEBIT = "DEBIT"
+    PURCHASE = "PURCHASE"
     CREDIT = "CREDIT"
     TRANSFER = "TRANSFER"
     DEPOSIT = "DEPOSIT"

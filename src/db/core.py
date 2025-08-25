@@ -88,6 +88,7 @@ class CategoryDB(Base):
 
 class TransactionType(enum.Enum):
     DEBIT = "DEBIT"
+    PURCHASE = "PURCHASE"
     CREDIT = "CREDIT"
     TRANSFER = "TRANSFER"
     DEPOSIT = "DEPOSIT"

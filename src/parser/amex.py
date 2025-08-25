@@ -26,9 +26,11 @@ def _map_transaction_type(line: str, keywords: dict) -> List[bool]:
     return [False] * 5
 
 def _parse_date(date_str: str, year_map: dict) -> Optional[datetime.date]:
-    """Parses a date string like 'MM/DD' using a year map."""
+    """Parses a date string like 'MM/DD/YY' or 'MM/DD' using a year map."""
     try:
         month_day = date_str.split(' ')[0].replace("*", "")
+        if len(month_day.split('/')) == 3:
+            return datetime.strptime(month_day, "%m/%d/%y").date()
         month = month_day.split('/')[0]
         # Find the year from the map, falling back to the first available year if needed
         year = year_map.get(month, list(year_map.values())[0] if year_map else str(datetime.now().year))
