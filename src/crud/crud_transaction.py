@@ -10,6 +10,7 @@ import hashlib
 # Import your database models
 from src.db.core import TransactionDB, AccountDB, UserDB, NotFoundError, TransactionType, SourceType, CategoryDB, TransactionRelationshipDB, TagDB
 from src.models.transaction import TransactionCreate, TransactionUpdate, TransactionFilter, TransactionStats, TransactionImport, TransactionRelationshipCreate
+from src.parser.models import ParsedTransaction
 from src.crud.crud_account import update_account_balance
 
 
@@ -636,43 +637,76 @@ def get_transactions_needing_review(db: Session, user_id: int, skip: int = 0, li
     ).options(joinedload(TransactionDB.category), joinedload(TransactionDB.subcategory)).offset(skip).limit(limit).all()
 
 def bulk_create_transactions_from_parsed_data(
-    db: Session, 
-    user_id: int, 
-    transactions: List[TransactionCreate], 
+    db: Session,
+    user_id: int,
+    transactions: List[ParsedTransaction],
     institution_name: str,
-    account_id: Optional[int]
+    account_id: Optional[int],
 ) -> List[TransactionDB]:
     """Bulk import transactions from a parsed file, with an optional account_id."""
     account = None
     if account_id:
-        account = db.query(AccountDB).filter(AccountDB.id == account_id, AccountDB.user_id == user_id).first()
+        account = (
+            db.query(AccountDB)
+            .filter(AccountDB.id == account_id, AccountDB.user_id == user_id)
+            .first()
+        )
         if not account:
             raise NotFoundError(f"Account with id {account_id} not found for this user.")
 
     created_transactions = []
-    for t_data in transactions:
-        t_data.account_id = account_id
-        transaction_hash = generate_transaction_hash(t_data, user_id, institution_name)
+    processed_hashes = set()
 
-        existing = db.query(TransactionDB).filter(
-            TransactionDB.user_id == user_id,
-            TransactionDB.transaction_hash == transaction_hash
-        ).first()
+    for t_data in transactions:
+        try:
+            # Assumes parser provides the name of the enum member (case-insensitive)
+            transaction_type_enum = TransactionType[t_data.transaction_type.upper()]
+        except KeyError:
+            print(f"Skipping transaction with unknown type: {t_data.transaction_type}")
+            continue
+
+        # Create a TransactionCreate object to ensure data consistency and for hashing
+        transaction_to_create = TransactionCreate(
+            transaction_date=t_data.transaction_date,
+            amount=t_data.amount,
+            description=t_data.description,
+            transaction_type=transaction_type_enum,
+            account_id=account_id,
+            source_type=SourceType.PDF,
+        )
+
+        transaction_hash = generate_transaction_hash(
+            transaction_to_create, user_id, institution_name
+        )
+
+        if transaction_hash in processed_hashes:
+            continue
+
+        processed_hashes.add(transaction_hash)
+
+        existing = (
+            db.query(TransactionDB)
+            .filter(
+                TransactionDB.user_id == user_id,
+                TransactionDB.transaction_hash == transaction_hash,
+            )
+            .first()
+        )
         if existing:
             continue
 
         db_transaction = TransactionDB(
             id=uuid4(),
             user_id=user_id,
-            account_id=t_data.account_id,
+            account_id=transaction_to_create.account_id,
             transaction_hash=transaction_hash,
-            transaction_date=t_data.transaction_date,
-            amount=t_data.amount,
-            transaction_type=TransactionType[t_data.transaction_type],
-            description=t_data.description,
+            transaction_date=transaction_to_create.transaction_date,
+            amount=transaction_to_create.amount,
+            transaction_type=transaction_to_create.transaction_type,
+            description=transaction_to_create.description,
             institution_name=institution_name,
             account_number_last4=account.account_number_last4 if account else None,
-            source_type=SourceType.PDF, # Default source
+            source_type=transaction_to_create.source_type,
             needs_review=True if not account_id else False,
         )
         db.add(db_transaction)
@@ -686,8 +720,17 @@ def bulk_create_transactions_from_parsed_data(
         for t in created_transactions:
             db.refresh(t)
         if account:
-            balance_change = sum(t.amount for t in created_transactions if t.transaction_type in [TransactionType.DEPOSIT, TransactionType.CREDIT])
-            balance_change -= sum(t.amount for t in created_transactions if t.transaction_type in [TransactionType.DEBIT, TransactionType.WITHDRAWAL, TransactionType.FEE])
+            balance_change = sum(
+                t.amount
+                for t in created_transactions
+                if t.transaction_type in [TransactionType.DEPOSIT, TransactionType.CREDIT]
+            )
+            balance_change -= sum(
+                t.amount
+                for t in created_transactions
+                if t.transaction_type
+                in [TransactionType.DEBIT, TransactionType.WITHDRAWAL, TransactionType.FEE]
+            )
             update_account_balance(db, account.id, account.balance + balance_change)
         return created_transactions
     except Exception as e:
