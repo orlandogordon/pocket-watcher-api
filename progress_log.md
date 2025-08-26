@@ -40,3 +40,4 @@ In short, while the database constraint is the ultimate safety net, the applicat
 ## To-Do
 
 - Test, debug, and fix the remaining statement and CSV parsers to ensure they conform to the new `ParsedData` model and handle various file formats correctly.
+- In the transactions table: We have a uuid where transaction hash is but I thought this would be the unique idenitifier with identifying data points like description date and amount. We also probably don't need the posted_date, raw_data_json and needs review columns. We also are uploading the parsed_description only to the description table when it should be in the parsed_description table and MAYBE in the description table too. 
