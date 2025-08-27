@@ -365,14 +365,11 @@ class TransactionDB(Base):
         # Duplicate prevention
         UniqueConstraint("user_id", "transaction_hash", name="uq_user_transaction_hash"),
         
-        # Optional: unique external transaction ID per account
-        Index("idx_transactions_external_id", "external_transaction_id"),
     )
 
     # Core Transaction Identification
     db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
-    external_transaction_id: Mapped[Optional[str]] = mapped_column(String(255))
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
     account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
@@ -381,11 +378,9 @@ class TransactionDB(Base):
     # Deduplication & Source Tracking
     transaction_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     source_type: Mapped[SourceType] = mapped_column(Enum(SourceType))
-    raw_data_json: Mapped[Optional[dict]] = mapped_column(JSON)
 
     # Basic Transaction Data
     transaction_date: Mapped[date] = mapped_column(Date, nullable=False)
-    posted_date: Mapped[Optional[date]] = mapped_column(Date)
     amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
     transaction_type: Mapped[TransactionType] = mapped_column(Enum(TransactionType))
 

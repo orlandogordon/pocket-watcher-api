@@ -93,16 +93,13 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
     # Create new transaction
     db_transaction = TransactionDB(
         id=uuid4(),
-        external_transaction_id=transaction_data.external_transaction_id,
         user_id=user_id,
         account_id=transaction_data.account_id,
         category_id=transaction_data.category_id,
         subcategory_id=transaction_data.subcategory_id,
         transaction_hash=transaction_hash,
         source_type=SourceType(transaction_data.source_type.value),
-        raw_data_json=transaction_data.raw_data,
         transaction_date=transaction_data.transaction_date,
-        posted_date=transaction_data.posted_date,
         amount=transaction_data.amount,
         transaction_type=TransactionType(transaction_data.transaction_type.value),
         description=transaction_data.description,
@@ -405,16 +402,13 @@ def bulk_create_transactions(db: Session, user_id: int, transaction_import: Tran
             # Create transaction
             db_transaction = TransactionDB(
                 id=uuid4(),
-                external_transaction_id=transaction_data.external_transaction_id,
                 user_id=user_id,
                 account_id=transaction_data.account_id,
                 category_id=transaction_data.category_id,
                 subcategory_id=transaction_data.subcategory_id,
                 transaction_hash=transaction_hash,
                 source_type=SourceType(transaction_data.source_type.value),
-                raw_data_json=transaction_data.raw_data,
                 transaction_date=transaction_data.transaction_date,
-                posted_date=transaction_data.posted_date,
                 amount=transaction_data.amount,
                 transaction_type=TransactionType(transaction_data.transaction_type.value),
                 description=transaction_data.description,

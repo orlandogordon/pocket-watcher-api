@@ -31,7 +31,6 @@ class SourceTypeEnum(str, Enum):
 class TransactionCreate(BaseModel):
     account_id: int = Field(..., description="Account ID for this transaction")
     transaction_date: date = Field(..., description="Date of the transaction")
-    posted_date: Optional[date] = Field(None, description="Date transaction was posted")
     amount: Decimal = Field(..., description="Transaction amount")
     transaction_type: TransactionTypeEnum = Field(..., description="Type of transaction")
     description: Optional[str] = Field(None, max_length=500, description="Transaction description")
@@ -39,9 +38,7 @@ class TransactionCreate(BaseModel):
     category_id: Optional[int] = Field(None, description="The ID of the transaction's category")
     subcategory_id: Optional[int] = Field(None, description="The ID of the transaction's sub-category")
     comments: Optional[str] = Field(None, description="User comments")
-    external_transaction_id: Optional[str] = Field(None, max_length=255, description="External transaction ID")
     source_type: SourceTypeEnum = Field(default=SourceTypeEnum.MANUAL, description="Source of transaction data")
-    raw_data: Optional[Dict[str, Any]] = Field(None, description="Raw transaction data from source")
 
     @field_validator('amount')
     @classmethod
@@ -62,7 +59,6 @@ class TransactionCreate(BaseModel):
 class TransactionUpdate(BaseModel):
     """Update transaction - all fields optional"""
     transaction_date: Optional[date] = None
-    posted_date: Optional[date] = None
     amount: Optional[Decimal] = None
     transaction_type: Optional[TransactionTypeEnum] = None
     description: Optional[str] = Field(None, max_length=500)
@@ -111,10 +107,8 @@ class TransactionResponse(BaseModel):
     """Transaction data returned to client"""
     id: UUID
     db_id: int
-    external_transaction_id: Optional[str]
     account_id: int
     transaction_date: date
-    posted_date: Optional[date]
     amount: Decimal
     transaction_type: TransactionTypeEnum
     category: Optional[CategoryResponse] = None
