@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import List, Optional, Union, IO
 import io
+from itertools import groupby
 
 from src.parser.models import ParsedData, ParsedTransaction, ParsedAccountInfo
 
@@ -14,6 +15,40 @@ DATES = {
     'Jan': '01/', 'Feb': '02/', 'Mar': '03/', 'Apr': '04/', 'May': '05/', 'Jun': '06/', 
     'Jul': '07/', 'Aug': '08/', 'Sep': '09/', 'Oct': '10/', 'Nov': '11/', 'Dec': '12/'
 }
+
+def _handle_duplicates(transactions: List[ParsedTransaction]) -> List[ParsedTransaction]:
+    """
+    Handles duplicate transactions by appending a counter to the description.
+    """
+    updated_transactions = []
+    keyfunc = lambda t: (t.transaction_date, t.amount, t.description)
+    
+    sorted_transactions = sorted(transactions, key=keyfunc)
+
+    for key, group in groupby(sorted_transactions, key=keyfunc):
+        group_list = list(group)
+        if len(group_list) > 1:
+            # Duplicates found
+            for i, transaction in enumerate(group_list):
+                if i == 0:
+                    # First one is kept as is
+                    updated_transactions.append(transaction)
+                else:
+                    # Subsequent ones get a modified description
+                    new_description = f"{transaction.description} ({i + 1})"
+                    updated_transactions.append(
+                        ParsedTransaction(
+                            transaction_date=transaction.transaction_date,
+                            description=new_description,
+                            amount=transaction.amount,
+                            transaction_type=transaction.transaction_type
+                        )
+                    )
+        else:
+            # No duplicates for this key
+            updated_transactions.append(group_list[0])
+            
+    return updated_transactions
 
 def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses a TD Bank PDF statement from a file path or in-memory stream."""
@@ -47,7 +82,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
         # Build complete text and lines for all pages
         lines_dict = {}
         for page_num in range(len(pdf.pages)):
-            lines_dict[page_num] = pdf.pages[page_num].extract_text_lines()
+            lines_dict[page_num] = pdf.pages[page_num].extract_text_lines() 
         
         # Extract the statement period and account info
         for page_idx in lines_dict:
@@ -55,17 +90,23 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 line_text = line['text']
                 
                 # Extract statement period
-                if "StatementPeriod:" in line_text or "Statement Period:" in line_text:
-                    # Parse dates like "Aug 21 2020-Sep 20 2020"
-                    # Look for month names and years
+                if "StatementPeriod:" in line_text or "Statement Period:" in line_text:                    
                     for month_name, month_num in DATES.items():
                         if month_name in line_text:
-                            # Find the year that follows this month
-                            pattern = month_name + r'.*?(\d{4})'
-                            match = re.search(pattern, line_text)
-                            if match and month_num not in months:
-                                months.append(month_num)
-                                years.append(match.group(1))
+                            # Find the position of the month name
+                            month_pos = line_text.find(month_name)
+                            # Extract a window of text after the month (should contain day and year)
+                            text_after_month = line_text[month_pos + len(month_name):month_pos + len(month_name) + 10]
+                            print(f"DEBUG: Found {month_name} at position {month_pos}, text after: '{text_after_month}'")
+                            
+                            # Try to extract the year from this segment
+                            # Look for 4 consecutive digits that start with 19 or 20
+                            year_match = re.search(r'(19\d{2}|20\d{2})', text_after_month)
+                            if year_match:
+                                if month_num not in months:
+                                    months.append(month_num)
+                                    years.append(year_match.group(1))
+                                    print(f"DEBUG: Extracted month={month_num}, year={year_match.group(1)}")
                     
                     print(f"Extracted: months={months}, years={years}")
                 
@@ -79,7 +120,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                         account_number = re.sub(r'[^0-9]', '', account_number)
         
         print(f"Final months: {months}, years: {years}")
-        print(f"Account number: {account_number}")
+        print(f"Account number: {account_number[-4:] if account_number else 'null'}")
         
         # Process transactions
         for page_idx in lines_dict:
@@ -123,9 +164,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                         ]
                     else:
                         vertical_lines = [line['x0'], line['x0'] + 80, line['x1'] - 100, line['x1']]
-                    
-                    print(f"Set up {len(vertical_lines)} column boundaries at positions: {vertical_lines}")
-                
+                                    
                 # Collect transaction line positions
                 if (tracking_deposits or tracking_purchases) and re.match(r'^\d{2}/\d{2}.*\d.\d{2}$', line_text):
                     horizontal_lines.append(line['top'])
@@ -200,15 +239,19 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                     amount_str = amount_match.group(1)
                     description = description[:amount_match.start()].strip()
             
-            # Complete date
-            if date_str[:3] == months[0] if months else None:
+            # Complete date from MM/DD to MM/DD/YYYY
+            month_num = date_str[:2]  # Get "08" from "08/24"
+
+            # Determine which year to use based on the month
+            if month_num == months[0][:2] if months else None:  # Compare just month numbers
                 full_date = date_str + "/" + years[0]
-            elif len(months) > 1 and date_str[:3] == months[1]:
+            elif len(months) > 1 and month_num == months[1][:2]:
                 full_date = date_str + "/" + years[1]
             else:
-                print(f"ERROR: Date format error: {date_str}")
-                continue
-            
+                # Default to first year if month matching fails
+                full_date = date_str + "/" + years[0] if years else "2020"
+                print(f"Warning: Using default year for date: {date_str}")
+
             try:
                 parsed_date = datetime.strptime(full_date, "%m/%d/%Y").date()
                 amount = Decimal(amount_str.replace("$", "").replace(",", ""))
@@ -221,7 +264,6 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                         transaction_type="Deposit"
                     )
                 )
-                print(f"Added deposit: {parsed_date} - ${amount}")
                 
             except (ValueError, InvalidOperation) as e:
                 print(f"Error parsing deposit: date={date_str}, amount={amount_str}, error={e}")
@@ -255,15 +297,19 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 if amount_match:
                     amount_str = amount_match.group(1)
                     description = description[:amount_match.start()].strip()
-            
-            # Complete date 
-            if date_str[:3] == months[0] if months else None:
+
+            # Complete date - from MM/DD to MM/DD/YYYY
+            month_num = date_str[:2]  # Get "08" from "08/24"
+
+            # Determine which year to use based on the month
+            if month_num == months[0][:2] if months else None:  # Compare just month numbers
                 full_date = date_str + "/" + years[0]
-            elif len(months) > 1 and date_str[:3] == months[1]:
+            elif len(months) > 1 and month_num == months[1][:2]:
                 full_date = date_str + "/" + years[1]
             else:
-                print(f"ERROR: Date format error: {date_str}")
-                continue
+                # Default to first year if month matching fails
+                full_date = date_str + "/" + years[0] if years else "2020"
+                print(f"Warning: Using default year for date: {date_str}")
             
             try:
                 parsed_date = datetime.strptime(full_date, "%m/%d/%Y").date()
@@ -277,13 +323,14 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                         transaction_type="Purchase"
                     )
                 )
-                print(f"Added purchase: {parsed_date} - ${amount}")
                 
             except (ValueError, InvalidOperation) as e:
                 print(f"Error parsing purchase: date={date_str}, amount={amount_str}, error={e}")
     
     print(f"Total transactions parsed: {len(transactions)}")
     
+    transactions = _handle_duplicates(transactions)
+
     # Create account info
     account_info = None
     if account_number and len(account_number) >= 4:
@@ -334,7 +381,10 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
 
     if isinstance(file_source, Path):
         text_stream.close()
-
+    breakpoint()
+    
+    parsed_transactions = _handle_duplicates(parsed_transactions)
+    
     return ParsedData(transactions=parsed_transactions, account_info=account_info)
 
 

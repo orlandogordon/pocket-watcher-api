@@ -5,11 +5,46 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import List, Optional, IO, Union
 import io
+from itertools import groupby
 
 from src.parser.models import ParsedData, ParsedTransaction, ParsedAccountInfo
 
 # A list of month prefixes to identify transaction lines
 DATES = ['01/', '02/', '03/', '04/', '05/', '06/', '07/', '08/', '09/', '10/', '11/', '12/']
+
+def _handle_duplicates(transactions: List[ParsedTransaction]) -> List[ParsedTransaction]:
+    """
+    Handles duplicate transactions by appending a counter to the description.
+    """
+    updated_transactions = []
+    keyfunc = lambda t: (t.transaction_date, t.amount, t.description)
+    
+    sorted_transactions = sorted(transactions, key=keyfunc)
+
+    for key, group in groupby(sorted_transactions, key=keyfunc):
+        group_list = list(group)
+        if len(group_list) > 1:
+            # Duplicates found
+            for i, transaction in enumerate(group_list):
+                if i == 0:
+                    # First one is kept as is
+                    updated_transactions.append(transaction)
+                else:
+                    # Subsequent ones get a modified description
+                    new_description = f"{transaction.description} ({i + 1})"
+                    updated_transactions.append(
+                        ParsedTransaction(
+                            transaction_date=transaction.transaction_date,
+                            description=new_description,
+                            amount=transaction.amount,
+                            transaction_type=transaction.transaction_type
+                        )
+                    )
+        else:
+            # No duplicates for this key
+            updated_transactions.append(group_list[0])
+            
+    return updated_transactions
 
 def _map_transaction_type(line: str, keywords: dict) -> List[bool]:
     """Determines the type of transactions being tracked based on section headers."""
@@ -122,8 +157,9 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             print(f"Skipping a row in AMEX statement due to parsing error: {line} -> {e}")
             continue
 
+    parsed_transactions = _handle_duplicates(parsed_transactions)
     account_info = ParsedAccountInfo(account_number_last4=account_number.replace("-", "")) if account_number else None
-
+    
     return ParsedData(
         account_info=account_info,
         transactions=parsed_transactions
@@ -164,7 +200,8 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     
     if isinstance(file_source, Path):
         text_stream.close()
-
+    
+    parsed_transactions = _handle_duplicates(parsed_transactions)
     return ParsedData(transactions=parsed_transactions, account_info=account_info)
 
 def parse(file_source: Union[Path, IO[bytes]], is_csv: bool = False) -> ParsedData:

@@ -22,6 +22,7 @@ def generate_transaction_hash(transaction_data: TransactionCreate, user_id: int,
         f"{user_id}|"
         f"{institution_name.lower()}|"
         f"{transaction_data.transaction_date}|"
+        f"{transaction_data.transaction_type.value}|"
         f"{transaction_data.amount}|"
         f"{transaction_data.description or ''}"
     )

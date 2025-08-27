@@ -154,11 +154,11 @@ def generate_investment_transaction_hash(transaction_data: ParsedInvestmentTrans
         f"{user_id}|"
         f"{institution_name.lower()}|"
         f"{transaction_data.transaction_date}|"
-        f"{transaction_data.transaction_type.value}|"
+        f"{transaction_data.transaction_type}|"
         f"{transaction_data.symbol}|"
         f"{transaction_data.quantity}|"
         f"{transaction_data.price_per_share}|"
-        f"{transaction_data.amount}"
+        f"{transaction_data.total_amount}"
     )
     return hashlib.sha256(hash_string.encode()).hexdigest()
 
