@@ -8,6 +8,7 @@ class ParsedTransaction(BaseModel):
     description: str
     amount: Decimal
     transaction_type: str
+    is_duplicate: bool = False
 
 class ParsedInvestmentTransaction(BaseModel):
     transaction_date: date

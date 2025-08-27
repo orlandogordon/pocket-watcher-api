@@ -8,7 +8,7 @@ from uuid import uuid4, UUID
 import hashlib
 
 # Import your database models
-from src.db.core import TransactionDB, AccountDB, UserDB, NotFoundError, TransactionType, SourceType, CategoryDB, TransactionRelationshipDB, TagDB
+from src.db.core import TransactionDB, AccountDB, UserDB, NotFoundError, TransactionType, SourceType, CategoryDB, TransactionRelationshipDB, TagDB, TransactionTagDB
 from src.models.transaction import TransactionCreate, TransactionUpdate, TransactionFilter, TransactionStats, TransactionImport, TransactionRelationshipCreate
 from src.parser.models import ParsedTransaction
 from src.crud.crud_account import update_account_balance
@@ -657,6 +657,7 @@ def bulk_create_transactions_from_parsed_data(
 
     created_transactions = []
     processed_hashes = set()
+    duplicate_tag = None
 
     for t_data in transactions:
         try:
@@ -696,6 +697,11 @@ def bulk_create_transactions_from_parsed_data(
         if existing:
             continue
 
+        needs_review_flag = True if not account_id else False
+        is_duplicate = getattr(t_data, 'is_duplicate', False)
+        if is_duplicate:
+            needs_review_flag = True
+
         db_transaction = TransactionDB(
             id=uuid4(),
             user_id=user_id,
@@ -705,11 +711,21 @@ def bulk_create_transactions_from_parsed_data(
             amount=transaction_to_create.amount,
             transaction_type=transaction_to_create.transaction_type,
             description=transaction_to_create.description,
+            parsed_description=parse_transaction_description(transaction_to_create.description or ""),
             institution_name=institution_name,
             account_number_last4=account.account_number_last4 if account else None,
             source_type=transaction_to_create.source_type,
-            needs_review=True if not account_id else False,
+            needs_review=needs_review_flag,
         )
+        
+        if is_duplicate:
+            if duplicate_tag is None:
+                duplicate_tag = db.query(TagDB).filter(TagDB.user_id == user_id, TagDB.tag_name == "duplicate").first()
+                if duplicate_tag is None:
+                    duplicate_tag = TagDB(user_id=user_id, tag_name="duplicate", created_at=datetime.utcnow())
+                    db.add(duplicate_tag)
+            db_transaction.transaction_tags.append(TransactionTagDB(tag=duplicate_tag))
+
         db.add(db_transaction)
         created_transactions.append(db_transaction)
 

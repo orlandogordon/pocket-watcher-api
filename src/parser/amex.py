@@ -37,7 +37,8 @@ def _handle_duplicates(transactions: List[ParsedTransaction]) -> List[ParsedTran
                             transaction_date=transaction.transaction_date,
                             description=new_description,
                             amount=transaction.amount,
-                            transaction_type=transaction.transaction_type
+                            transaction_type=transaction.transaction_type,
+                            is_duplicate=True
                         )
                     )
         else:
