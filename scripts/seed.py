@@ -139,20 +139,20 @@ def seed_database():
                     trans_date = fake.date_between(start_date="-2y", end_date="today")
                     parent_cat_id = random.choice(list(categories_map.keys()))
                     sub_cat_id = random.choice(categories_map[parent_cat_id]) if categories_map[parent_cat_id] else None
-                    is_debit = random.choice([True, False])
+                    is_purchase = random.choice([True, False])
                     amount = Decimal(random.uniform(5.0, 500.0))
                     
                     transaction = TransactionDB(
                         id=uuid4(), user_id=user.db_id, account_id=account.id,
-                        transaction_date=trans_date, amount= -amount if is_debit else amount,
-                        transaction_type=TransactionType.DEBIT if is_debit else TransactionType.CREDIT,
+                        transaction_date=trans_date, amount=amount,
+                        transaction_type=TransactionType.PURCHASE if is_purchase else TransactionType.CREDIT,
                         category_id=parent_cat_id, subcategory_id=sub_cat_id,
                         description=fake.catch_phrase(), merchant_name=fake.company(),
                         transaction_hash=fake.sha256(raw_output=False), source_type=SourceType.MANUAL,
                     )
                     db.add(transaction)
                     all_transactions.append(transaction)
-                    if is_debit:
+                    if is_purchase:
                         purchases.append(transaction)
             db.flush()
 

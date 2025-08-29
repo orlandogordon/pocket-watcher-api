@@ -25,9 +25,6 @@ For each parser, the following steps will be taken:
 4. Integrate the helper function into the main parsing logic before the `ParsedData` object is returned.
 
 
-**Database Schema TODOs**
-In the transactions table: 
-- We have a uuid where transaction hash is but I thought this would be the unique idenitifier with identifying data points like description date and amount. 
-- We also probably don't need the posted_date, raw_data_json and needs review columns. 
-- We also are uploading the parsed_description only to the description table when it should be in the parsed_description table and MAYBE in the description table too. 
-- I also want to include a "potential_duplicate" tag automatically on any transactions that were deemed duplicate but still uploaded since they came from the same file. 
+**Database TODOs**
+- Create a script that can convert all the data in the database tables to a csv/json file and then an upload endpoint that can recieve this csv and populate a brand new database table with the data.
+- Create a script that can bulk upload each statment and csv file in the input folder. The accounts associated with each folder can be hardcoded into the script since it will only be meant to quickly upload all of my transaction data. How that value gets hardcoded is the question too.  

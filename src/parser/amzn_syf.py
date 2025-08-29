@@ -175,7 +175,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 i += 1
                 continue
 
-            amount = Decimal(line_split[-1].replace("$", ""))
+            amount = abs(Decimal(line_split[-1].replace("$", "").replace(",", "")))
             description = " ".join(line_split[2:-1]) # Skip date and ref #
 
             # Handle multi-line descriptions
@@ -191,7 +191,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 i += 1
 
             transaction_type = ""
-            if tracking_payments: transaction_type = "Payment"
+            if tracking_payments: transaction_type = "Credit"
             elif tracking_credits: transaction_type = "Credit"
             elif tracking_purchases: transaction_type = "Purchase"
             elif tracking_fees: transaction_type = "Fee"

@@ -314,7 +314,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             
             try:
                 parsed_date = datetime.strptime(full_date, "%m/%d/%Y").date()
-                amount = Decimal(amount_str.replace("$", "").replace(",", ""))
+                amount = abs(Decimal(amount_str.replace("$", "").replace(",", "")))
                 
                 transactions.append(
                     ParsedTransaction(

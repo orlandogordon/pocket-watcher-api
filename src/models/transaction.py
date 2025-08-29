@@ -11,7 +11,6 @@ from src.db.core import RelationshipType
 # ===== TRANSACTION PYDANTIC MODELS =====
 
 class TransactionTypeEnum(str, Enum):
-    DEBIT = "DEBIT"
     PURCHASE = "PURCHASE"
     CREDIT = "CREDIT"
     TRANSFER = "TRANSFER"

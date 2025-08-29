@@ -60,14 +60,14 @@ def generate_transactions(num_transactions: int, account_id: int, category_id: i
     """Generates a list of sample TransactionCreate objects."""
     transactions = []
     for _ in range(num_transactions):
-        is_debit = random.choice([True, False])
+        is_purchase = random.choice([True, False])
         amount = round(Decimal(random.uniform(5.0, 500.0)), 2)
-        transaction_type = "DEBIT" if is_debit else "CREDIT"
+        transaction_type = "PURCHASE" if is_purchase else "CREDIT"
         
         transactions.append({
             "account_id": account_id,
             "transaction_date": (date.today() - timedelta(days=random.randint(1, 365))).isoformat(),
-            "amount": float(-amount) if is_debit else float(amount), # Convert Decimal to float for JSON
+            "amount": float(amount), # Convert Decimal to float for JSON
             "transaction_type": transaction_type,
             "description": f"Test transaction {random.randint(1000, 9999)}",
             "merchant_name": f"Merchant {random.choice(['A', 'B', 'C'])}",

@@ -111,17 +111,23 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             year_map[m.strip('/')] = current_year
 
     tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = [False] * 5
-    parse_keywords = {
-        'payments': "Payments Details",
-        'credits': "Credits Details",
-        'purchases': "New Charges Details",
-        'fees': "Fees",
-        'interest': "Interest Charged"
-    }
 
     for line in lines:
-        if any(line.startswith(prefix) for prefix in parse_keywords.values()):
-            tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = _map_transaction_type(line, parse_keywords)
+        # Check for section markers
+        if "Payments t Amount" in line or "Payments Amount" in line:
+            tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = [True, False, False, False, False]
+            continue
+        elif "Credits Amount" in line:
+            tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = [False, True, False, False, False]
+            continue
+        elif "Total New Charges" in line and "$" in line:
+            tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = [False, False, True, False, False]
+            continue
+        elif line.strip() == "Fees":
+            tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = [False, False, False, True, False]
+            continue
+        elif "Interest Charged" in line and line.strip() == "Interest Charged":
+            tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = [False, False, False, False, True]
             continue
 
         if not line or line[0:3] not in DATES:
@@ -134,12 +140,12 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             if not parsed_date:
                 continue
 
-            amount_str = line_split[-1].replace("$", "").replace("⧫", "")
-            amount = Decimal(amount_str)
+            amount_str = line_split[-1].replace("$", "").replace(",", "").replace("⧫", "").replace("â§«", "")
+            amount = abs(Decimal(amount_str))
             description = " ".join(line_split[1:-1])
 
             transaction_type = ""
-            if tracking_payments: transaction_type = "Payment"
+            if tracking_payments: transaction_type = "Credit"
             elif tracking_credits: transaction_type = "Credit"
             elif tracking_purchases: transaction_type = "Purchase"
             elif tracking_fees: transaction_type = "Fee"

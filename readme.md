@@ -16,15 +16,21 @@
 
 uvicorn src.main:app --reload
 
-curl -X GET http://127.0.0.1:8000/
+## Bulk Upload Script instruction
+  Before you run it, you need to:
 
-curl -X POST -H "Content-Type: application/json" -d '{"title":"test blog1", "content":"This is the first comment in my test blog"}' 'http://127.0.0.1:8000/blogs'
+   1. Edit `scripts/bulk_upload.py` and update the ACCOUNT_MAPPING dictionary with the correct
+      account_id for each folder. I've put in placeholder values.
+   2. Start your FastAPI server in a separate terminal with the command: uvicorn src.main:app 
+      --reload
+   3. Run the script with: python scripts/bulk_upload.py
 
-curl -X GET 'http://127.0.0.1:8000/blogs/'
+  The script will then go through your input folder and upload the files.
 
-curl -X GET 'http://127.0.0.1:8000/blogs/2'
+  A note on authentication: The script currently doesn't send any authentication headers. If
+  your /uploads/ endpoint is protected, you'll need to add an Authorization header in the
+  HEADERS dictionary within the script.
 
-curl -X GET http://127.0.0.1:8000/items/0
 
 
 ## TODO

@@ -182,7 +182,7 @@ def upgrade() -> None:
     sa.Column('source_type', sa.Enum('CSV', 'PDF', 'MANUAL', 'API', name='sourcetype'), nullable=False),
     sa.Column('transaction_date', sa.Date(), nullable=False),
     sa.Column('amount', sa.DECIMAL(precision=15, scale=2), nullable=False),
-    sa.Column('transaction_type', sa.Enum('DEBIT', 'PURCHASE', 'CREDIT', 'TRANSFER', 'DEPOSIT', 'WITHDRAWAL', 'FEE', 'INTEREST', name='transactiontype'), nullable=False),
+    sa.Column('transaction_type', sa.Enum('PURCHASE', 'CREDIT', 'TRANSFER', 'DEPOSIT', 'WITHDRAWAL', 'FEE', 'INTEREST', name='transactiontype'), nullable=False),
     sa.Column('description', sa.String(length=500), nullable=True),
     sa.Column('parsed_description', sa.Text(), nullable=True),
     sa.Column('merchant_name', sa.String(length=255), nullable=True),

@@ -76,8 +76,8 @@ def seed_transactions(accounts, categories_map):
             trans_data = {
                 "account_id": accounts["CHECKING"]["id"],
                 "transaction_date": fake.date_between(start_date="-3y", end_date="today").isoformat(),
-                "amount": round(random.uniform(-800, 800), 2),
-                "transaction_type": "DEBIT" if random.random() > 0.4 else "CREDIT",
+                "amount": round(random.uniform(0, 800), 2),
+                "transaction_type": "PURCHASE" if random.random() > 0.4 else "CREDIT",
                 "description": fake.bs(), "merchant_name": fake.company(),
                 "category_id": parent_cat_id
             }

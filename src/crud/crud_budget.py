@@ -296,7 +296,7 @@ def calculate_category_spending(db: Session, budget: BudgetDB, category_id: int)
         TransactionDB.transaction_date >= budget.start_date,
         TransactionDB.transaction_date <= budget.end_date,
         TransactionDB.transaction_type.in_([
-            TransactionType.DEBIT,
+            TransactionType.PURCHASE,
             TransactionType.WITHDRAWAL,
             TransactionType.FEE
         ])

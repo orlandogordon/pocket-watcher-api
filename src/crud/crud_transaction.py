@@ -8,7 +8,7 @@ from uuid import uuid4, UUID
 import hashlib
 
 # Import your database models
-from src.db.core import TransactionDB, AccountDB, UserDB, NotFoundError, TransactionType, SourceType, CategoryDB, TransactionRelationshipDB, TagDB, TransactionTagDB
+from src.db.core import TransactionDB, AccountDB, UserDB, NotFoundError, TransactionType, SourceType, CategoryDB, TransactionRelationshipDB, TagDB, TransactionTagDB, AccountType
 from src.models.transaction import TransactionCreate, TransactionUpdate, TransactionFilter, TransactionStats, TransactionImport, TransactionRelationshipCreate
 from src.parser.models import ParsedTransaction
 from src.crud.crud_account import update_account_balance
@@ -464,15 +464,19 @@ def bulk_create_transactions(db: Session, user_id: int, transaction_import: Tran
 def update_account_balance_from_transaction(db: Session, account: AccountDB, transaction: TransactionDB):
     """Update account balance based on transaction type"""
     
-    # This is a simplified version - you might want more complex logic
-    # depending on your account types and transaction types
-    
     if transaction.transaction_type in [TransactionType.CREDIT, TransactionType.DEPOSIT]:
         new_balance = account.balance + transaction.amount
-    elif transaction.transaction_type in [TransactionType.DEBIT, TransactionType.WITHDRAWAL, TransactionType.FEE]:
+    elif transaction.transaction_type in [TransactionType.WITHDRAWAL, TransactionType.FEE, TransactionType.PURCHASE]:
         new_balance = account.balance - transaction.amount
+    elif transaction.transaction_type == TransactionType.INTEREST:
+        if account.account_type == AccountType.CREDIT_CARD:
+            new_balance = account.balance - transaction.amount
+        else:
+            new_balance = account.balance + transaction.amount
     else:
-        # For TRANSFER and INTEREST, you might need special handling
+        # For TRANSFER, you might need special handling
+        print(f"transaction_type {transaction.transaction_type} requires special handling for balance update.")
+        breakpoint()
         new_balance = account.balance + transaction.amount
     
     update_account_balance(db, account.id, new_balance)
@@ -522,7 +526,7 @@ def get_transaction_stats(db: Session, user_id: int, filters: Optional[Transacti
         # Calculate income vs expenses
         if transaction.transaction_type in [TransactionType.CREDIT, TransactionType.DEPOSIT, TransactionType.INTEREST]:
             total_income += transaction.amount
-        elif transaction.transaction_type in [TransactionType.DEBIT, TransactionType.WITHDRAWAL, TransactionType.FEE]:
+        elif transaction.transaction_type in [TransactionType.WITHDRAWAL, TransactionType.FEE, TransactionType.PURCHASE]:
             total_expenses += abs(transaction.amount)
     
     net_amount = total_income - total_expenses
@@ -731,18 +735,8 @@ def bulk_create_transactions_from_parsed_data(
         for t in created_transactions:
             db.refresh(t)
         if account:
-            balance_change = sum(
-                t.amount
-                for t in created_transactions
-                if t.transaction_type in [TransactionType.DEPOSIT, TransactionType.CREDIT]
-            )
-            balance_change -= sum(
-                t.amount
-                for t in created_transactions
-                if t.transaction_type
-                in [TransactionType.DEBIT, TransactionType.WITHDRAWAL, TransactionType.FEE]
-            )
-            update_account_balance(db, account.id, account.balance + balance_change)
+            for t in created_transactions:
+                update_account_balance_from_transaction(db, account, t)
         return created_transactions
     except Exception as e:
         db.rollback()
