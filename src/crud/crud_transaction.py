@@ -12,6 +12,9 @@ from src.db.core import TransactionDB, AccountDB, UserDB, NotFoundError, Transac
 from src.models.transaction import TransactionCreate, TransactionUpdate, TransactionFilter, TransactionStats, TransactionImport, TransactionRelationshipCreate
 from src.parser.models import ParsedTransaction
 from src.crud.crud_account import update_account_balance
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 # ===== UTILITY FUNCTIONS =====
@@ -475,7 +478,7 @@ def update_account_balance_from_transaction(db: Session, account: AccountDB, tra
             new_balance = account.balance + transaction.amount
     else:
         # For TRANSFER, you might need special handling
-        print(f"transaction_type {transaction.transaction_type} requires special handling for balance update.")
+        logger.debug(f"Transaction type {transaction.transaction_type} requires special handling for balance update")
         breakpoint()
         new_balance = account.balance + transaction.amount
     
@@ -662,7 +665,7 @@ def bulk_create_transactions_from_parsed_data(
             # Assumes parser provides the name of the enum member (case-insensitive)
             transaction_type_enum = TransactionType[t_data.transaction_type.upper()]
         except KeyError:
-            print(f"Skipping transaction with unknown type: {t_data.transaction_type}")
+            logger.warning(f"Skipping transaction with unknown type: {t_data.transaction_type}")
             continue
 
         # Create a TransactionCreate object to ensure data consistency and for hashing

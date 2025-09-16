@@ -56,29 +56,34 @@ def process_local_file(db, file_path, institution, account_id, user_id):
         with open(file_path, 'rb') as f:
             # The parsers expect a file-like object.
             is_csv = file_path.lower().endswith('.csv')
-            parsed_data = parser.parse(f, is_csv=is_csv)
+            # Convert BufferedReader to BytesIO for parser compatibility
+            file_content = f.read()
+            file_obj = io.BytesIO(file_content)
+            parsed_data = parser.parse(file_obj, is_csv=is_csv)
 
         # Import standard transactions
         if parsed_data.transactions:
             print(f"    Found {len(parsed_data.transactions)} standard transactions. Importing...")
-            crud_transaction.bulk_create_transactions_from_parsed_data(
+            created_transactions = crud_transaction.bulk_create_transactions_from_parsed_data(
                 db=db,
                 user_id=user_id,
                 transactions=parsed_data.transactions,
                 institution_name=institution,
                 account_id=account_id
             )
+            print(f"    Successfully inserted {len(created_transactions)} standard transactions to database")
 
         # Import investment transactions
         if parsed_data.investment_transactions:
             print(f"    Found {len(parsed_data.investment_transactions)} investment transactions. Importing...")
-            crud_investment.bulk_create_investment_transactions_from_parsed_data(
+            created_investment_transactions = crud_investment.bulk_create_investment_transactions_from_parsed_data(
                 db=db,
                 user_id=user_id,
                 transactions=parsed_data.investment_transactions,
                 institution_name=institution,
                 account_id=account_id
             )
+            print(f"    Successfully inserted {len(created_investment_transactions)} investment transactions to database")
         
         db.commit()
         print("    Successfully imported and committed to database.")
@@ -98,8 +103,7 @@ def bulk_upload_local():
 
     try:
         # Process both statements and CSV directories
-        # for base_dir in [STATEMENTS_DIR, CSV_DIR]:
-        for base_dir in [CSV_DIR]:
+        for base_dir in [STATEMENTS_DIR, CSV_DIR]:
             if not os.path.exists(base_dir):
                 print(f"Directory not found, skipping: {base_dir}")
                 continue

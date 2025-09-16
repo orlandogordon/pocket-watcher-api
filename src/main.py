@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from .logging_config import setup_logging, get_logger
 from .routers.users import router as users_router
 from .routers.transactions import router as transactions_router
 from .routers.investments import router as investments_router
@@ -9,6 +10,10 @@ from .routers.accounts import router as accounts_router
 from .routers.tags import router as tags_router
 from .routers.debts import router as debts_router
 from .routers.uploads import router as uploads_router
+
+# Initialize logging
+setup_logging()
+logger = get_logger(__name__)
 
 # @asynccontextmanager
 # async def lifespan(_: FastAPI):
@@ -34,6 +39,7 @@ app.include_router(uploads_router)
 
 @app.get("/")
 def read_root():
+    logger.info("Health check endpoint accessed")
     return "Server is running."
 
 

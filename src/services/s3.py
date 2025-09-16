@@ -3,6 +3,9 @@ from botocore.exceptions import NoCredentialsError, PartialCredentialsError
 from fastapi import HTTPException, status
 import os
 from dotenv import load_dotenv
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -38,13 +41,13 @@ def upload_file_to_s3(file_obj, bucket, object_name):
     try:
         s3_client.upload_fileobj(file_obj, bucket, object_name)
     except (NoCredentialsError, PartialCredentialsError) as e:
-        print(f"Error with AWS credentials: {e}")
+        logger.error(f"Error with AWS credentials: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail="Server is not configured for file uploads."
         ) from e
     except Exception as e:
-        print(f"An unexpected error occurred during S3 upload: {e}")
+        logger.error(f"An unexpected error occurred during S3 upload: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail="Could not upload file."
@@ -63,7 +66,7 @@ def download_file_from_s3(bucket, object_name, file_obj):
     try:
         s3_client.download_fileobj(bucket, object_name, file_obj)
     except Exception as e:
-        print(f"An unexpected error occurred during S3 download: {e}")
+        logger.error(f"An unexpected error occurred during S3 download: {e}")
         return False
     return True
 
@@ -78,6 +81,6 @@ def delete_file_from_s3(bucket, object_name):
     try:
         s3_client.delete_object(Bucket=bucket, Key=object_name)
     except Exception as e:
-        print(f"An unexpected error occurred during S3 delete: {e}")
+        logger.error(f"An unexpected error occurred during S3 delete: {e}")
         return False
     return True

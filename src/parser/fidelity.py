@@ -7,6 +7,9 @@ import csv
 import pdfplumber
 from pathlib import Path
 from collections import namedtuple
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 DATES={
     'Jan': '01/',
@@ -26,7 +29,7 @@ DATES={
 Statement_Result = namedtuple('Statement_Result', ['transaction_data'])
 
 def parse_401k_statement(pdf_file):
-    print(f"Parsing position data from Fidelity 401k statement: '{pdf_file}'.")
+    logger.info(f"Parsing position data from Fidelity 401k statement: '{pdf_file}'.")
     # Setting up lists for transaction data
     transactions = []
     # Used to manage application state. When the header of the transactions table in the PDF is discovered, 'tracking_transactions' will flip to true
@@ -51,8 +54,9 @@ def parse_401k_statement(pdf_file):
             text += page.extract_text()
     lines = text.split('\n')
     
-    print(pdf_file)
-    for line in lines: print(line)
+    logger.debug(f"Processing file: {pdf_file}")
+    for line in lines: 
+        logger.debug(f"Line: {line}")
     breakpoint()
     for i in range(len(lines)):
         if "AccountNumber" in lines[i] or "StatementPeriod" in lines[i]:
@@ -114,7 +118,7 @@ def parse_401k_statement(pdf_file):
     return result
 
 def parse_csv(csv_file):
-    print(f"Parsing transaction data from Schwab CSV located at: '{csv_file}'.")
+    logger.info(f"Parsing transaction data from Schwab CSV located at: '{csv_file}'.")
     # Initialize data list to hold csv data
     data = []
     ## Transaction data list

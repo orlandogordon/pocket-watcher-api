@@ -6,18 +6,21 @@ from typing import List, Optional, Union, IO
 import io
 
 from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 def _parse_date(date_str: str) -> Optional[datetime.date]:
     """Parses a date string like 'MM/DD/YYYY'."""
     try:
         return datetime.strptime(date_str, "%m/%d/%Y").date()
     except ValueError:
-        print(f"Could not parse date: {date_str}")
+        logger.warning(f"Could not parse date: {date_str}")
         return None
 
 def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses an Ameriprise CSV from a file path or in-memory stream."""
-    print("Parsing investment transaction data from Ameriprise CSV...")
+    logger.info("Parsing investment transaction data from Ameriprise CSV...")
     investment_transactions: List[ParsedInvestmentTransaction] = []
     account_info: Optional[ParsedAccountInfo] = None
     account_number: Optional[str] = None
@@ -68,7 +71,7 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 )
             )
         except (ValueError, InvalidOperation, IndexError) as e:
-            print(f"Skipping row in Ameriprise CSV due to parsing error: {row} -> {e}")
+            logger.warning(f"Skipping row in Ameriprise CSV due to parsing error: {row} -> {e}")
             continue
 
     if isinstance(file_source, Path):

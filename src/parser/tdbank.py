@@ -9,6 +9,9 @@ import io
 from itertools import groupby
 
 from src.parser.models import ParsedData, ParsedTransaction, ParsedAccountInfo
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 DATES = {
@@ -53,7 +56,7 @@ def _handle_duplicates(transactions: List[ParsedTransaction]) -> List[ParsedTran
 
 def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses a TD Bank PDF statement from a file path or in-memory stream."""
-    print("Parsing transaction data from TD Bank statement...")
+    logger.info("Parsing transaction data from TD Bank statement...")
     
     # State tracking variables
     tracking_deposits = False
@@ -98,7 +101,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                             month_pos = line_text.find(month_name)
                             # Extract a window of text after the month (should contain day and year)
                             text_after_month = line_text[month_pos + len(month_name):month_pos + len(month_name) + 10]
-                            print(f"DEBUG: Found {month_name} at position {month_pos}, text after: '{text_after_month}'")
+                            logger.debug(f"Found {month_name} at position {month_pos}, text after: '{text_after_month}'")
                             
                             # Try to extract the year from this segment
                             # Look for 4 consecutive digits that start with 19 or 20
@@ -107,9 +110,9 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                                 if month_num not in months:
                                     months.append(month_num)
                                     years.append(year_match.group(1))
-                                    print(f"DEBUG: Extracted month={month_num}, year={year_match.group(1)}")
+                                    logger.debug(f"Extracted month={month_num}, year={year_match.group(1)}")
                     
-                    print(f"Extracted: months={months}, years={years}")
+                    logger.debug(f"Extracted: months={months}, years={years}")
                 
                 # Extract account number
                 elif " Account# " in line_text or " Account #" in line_text:
@@ -120,8 +123,8 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                         # Clean account number
                         account_number = re.sub(r'[^0-9]', '', account_number)
         
-        print(f"Final months: {months}, years: {years}")
-        print(f"Account number: {account_number[-4:] if account_number else 'null'}")
+        logger.debug(f"Final months: {months}, years: {years}")
+        logger.debug(f"Account number: {account_number[-4:] if account_number else 'null'}")
         
         # Process transactions
         for page_idx in lines_dict:
@@ -133,10 +136,10 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 # Track section changes
                 if line_text in start_parse_deposits_keywords:
                     tracking_deposits = True
-                    print(f"Started tracking deposits: {line_text}")
+                    logger.debug(f"Started tracking deposits: {line_text}")
                 elif line_text in start_parse_purchases_keywords:
                     tracking_purchases = True
-                    print(f"Started tracking purchases: {line_text}")
+                    logger.debug(f"Started tracking purchases: {line_text}")
                 
                 # Detect table header and set up column boundaries
                 elif line_text == 'POSTINGDATE DESCRIPTION AMOUNT' and (tracking_deposits or tracking_purchases):
@@ -190,7 +193,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                         elif tracking_purchases:
                             purchase_tables.append(table)
                         
-                        print(f"Created {'deposit' if tracking_deposits else 'purchase'} table with {len(cells)} cells")
+                        logger.debug(f"Created {'deposit' if tracking_deposits else 'purchase'} table with {len(cells)} cells")
                     
                     # Reset
                     vertical_lines = []
@@ -207,8 +210,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             extracted = table.extract()
             purchase_data.extend(extracted)
         
-        print(f"Total deposit rows: {len(deposit_data)}")
-        print(f"Total purchase rows: {len(purchase_data)}")
+        logger.info(f"Extracted {len(deposit_data)} deposit rows and {len(purchase_data)} purchase rows")
         
         # Process deposits
         for row in deposit_data:
@@ -251,7 +253,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             else:
                 # Default to first year if month matching fails
                 full_date = date_str + "/" + years[0] if years else "2020"
-                print(f"Warning: Using default year for date: {date_str}")
+                logger.warning(f"Using default year for date: {date_str}")
 
             try:
                 parsed_date = datetime.strptime(full_date, "%m/%d/%Y").date()
@@ -267,7 +269,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 )
                 
             except (ValueError, InvalidOperation) as e:
-                print(f"Error parsing deposit: date={date_str}, amount={amount_str}, error={e}")
+                logger.warning(f"Error parsing deposit: date={date_str}, amount={amount_str}, error={e}")
         
         # Process purchases
         for row in purchase_data:
@@ -310,7 +312,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             else:
                 # Default to first year if month matching fails
                 full_date = date_str + "/" + years[0] if years else "2020"
-                print(f"Warning: Using default year for date: {date_str}")
+                logger.warning(f"Using default year for date: {date_str}")
             
             try:
                 parsed_date = datetime.strptime(full_date, "%m/%d/%Y").date()
@@ -326,9 +328,9 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 )
                 
             except (ValueError, InvalidOperation) as e:
-                print(f"Error parsing purchase: date={date_str}, amount={amount_str}, error={e}")
+                logger.warning(f"Error parsing purchase: date={date_str}, amount={amount_str}, error={e}")
     
-    print(f"Total transactions parsed: {len(transactions)}")
+    logger.info(f"Successfully parsed {len(transactions)} transactions from TD Bank statement")
     
     transactions = _handle_duplicates(transactions)
 
@@ -342,7 +344,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
 
 def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses a TD Bank CSV from a file path or in-memory stream."""
-    print("Parsing transaction data from TD Bank csv...")
+    logger.info("Parsing transaction data from TD Bank csv...")
     parsed_transactions: List[ParsedTransaction] = []
     account_info: Optional[ParsedAccountInfo] = None
 
@@ -377,12 +379,13 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 )
             )
         except (ValueError, InvalidOperation, IndexError) as e:
-            print(f"Skipping row in TD Bank CSV due to parsing error: {row} -> {e}")
+            logger.warning(f"Skipping row in TD Bank CSV due to parsing error: {row} -> {e}")
             continue
 
     if isinstance(file_source, Path):
         text_stream.close()
-    breakpoint()
+    
+    logger.info(f"Successfully parsed {len(parsed_transactions)} transactions from TD Bank CSV")
     
     parsed_transactions = _handle_duplicates(parsed_transactions)
     

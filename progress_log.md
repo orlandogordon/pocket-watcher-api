@@ -26,5 +26,6 @@ For each parser, the following steps will be taken:
 
 
 **Database TODOs**
-- Create a script that can convert all the data in the database tables to a csv/json file and then an upload endpoint that can recieve this csv and populate a brand new database table with the data.
-- Create a script that can bulk upload each statment and csv file in the input folder. The accounts associated with each folder can be hardcoded into the script since it will only be meant to quickly upload all of my transaction data. How that value gets hardcoded is the question too.  
+- Create a script that can convert all the data in the database tables to a csv/json file and then an upload endpoint (or import method) that can recieve this csv/json and populate a brand new database table with the data.
+- Update the print statements to be proper logging and create a new table for storing error messages as non-compromising errors are encountered
+- Confirm csv uploads/parsers work properly and do not duplicate statement transactions that are already uploaded

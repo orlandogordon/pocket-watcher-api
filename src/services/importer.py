@@ -1,6 +1,9 @@
 from sqlalchemy.orm import Session
 from typing import Optional
 import io
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 from src.services import s3
 from src.parser import (
@@ -43,11 +46,11 @@ def process_statement(
     - Bulk-creates transactions and investment transactions.
     - Cleans up the S3 file after processing.
     """
-    print(f"--- Starting background task for user {user_id}, file {s3_key} ---")
+    logger.info(f"Starting background task for user {user_id}, file {s3_key}")
 
     parser = PARSER_MAPPING.get(institution.lower())
     if not parser:
-        print(f"Error: No parser found for institution '{institution}'.")
+        logger.error(f"No parser found for institution '{institution}'")
         # Optionally, update a status in the DB to reflect the failure
         return
 
@@ -73,35 +76,37 @@ def process_statement(
                 if found_account:
                     final_account_id = found_account.id
             except NotFoundError:
-                print(f"Account with last four digits {parsed_data.account_info.account_number[-4:]} not found.")
+                logger.warning(f"Account with last four digits {parsed_data.account_info.account_number[-4:]} not found")
                 # The transactions will be created with account_id=None and needs_review=True
 
         # 4. Create Transactions
         if parsed_data.transactions:
-            print(f"Importing {len(parsed_data.transactions)} standard transactions...")
-            crud_transaction.bulk_create_transactions_from_parsed_data(
+            logger.info(f"Importing {len(parsed_data.transactions)} standard transactions")
+            created_transactions = crud_transaction.bulk_create_transactions_from_parsed_data(
                 db=db,
                 user_id=user_id,
                 transactions=parsed_data.transactions,
                 institution_name=institution,
                 account_id=final_account_id
             )
+            logger.info(f"Successfully inserted {len(created_transactions)} standard transactions to database")
 
         # 5. Create Investment Transactions
         if parsed_data.investment_transactions:
-            print(f"Importing {len(parsed_data.investment_transactions)} investment transactions...")
-            crud_investment.bulk_create_investment_transactions_from_parsed_data(
+            logger.info(f"Importing {len(parsed_data.investment_transactions)} investment transactions")
+            created_investment_transactions = crud_investment.bulk_create_investment_transactions_from_parsed_data(
                 db=db,
                 user_id=user_id,
                 transactions=parsed_data.investment_transactions,
                 institution_name=institution,
                 account_id=final_account_id
             )
+            logger.info(f"Successfully inserted {len(created_investment_transactions)} investment transactions to database")
 
-        print("--- Data import successful ---")
+        logger.info("Data import successful")
 
     except Exception as e:
-        print(f"Error processing statement {s3_key}: {e}")
+        logger.error(f"Error processing statement {s3_key}: {e}")
         # In a real-world scenario, you might move the file to a 'failed' folder
         # instead of deleting it, and log the error to a monitoring system.
     
@@ -111,8 +116,8 @@ def process_statement(
             file_obj.close()
         try:
             s3.delete_file_from_s3(bucket=s3.get_s3_bucket(), object_name=s3_key)
-            print(f"Successfully cleaned up S3 object {s3_key}.")
+            logger.info(f"Successfully cleaned up S3 object {s3_key}")
         except Exception as e:
-            print(f"Error during S3 cleanup for {s3_key}: {e}")
+            logger.error(f"Error during S3 cleanup for {s3_key}: {e}")
 
-    print(f"--- Background task for {s3_key} finished. ---")
+    logger.info(f"Background task for {s3_key} finished")

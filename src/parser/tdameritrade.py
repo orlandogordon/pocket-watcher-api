@@ -7,6 +7,9 @@ from datetime import datetime
 from typing import List, Optional, Union, IO
 
 from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 def _parse_date(date_str: str) -> Optional[datetime.date]:
     """Parses a date string like 'MM/DD/YY' or 'MM/DD/YYYY'."""
@@ -15,12 +18,12 @@ def _parse_date(date_str: str) -> Optional[datetime.date]:
             return datetime.strptime(date_str, fmt).date()
         except ValueError:
             pass
-    print(f"Could not parse date: {date_str}")
+    logger.warning(f"Could not parse date: {date_str}")
     return None
 
 def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses a TD Ameritrade PDF statement from a file path or in-memory stream."""
-    print("Parsing investment transaction data from TD Ameritrade statement...")
+    logger.info("Parsing investment transaction data from TD Ameritrade statement...")
     investment_transactions: List[ParsedInvestmentTransaction] = []
     account_info: Optional[ParsedAccountInfo] = None
 
@@ -83,7 +86,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                     )
                 )
             except (ValueError, InvalidOperation, IndexError) as e:
-                print(f"Skipping row in TD Ameritrade statement due to parsing error: {line} -> {e}")
+                logger.warning(f"Skipping row in TD Ameritrade statement due to parsing error: {line} -> {e}")
                 continue
 
     return ParsedData(account_info=account_info, investment_transactions=investment_transactions)

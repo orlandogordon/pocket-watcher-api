@@ -1,3 +1,5 @@
+_tmp/
+temp/
 # Project specific
 /input/statements/*
 !/input/statements/tdbank/sample.pdf

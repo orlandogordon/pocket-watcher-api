@@ -14,7 +14,10 @@
 
 ## API Curl requests testing
 
-uvicorn src.main:app --reload
+- uvicorn src.main:app --reload
+
+- Run Claude Code: npx @anthropic-ai/claude-code
+
 
 ## Bulk Upload Script instruction
   Before you run it, you need to:

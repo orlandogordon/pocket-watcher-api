@@ -8,6 +8,9 @@ import io
 from itertools import groupby
 
 from src.parser.models import ParsedData, ParsedTransaction, ParsedAccountInfo
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 DATES = ['01/', '02/', '03/', '04/', '05/', '06/', '07/', '08/', '09/', '10/', '11/', '12/']
 
@@ -75,7 +78,7 @@ def _parse_date(date_str: str, year_map: dict) -> Optional[datetime.date]:
 
 def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses an Amazon Synchrony PDF statement from a file path or in-memory stream."""
-    print("Parsing transaction data from Amazon (SYF) statement...")
+    logger.info("Parsing transaction data from Amazon (SYF) statement...")
     parsed_transactions: List[ParsedTransaction] = []
     account_number: Optional[str] = None
     year_map = {}
@@ -116,7 +119,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                             # Default for months outside statement period
                             year_map[f"{m_num:02d}"] = end_year
             except (ValueError, IndexError) as e:
-                print(f"Could not parse billing cycle line: {line} -> {e}")
+                logger.warning(f"Could not parse billing cycle line: {line} -> {e}")
                 continue
         
         if account_number and year_map:
@@ -207,7 +210,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                     )
                 )
         except (ValueError, InvalidOperation, IndexError) as e:
-            print(f"Skipping a row in AMZN_SYF statement due to parsing error: {line} -> {e}")
+            logger.warning(f"Skipping a row in AMZN_SYF statement due to parsing error: {line} -> {e}")
         i += 1
 
     parsed_transactions = _handle_duplicates(parsed_transactions)
@@ -216,7 +219,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
 
 def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses an Amazon Synchrony CSV from a file path or in-memory stream."""
-    print("Parsing transaction data from Amazon (SYF) csv...")
+    logger.info("Parsing transaction data from Amazon (SYF) csv...")
     parsed_transactions: List[ParsedTransaction] = []
     account_info: Optional[ParsedAccountInfo] = None
 
@@ -242,17 +245,20 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 )
             )
         except (ValueError, InvalidOperation, IndexError) as e:
-            print(f"Skipping row in AMZN_SYF CSV due to parsing error: {row} -> {e}")
+            logger.warning(f"Skipping row in AMZN_SYF CSV due to parsing error: {row} -> {e}")
             continue
     
     if isinstance(file_source, Path):
         text_stream.close()
-    for transaction in parsed_transactions:print(transaction)
     
+    logger.debug(f"Parsed {len(parsed_transactions)} transactions from Amazon SYF CSV")
     parsed_transactions = _handle_duplicates(parsed_transactions)
     
-    print(f"Total transactions parsed: {len(parsed_transactions)}")
-    breakpoint()
+    duplicates_count = sum(1 for t in parsed_transactions if t.is_duplicate)
+    if duplicates_count > 0:
+        logger.info(f"Successfully parsed {len(parsed_transactions)} transactions ({duplicates_count} duplicates handled)")
+    else:
+        logger.info(f"Successfully parsed {len(parsed_transactions)} transactions")
     return ParsedData(transactions=parsed_transactions, account_info=account_info)
 
 def parse(file_source: Union[Path, IO[bytes]], is_csv: bool = False) -> ParsedData:

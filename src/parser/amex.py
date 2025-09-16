@@ -8,6 +8,9 @@ import io
 from itertools import groupby
 
 from src.parser.models import ParsedData, ParsedTransaction, ParsedAccountInfo
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # A list of month prefixes to identify transaction lines
 DATES = ['01/', '02/', '03/', '04/', '05/', '06/', '07/', '08/', '09/', '10/', '11/', '12/']
@@ -72,12 +75,12 @@ def _parse_date(date_str: str, year_map: dict) -> Optional[datetime.date]:
         year = year_map.get(month, list(year_map.values())[0] if year_map else str(datetime.now().year))
         return datetime.strptime(f"{month_day}/{year}", "%m/%d/%Y").date()
     except (ValueError, IndexError) as e:
-        print(f"Could not parse date: {date_str} - Error: {e}")
+        logger.warning(f"Could not parse date: {date_str} - Error: {e}")
         return None
 
 def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses an Amex PDF statement from a file path or an in-memory stream."""
-    print(f"Parsing transaction data from Amex statement...")
+    logger.info("Parsing transaction data from Amex statement...")
     parsed_transactions: List[ParsedTransaction] = []
     account_number: Optional[str] = None
     year_map = {}
@@ -105,7 +108,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             except Exception: continue
 
     if not year_map:
-        print("Warning: Could not determine year from statement. Using current year as fallback.")
+        logger.debug("Could not determine year from statement. Using current year as fallback.")
         current_year = str(datetime.now().year)
         for m in DATES:
             year_map[m.strip('/')] = current_year
@@ -161,7 +164,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                     )
                 )
         except (ValueError, InvalidOperation, IndexError) as e:
-            print(f"Skipping a row in AMEX statement due to parsing error: {line} -> {e}")
+            logger.warning(f"Skipping a row in AMEX statement due to parsing error: {line} -> {e}")
             continue
 
     parsed_transactions = _handle_duplicates(parsed_transactions)
@@ -174,7 +177,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
 
 def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses an Amex CSV from a file path or an in-memory stream."""
-    print(f"Parsing transaction data from AMEX csv...")
+    logger.info("Parsing transaction data from AMEX csv...")
     parsed_transactions: List[ParsedTransaction] = []
     account_info: Optional[ParsedAccountInfo] = None # CSVs don't contain account info
 
@@ -202,13 +205,19 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 )
             )
         except (ValueError, InvalidOperation, IndexError) as e:
-            print(f"Skipping a row in AMEX CSV due to parsing error: {row} -> {e}")
+            logger.warning(f"Skipping a row in AMEX CSV due to parsing error: {row} -> {e}")
             continue
     
     if isinstance(file_source, Path):
         text_stream.close()
     
+    logger.debug(f"Parsed {len(parsed_transactions)} transactions from AMEX CSV")
     parsed_transactions = _handle_duplicates(parsed_transactions)
+    duplicates_count = sum(1 for t in parsed_transactions if t.is_duplicate)
+    if duplicates_count > 0:
+        logger.info(f"Processed {len(parsed_transactions)} transactions ({duplicates_count} duplicates handled)")
+    else:
+        logger.info(f"Processed {len(parsed_transactions)} transactions")
     return ParsedData(transactions=parsed_transactions, account_info=account_info)
 
 def parse(file_source: Union[Path, IO[bytes]], is_csv: bool = False) -> ParsedData:

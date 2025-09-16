@@ -572,7 +572,7 @@ class FinancialPlanEntryDB(Base):
     category = relationship("CategoryDB")
 
 
-engine = create_engine(DATABASE_URL, echo=True)
+engine = create_engine(DATABASE_URL, echo=os.getenv("SQL_ECHO", "false").lower() == "true")
 session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

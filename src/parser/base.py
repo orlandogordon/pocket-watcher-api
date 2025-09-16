@@ -29,8 +29,8 @@ class ParserService:
 def ParserProcess():
     # sys.path.append(str(Path(__file__).parent))
     root_dir=Path(__file__).parent.parent.parent
-    print(f"Root directory: {root_dir}")
-    print(f"Root directory: {Path(f"{root_dir}/input/statements")}")
+    logger.debug(f"Root directory: {root_dir}")
+    logger.debug(f"Statements directory: {Path(f'{root_dir}/input/statements')}")
     breakpoint()
     statements_path = Path(f"{root_dir}/input/statements")
     transaction_csv_path = Path(f"{root_dir}/input/transaction_csv")
@@ -42,20 +42,18 @@ def ParserProcess():
     with open(transactions_path, mode='w', newline='') as file:
         writer = csv.writer(file)
         writer.writerows([['Date', 'Description', 'Category', 'Amount', 'Transaction Type', 'Bank Name', 'Account Holder', 'Account Number']])  # Consider adding 'Category', 'Tags', 'Account Nickname', 'Transaction Match' at the DB level    
-        print(f"Transaction data CSV file created at: '{transactions_path}'.")
+        logger.info(f"Transaction data CSV file created at: '{transactions_path}'")
     with open(investments_path, mode='w', newline='') as file:
         writer = csv.writer(file)
         writer.writerows([['Date', 'Transaction Type', 'Symbol', 'Description', 'Quantity', 'Price', 'Amount', 'Brokerage Name', 'Account Number']])  # Consider adding 'Category', 'Tags', 'Account Nickname', 'Transaction Match' at the DB level
-        print(f"Brokerage Transaction data CSV file created at: '{investments_path}'.")
+        logger.info(f"Brokerage Transaction data CSV file created at: '{investments_path}'")
       
-    print('*'*100)
-    print("Beginning Transaction CSV Parsing Process")
-    print('*'*100)
+    logger.info("Beginning Transaction CSV Parsing Process")
 
     for csv_file in transaction_csv_path.glob('./tdbank/*.csv'):
         parsed_data = tdbank.parse_csv(csv_file)
         tdbank.write_csv(transactions_path, parsed_data)
-    breakpoint()
+    logger.debug("Completed TD Bank CSV processing")
     for csv_file in transaction_csv_path.glob('./amex/*.csv'):
         parsed_data = amex.parse_csv(csv_file)
         amex.write_csv(transactions_path, parsed_data)
@@ -64,9 +62,7 @@ def ParserProcess():
         parsed_data = amzn_syf.parse_csv(csv_file)
         amzn_syf.write_csv(transactions_path, parsed_data)
 
-    print('*'*100)
-    print("Beginning Bank Statement Parsing Process")
-    print('*'*100)
+    logger.info("Beginning Bank Statement Parsing Process")
 
     for pdf_file in statements_path.glob('./tdbank/*.pdf'):
         parsed_data = tdbank.parse_statement(pdf_file)
@@ -78,9 +74,7 @@ def ParserProcess():
         parsed_data = amzn_syf.parse_statement(pdf_file)
         amzn_syf.write_csv(transactions_path, parsed_data)
 
-    print('*'*100)
-    print("Beginning Brokerage Statement Parsing Process")
-    print('*'*100)
+    logger.info("Beginning Brokerage Statement Parsing Process")
 
     for pdf_file in statements_path.glob('./schwab/*.pdf'):
         parsed_data = schwab.parse_statement(pdf_file)
@@ -90,9 +84,7 @@ def ParserProcess():
         parsed_data = tdameritrade.parse_statement(pdf_file)
         tdameritrade.write_csv(investments_path, parsed_data)
 
-    print('*'*100)
-    print("Beginning Brokerage CSV Parsing Process")
-    print('*'*100)
+    logger.info("Beginning Brokerage CSV Parsing Process")
 
     for csv_file in transaction_csv_path.glob('./schwab/*.csv'):
         parsed_data = schwab.parse_csv(csv_file)

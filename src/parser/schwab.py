@@ -8,6 +8,9 @@ from typing import List, Optional, Union, IO
 import io
 
 from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 def _parse_date(date_str: str) -> Optional[datetime.date]:
     """Parses a date string like 'MM/DD/YYYY' or 'MM/DD/YY'."""
@@ -16,21 +19,21 @@ def _parse_date(date_str: str) -> Optional[datetime.date]:
             return datetime.strptime(date_str, fmt).date()
         except ValueError:
             pass
-    print(f"Could not parse date: {date_str}")
+    logger.warning(f"Could not parse date: {date_str}")
     return None
 
 def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses a Schwab PDF statement from a file path or in-memory stream."""
-    print("Parsing investment transaction data from Schwab statement...")
+    logger.info("Parsing investment transaction data from Schwab statement...")
     # This function is a placeholder. The current logic is highly complex and stateful,
     # making it difficult to refactor reliably without extensive testing.
     # A full implementation would require a more robust parsing strategy for Schwab PDFs.
-    print("WARNING: Schwab PDF parsing is not fully implemented and will return empty data.")
+    logger.warning("Schwab PDF parsing is not fully implemented and will return empty data.")
     return ParsedData()
 
 def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses a Schwab CSV from a file path or in-memory stream."""
-    print("Parsing investment transaction data from Schwab csv...")
+    logger.info("Parsing investment transaction data from Schwab csv...")
     investment_transactions: List[ParsedInvestmentTransaction] = []
     account_info: Optional[ParsedAccountInfo] = None
 
@@ -86,7 +89,7 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 )
             )
         except (ValueError, InvalidOperation, IndexError) as e:
-            print(f"Skipping row in Schwab CSV due to parsing error: {row} -> {e}")
+            logger.warning(f"Skipping row in Schwab CSV due to parsing error: {row} -> {e}")
             continue
 
     if isinstance(file_source, Path):
