@@ -54,33 +54,66 @@ def get_financial_plan_summary(plan_id: int, db: Session = Depends(get_db), user
         raise HTTPException(status_code=404, detail="Financial plan not found")
     return crud_financial_plan.get_financial_plan_summary(db_plan)
 
-@router.post("/{plan_id}/entries", response_model=financial_plan_models.FinancialPlanEntry)
-def create_financial_plan_entry(plan_id: int, entry: financial_plan_models.FinancialPlanEntryCreate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
+@router.post("/{plan_id}/months", response_model=financial_plan_models.FinancialPlanMonth)
+def create_financial_plan_month(plan_id: int, month_data: financial_plan_models.FinancialPlanMonthCreate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
     db_plan = crud_financial_plan.get_financial_plan(db, user_id=user_id, plan_id=plan_id)
     if db_plan is None:
         raise HTTPException(status_code=404, detail="Financial plan not found")
-    return crud_financial_plan.create_financial_plan_entry(db=db, plan_id=plan_id, entry=entry)
+    return crud_financial_plan.create_financial_plan_month(db=db, plan_id=plan_id, month_data=month_data)
 
-@router.post("/{plan_id}/entries/bulk-upload", response_model=List[financial_plan_models.FinancialPlanEntry])
-def create_bulk_financial_plan_entries(plan_id: int, bulk_data: financial_plan_models.FinancialPlanEntryBulkCreate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
-    try:
-        return crud_financial_plan.bulk_create_financial_plan_entries(db=db, user_id=user_id, plan_id=plan_id, bulk_data=bulk_data)
-    except NotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+@router.get("/{plan_id}/months", response_model=List[financial_plan_models.FinancialPlanMonth])
+def get_financial_plan_months(plan_id: int, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
+    db_plan = crud_financial_plan.get_financial_plan(db, user_id=user_id, plan_id=plan_id)
+    if db_plan is None:
+        raise HTTPException(status_code=404, detail="Financial plan not found")
+    return crud_financial_plan.get_financial_plan_months(db=db, plan_id=plan_id)
 
-@router.put("/entries/{entry_id}", response_model=financial_plan_models.FinancialPlanEntry)
-def update_financial_plan_entry(entry_id: int, entry: financial_plan_models.FinancialPlanEntryUpdate, db: Session = Depends(get_db)):
-    db_entry = crud_financial_plan.get_financial_plan_entry(db, entry_id=entry_id)
-    if db_entry is None:
-        raise HTTPException(status_code=404, detail="Financial plan entry not found")
+@router.put("/months/{month_id}", response_model=financial_plan_models.FinancialPlanMonth)
+def update_financial_plan_month(month_id: int, month_data: financial_plan_models.FinancialPlanMonthUpdate, db: Session = Depends(get_db)):
+    db_month = crud_financial_plan.get_financial_plan_month(db, month_id=month_id)
+    if db_month is None:
+        raise HTTPException(status_code=404, detail="Financial plan month not found")
     # TODO: Add user ownership check here
-    return crud_financial_plan.update_financial_plan_entry(db=db, db_entry=db_entry, entry_in=entry)
+    return crud_financial_plan.update_financial_plan_month(db=db, db_month=db_month, month_in=month_data)
 
-@router.delete("/entries/{entry_id}", status_code=204)
-def delete_financial_plan_entry(entry_id: int, db: Session = Depends(get_db)):
-    db_entry = crud_financial_plan.get_financial_plan_entry(db, entry_id=entry_id)
-    if db_entry is None:
-        raise HTTPException(status_code=404, detail="Financial plan entry not found")
+@router.delete("/months/{month_id}", status_code=204)
+def delete_financial_plan_month(month_id: int, db: Session = Depends(get_db)):
+    db_month = crud_financial_plan.get_financial_plan_month(db, month_id=month_id)
+    if db_month is None:
+        raise HTTPException(status_code=404, detail="Financial plan month not found")
     # TODO: Add user ownership check here
-    crud_financial_plan.delete_financial_plan_entry(db=db, db_entry=db_entry)
+    crud_financial_plan.delete_financial_plan_month(db=db, db_month=db_month)
+    return
+
+@router.post("/months/{month_id}/expenses", response_model=financial_plan_models.FinancialPlanExpense)
+def create_financial_plan_expense(month_id: int, expense: financial_plan_models.FinancialPlanExpenseCreate, db: Session = Depends(get_db)):
+    db_month = crud_financial_plan.get_financial_plan_month(db, month_id=month_id)
+    if db_month is None:
+        raise HTTPException(status_code=404, detail="Financial plan month not found")
+    # TODO: Add user ownership check here
+    return crud_financial_plan.create_financial_plan_expense(db=db, month_id=month_id, expense=expense)
+
+@router.get("/months/{month_id}/expenses", response_model=List[financial_plan_models.FinancialPlanExpense])
+def get_financial_plan_expenses(month_id: int, db: Session = Depends(get_db)):
+    db_month = crud_financial_plan.get_financial_plan_month(db, month_id=month_id)
+    if db_month is None:
+        raise HTTPException(status_code=404, detail="Financial plan month not found")
+    # TODO: Add user ownership check here
+    return crud_financial_plan.get_financial_plan_expenses(db=db, month_id=month_id)
+
+@router.put("/expenses/{expense_id}", response_model=financial_plan_models.FinancialPlanExpense)
+def update_financial_plan_expense(expense_id: int, expense: financial_plan_models.FinancialPlanExpenseUpdate, db: Session = Depends(get_db)):
+    db_expense = crud_financial_plan.get_financial_plan_expense(db, expense_id=expense_id)
+    if db_expense is None:
+        raise HTTPException(status_code=404, detail="Financial plan expense not found")
+    # TODO: Add user ownership check here
+    return crud_financial_plan.update_financial_plan_expense(db=db, db_expense=db_expense, expense_in=expense)
+
+@router.delete("/expenses/{expense_id}", status_code=204)
+def delete_financial_plan_expense(expense_id: int, db: Session = Depends(get_db)):
+    db_expense = crud_financial_plan.get_financial_plan_expense(db, expense_id=expense_id)
+    if db_expense is None:
+        raise HTTPException(status_code=404, detail="Financial plan expense not found")
+    # TODO: Add user ownership check here
+    crud_financial_plan.delete_financial_plan_expense(db=db, db_expense=db_expense)
     return

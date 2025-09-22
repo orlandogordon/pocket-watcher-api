@@ -1,0 +1,2200 @@
+{
+    "info": {
+        "name": "Pocket Watcher API",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "item": [
+        {
+            "name": "Users",
+            "item": [
+                {
+                    "name": "Create User",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"username\": \"testuser\",\n    \"email\": \"user@example.com\",\n    \"password\": \"string\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/users/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "users",
+                                ""
+                            ]
+                        },
+                        "description": "Create a new user."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Login For Access Token",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"email\": \"user@example.com\",\n    \"password\": \"string\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/users/login",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "users",
+                                "login"
+                            ]
+                        },
+                        "description": "Authenticate user and return a token.\n(Note: Token implementation is a placeholder)."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Users",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/users/?skip=0&limit=100",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "users",
+                                ""
+                            ],
+                            "query": [
+                                {
+                                    "key": "skip",
+                                    "value": "0"
+                                },
+                                {
+                                    "key": "limit",
+                                    "value": "100"
+                                }
+                            ]
+                        },
+                        "description": "Retrieve a list of users."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read User",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/users/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "users",
+                                "1"
+                            ]
+                        },
+                        "description": "Retrieve a single user by their integer ID."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read User by UUID",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/users/uuid/f47ac10b-58cc-4372-a567-0e02b2c3d479",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "users",
+                                "uuid",
+                                "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                            ]
+                        },
+                        "description": "Retrieve a single user by their UUID."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Update User",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"email\": \"user@example.com\",\n    \"is_active\": true\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/users/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "users",
+                                "1"
+                            ]
+                        },
+                        "description": "Update a user's profile."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Delete User",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/users/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "users",
+                                "1"
+                            ]
+                        },
+                        "description": "Delete a user."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Change Password",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"current_password\": \"string\",\n    \"new_password\": \"string\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/users/1/change-password",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "users",
+                                "1",
+                                "change-password"
+                            ]
+                        },
+                        "description": "Change a user's password."
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Accounts",
+            "item": [
+                {
+                    "name": "Create Account",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"account_name\": \"My Checking Account\",\n    \"account_type\": \"CHECKING\",\n    \"institution_name\": \"Bank of Example\",\n    \"account_number_last4\": \"1234\",\n    \"balance\": 1000.50\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/accounts/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "accounts",
+                                ""
+                            ]
+                        },
+                        "description": "Create a new account for the current user."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Accounts",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/accounts/?account_type=CHECKING&skip=0&limit=100",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "accounts",
+                                ""
+                            ],
+                            "query": [
+                                {
+                                    "key": "account_type",
+                                    "value": "CHECKING"
+                                },
+                                {
+                                    "key": "skip",
+                                    "value": "0"
+                                },
+                                {
+                                    "key": "limit",
+                                    "value": "100"
+                                }
+                            ]
+                        },
+                        "description": "Retrieve all accounts for the current user, with optional filtering by account type."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Accounts Summary",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/accounts/summary",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "accounts",
+                                "summary"
+                            ]
+                        },
+                        "description": "Retrieve a lightweight summary of all accounts for the current user."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get Account Statistics",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/accounts/stats",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "accounts",
+                                "stats"
+                            ]
+                        },
+                        "description": "Get statistics for the current user's accounts (net worth, totals, etc.)."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Account",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/accounts/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "accounts",
+                                "1"
+                            ]
+                        },
+                        "description": "Retrieve a specific account by its ID."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Update Account",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"account_name\": \"My Updated Checking Account\",\n    \"balance\": 1200.75\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/accounts/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "accounts",
+                                "1"
+                            ]
+                        },
+                        "description": "Update an account."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Delete Account",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/accounts/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "accounts",
+                                "1"
+                            ]
+                        },
+                        "description": "Delete an account. It can only be deleted if it has no associated transactions or holdings."
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Transactions",
+            "item": [
+                {
+                    "name": "Create Transaction",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"account_id\": 1,\n    \"transaction_date\": \"2025-08-22\",\n    \"amount\": 50.00,\n    \"transaction_type\": \"PURCHASE\",\n    \"description\": \"Coffee Shop\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/transactions/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "transactions",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Bulk Update Transactions",
+                    "request": {
+                        "method": "PATCH",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"transaction_ids\": [\"f47ac10b-58cc-4372-a567-0e02b2c3d479\"],\n    \"category_id\": 1,\n    \"needs_review\": false\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/transactions/bulk-update",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "transactions",
+                                "bulk-update"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Bulk Upload Transactions",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"transactions\": [\n        {\n            \"account_id\": 1,\n            \"transaction_date\": \"2025-08-22\",\n            \"amount\": 100.00,\n            \"transaction_type\": \"PURCHASE\",\n            \"description\": \"Groceries\"\n        }\n    ]\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/transactions/bulk-upload/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "transactions",
+                                "bulk-upload",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Transaction",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/transactions/f47ac10b-58cc-4372-a567-0e02b2c3d479",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "transactions",
+                                "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Update Transaction",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"description\": \"Updated Coffee Shop\",\n    \"amount\": 5.50\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/transactions/f47ac10b-58cc-4372-a567-0e02b2c3d479",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "transactions",
+                                "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Delete Transaction",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/transactions/f47ac10b-58cc-4372-a567-0e02b2c3d479",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "transactions",
+                                "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Create Relationship",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"transaction_id_2\": \"another-uuid\",\n    \"relationship_type\": \"reimbursement\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/transactions/1/relationships",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "transactions",
+                                "1",
+                                "relationships"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Tags",
+            "item": [
+                {
+                    "name": "Create Tag",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"name\": \"Vacation2025\",\n    \"color\": \"#FF5733\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/tags/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "tags",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Tags",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/tags/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "tags",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Search Tags",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/tags/search/?search_term=Vacation",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "tags",
+                                "search",
+                                ""
+                            ],
+                            "query": [
+                                {
+                                    "key": "search_term",
+                                    "value": "Vacation"
+                                }
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get All Tag Stats",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/tags/stats",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "tags",
+                                "stats"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Tag",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/tags/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "tags",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Update Tag",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"name\": \"Europe Trip 2026\",\n    \"color\": \"#C70039\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/tags/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "tags",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Delete Tag",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/tags/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "tags",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get Tag Stats",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/tags/1/stats",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "tags",
+                                "1",
+                                "stats"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get Transactions For Tag",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/tags/1/transactions",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "tags",
+                                "1",
+                                "transactions"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Add Tag To Transaction",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"transaction_id\": \"f47ac10b-58cc-4372-a567-0e02b2c3d479\",\n    \"tag_id\": 1\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/tags/transactions/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "tags",
+                                "transactions",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Remove Tag From Transaction",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/tags/transactions/f47ac10b-58cc-4372-a567-0e02b2c3d479/tags/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "tags",
+                                "transactions",
+                                "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+                                "tags",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Bulk Tag Transactions",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"transaction_ids\": [\"f47ac10b-58cc-4372-a567-0e02b2c3d479\"],\n    \"tag_id\": 1\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/tags/transactions/bulk-tag",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "tags",
+                                "transactions",
+                                "bulk-tag"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Investments",
+            "item": [
+                {
+                    "name": "Create Holding",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"account_id\": 1,\n    \"symbol\": \"AAPL\",\n    \"quantity\": 10,\n    \"average_cost_basis\": 150.00\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/investments/holdings/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "investments",
+                                "holdings",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Holdings For Account",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/investments/accounts/1/holdings/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "investments",
+                                "accounts",
+                                "1",
+                                "holdings",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Holding",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/investments/holdings/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "investments",
+                                "holdings",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Update Holding",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"quantity\": 12,\n    \"average_cost_basis\": 155.50\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/investments/holdings/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "investments",
+                                "holdings",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Delete Holding",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/investments/holdings/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "investments",
+                                "holdings",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Create Investment Transaction",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"account_id\": 1,\n    \"transaction_date\": \"2025-08-22\",\n    \"transaction_type\": \"BUY\",\n    \"symbol\": \"AAPL\",\n    \"quantity\": 2,\n    \"price_per_share\": 175.00,\n    \"amount\": 350.00\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/investments/transactions/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "investments",
+                                "transactions",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Bulk Upload Investment Transactions",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"transactions\": [\n        {\n            \"account_id\": 1,\n            \"transaction_date\": \"2025-08-22\",\n            \"transaction_type\": \"BUY\",\n            \"symbol\": \"GOOGL\",\n            \"quantity\": 1,\n            \"price_per_share\": 140.00,\n            \"amount\": 140.00\n        }\n    ]\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/investments/transactions/bulk-upload",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "investments",
+                                "transactions",
+                                "bulk-upload"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Bulk Update Investment Transactions",
+                    "request": {
+                        "method": "PATCH",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"transaction_ids\": [1, 2],\n    \"account_id\": 2\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/investments/transactions/bulk-update",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "investments",
+                                "transactions",
+                                "bulk-update"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Transactions For Account",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/investments/accounts/1/transactions/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "investments",
+                                "accounts",
+                                "1",
+                                "transactions",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Investment Transaction",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/investments/transactions/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "investments",
+                                "transactions",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Update Investment Transaction",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"quantity\": 2.5,\n    \"amount\": 437.50\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/investments/transactions/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "investments",
+                                "transactions",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Delete Investment Transaction",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/investments/transactions/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "investments",
+                                "transactions",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Financial Plans",
+            "item": [
+                {
+                    "name": "Create Financial Plan",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"plan_name\": \"Summer 2025 Savings Plan\",\n    \"start_date\": \"2025-06-01\",\n    \"end_date\": \"2025-08-31\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/financial_plans/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "financial_plans",
+                                ""
+                            ]
+                        },
+                        "description": "Create a new multi-month financial plan with start and end dates."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Financial Plans",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/financial_plans/?skip=0&limit=100",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "financial_plans",
+                                ""
+                            ],
+                            "query": [
+                                {
+                                    "key": "skip",
+                                    "value": "0"
+                                },
+                                {
+                                    "key": "limit",
+                                    "value": "100"
+                                }
+                            ]
+                        },
+                        "description": "Get all financial plans for the current user."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Financial Plan",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/financial_plans/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "financial_plans",
+                                "1"
+                            ]
+                        },
+                        "description": "Get a specific financial plan with all its monthly periods and expenses."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Update Financial Plan",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"plan_name\": \"Updated Summer 2025 Plan\",\n    \"end_date\": \"2025-09-30\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/financial_plans/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "financial_plans",
+                                "1"
+                            ]
+                        },
+                        "description": "Update plan name, start date, or end date."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Delete Financial Plan",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/financial_plans/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "financial_plans",
+                                "1"
+                            ]
+                        },
+                        "description": "Delete a financial plan and all its monthly data."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get Financial Plan Summary",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/financial_plans/1/summary",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "financial_plans",
+                                "1",
+                                "summary"
+                            ]
+                        },
+                        "description": "Get comprehensive summary with totals and monthly breakdowns."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Create Financial Plan Month",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"year\": 2025,\n    \"month\": 6,\n    \"planned_income\": 5000.00,\n    \"expenses\": [\n        {\n            \"category_id\": 1,\n            \"description\": \"Groceries\",\n            \"amount\": 500.00,\n            \"expense_type\": \"recurring\"\n        },\n        {\n            \"category_id\": 2,\n            \"description\": \"Vacation flights\",\n            \"amount\": 800.00,\n            \"expense_type\": \"one_time\"\n        }\n    ]\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/financial_plans/1/months",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "financial_plans",
+                                "1",
+                                "months"
+                            ]
+                        },
+                        "description": "Create a month with income and expenses (can start from budget template in UI)."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get Financial Plan Months",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/financial_plans/1/months",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "financial_plans",
+                                "1",
+                                "months"
+                            ]
+                        },
+                        "description": "Get all months for a financial plan, ordered by year/month."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Update Financial Plan Month",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"planned_income\": 5500.00\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/financial_plans/months/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "financial_plans",
+                                "months",
+                                "1"
+                            ]
+                        },
+                        "description": "Update the planned income for a specific month."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Delete Financial Plan Month",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/financial_plans/months/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "financial_plans",
+                                "months",
+                                "1"
+                            ]
+                        },
+                        "description": "Delete a month and all its expenses."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Add Expense to Month",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"category_id\": 3,\n    \"description\": \"Car repair\",\n    \"amount\": 300.00,\n    \"expense_type\": \"one_time\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/financial_plans/months/1/expenses",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "financial_plans",
+                                "months",
+                                "1",
+                                "expenses"
+                            ]
+                        },
+                        "description": "Add a new expense to an existing month."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get Month Expenses",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/financial_plans/months/1/expenses",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "financial_plans",
+                                "months",
+                                "1",
+                                "expenses"
+                            ]
+                        },
+                        "description": "Get all expenses for a specific month."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Update Expense",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"amount\": 600.00,\n    \"description\": \"Updated groceries budget\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/financial_plans/expenses/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "financial_plans",
+                                "expenses",
+                                "1"
+                            ]
+                        },
+                        "description": "Update an expense amount, description, category, or type."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Delete Expense",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/financial_plans/expenses/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "financial_plans",
+                                "expenses",
+                                "1"
+                            ]
+                        },
+                        "description": "Delete a specific expense from any month."
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Debt",
+            "item": [
+                {
+                    "name": "Create Debt Repayment Plan",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"plan_name\": \"Student Loan Payoff\",\n    \"strategy\": \"AVALANCHE\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/debt/plans/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "debt",
+                                "plans",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Debt Repayment Plans",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/debt/plans/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "debt",
+                                "plans",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Debt Repayment Plan",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/debt/plans/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "debt",
+                                "plans",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Add Account to Debt Plan",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"plan_id\": 1,\n    \"account_id\": 2\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/debt/plans/accounts/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "debt",
+                                "plans",
+                                "accounts",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Remove Account from Debt Plan",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/debt/plans/1/accounts/2",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "debt",
+                                "plans",
+                                "1",
+                                "accounts",
+                                "2"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Create or Update Payment Schedule",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"account_id\": 2,\n    \"schedules\": [\n        {\n            \"payment_date\": \"2025-09-01\",\n            \"amount_due\": 200.00\n        }\n    ]\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/debt/schedules/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "debt",
+                                "schedules",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Payment Schedule for Account",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/debt/schedules/2",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "debt",
+                                "schedules",
+                                "2"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Create Debt Payment",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"account_id\": 2,\n    \"payment_date\": \"2025-08-22\",\n    \"amount\": 250.00\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/debt/payments/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "debt",
+                                "payments",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Bulk Upload Debt Payments",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"payments\": [\n        {\n            \"account_id\": 2,\n            \"payment_date\": \"2025-08-22\",\n            \"amount\": 250.00\n        }\n    ]\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/debt/payments/bulk-upload",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "debt",
+                                "payments",
+                                "bulk-upload"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Debt Payments for Account",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/debt/accounts/2/payments/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "debt",
+                                "accounts",
+                                "2",
+                                "payments",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Debt Payment",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/debt/payments/1/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "debt",
+                                "payments",
+                                "1",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Update Debt Payment",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"amount\": 260.00\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/debt/payments/1/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "debt",
+                                "payments",
+                                "1",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Delete Debt Payment",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/debt/payments/1/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "debt",
+                                "payments",
+                                "1",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Categories",
+            "item": [
+                {
+                    "name": "Create Category",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"name\": \"Groceries\",\n    \"parent_id\": 1\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/categories/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "categories",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Categories",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/categories/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "categories",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Category",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/categories/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "categories",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Update Category",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"name\": \"Supermarket\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/categories/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "categories",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Delete Category",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/categories/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "categories",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Budgets",
+            "item": [
+                {
+                    "name": "Create Budget",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"name\": \"August 2025 Budget\",\n    \"start_date\": \"2025-08-01\",\n    \"end_date\": \"2025-08-31\",\n    \"categories\": [\n        {\n            \"category_id\": 1,\n            \"allocated_amount\": 500.00\n        }\n    ]\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/budgets/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "budgets",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Budgets",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/budgets/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "budgets",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Read Budget",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/budgets/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "budgets",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Update Budget",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"name\": \"Updated August 2025 Budget\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/budgets/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "budgets",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Delete Budget",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/budgets/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "budgets",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Add Category to Budget",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"category_id\": 2,\n    \"allocated_amount\": 100.00\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/budgets/1/categories/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "budgets",
+                                "1",
+                                "categories",
+                                ""
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Update Budget Category",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"allocated_amount\": 120.00\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/budgets/categories/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "budgets",
+                                "categories",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Delete Budget Category",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/budgets/categories/1",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "budgets",
+                                "categories",
+                                "1"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get Budget Stats",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/budgets/1/stats",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "budgets",
+                                "1",
+                                "stats"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get Budget Performance",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/budgets/1/performance",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "budgets",
+                                "1",
+                                "performance"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Copy Budget",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/budgets/1/copy?new_budget_name=September%202025%20Budget&new_start_date=2025-09-01&new_end_date=2025-09-30",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "budgets",
+                                "1",
+                                "copy"
+                            ],
+                            "query": [
+                                {
+                                    "key": "new_budget_name",
+                                    "value": "September 2025 Budget"
+                                },
+                                {
+                                    "key": "new_start_date",
+                                    "value": "2025-09-01"
+                                },
+                                {
+                                    "key": "new_end_date",
+                                    "value": "2025-09-30"
+                                }
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "Uploads",
+            "item": [
+                {
+                    "name": "Upload Statement",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "body": {
+                            "mode": "formdata",
+                            "formdata": [
+                                {
+                                    "key": "institution",
+                                    "value": "amex",
+                                    "type": "text"
+                                },
+                                {
+                                    "key": "file",
+                                    "type": "file",
+                                    "src": []
+                                },
+                                {
+                                    "key": "account_id",
+                                    "value": "1",
+                                    "type": "text"
+                                }
+                            ]
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/uploads/statement",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "uploads",
+                                "statement"
+                            ]
+                        },
+                        "description": "Upload a financial statement file (PDF or CSV) for asynchronous processing."
+                    },
+                    "response": []
+                }
+            ]
+        }
+    ]
+}

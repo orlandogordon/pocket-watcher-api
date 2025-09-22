@@ -1,8 +1,8 @@
-"""Initial migration
+"""Initial database schema
 
-Revision ID: 35d693b4a432
+Revision ID: 6cb4f79cd0c7
 Revises: 
-Create Date: 2025-08-26 22:59:39.872849
+Create Date: 2025-09-22 15:41:08.557456
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '35d693b4a432'
+revision: str = '6cb4f79cd0c7'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -97,7 +97,8 @@ def upgrade() -> None:
     sa.Column('plan_id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=False),
     sa.Column('plan_name', sa.String(length=255), nullable=False),
-    sa.Column('monthly_income', sa.DECIMAL(precision=15, scale=2), nullable=False),
+    sa.Column('start_date', sa.Date(), nullable=False),
+    sa.Column('end_date', sa.Date(), nullable=False),
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.ForeignKeyConstraint(['user_id'], ['users.db_id'], ),
@@ -144,16 +145,16 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('schedule_id'),
     sa.UniqueConstraint('user_id', 'account_id', 'payment_month', name='uq_user_account_month_payment')
     )
-    op.create_table('financial_plan_entries',
-    sa.Column('entry_id', sa.Integer(), autoincrement=True, nullable=False),
+    op.create_table('financial_plan_months',
+    sa.Column('month_id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('plan_id', sa.Integer(), nullable=False),
-    sa.Column('category_id', sa.Integer(), nullable=False),
-    sa.Column('monthly_amount', sa.DECIMAL(precision=15, scale=2), nullable=False),
+    sa.Column('year', sa.Integer(), nullable=False),
+    sa.Column('month', sa.Integer(), nullable=False),
+    sa.Column('planned_income', sa.DECIMAL(precision=15, scale=2), nullable=False),
     sa.Column('created_at', sa.DateTime(), nullable=False),
-    sa.ForeignKeyConstraint(['category_id'], ['categories.id'], ),
     sa.ForeignKeyConstraint(['plan_id'], ['financial_plans.plan_id'], ),
-    sa.PrimaryKeyConstraint('entry_id'),
-    sa.UniqueConstraint('plan_id', 'category_id', name='uq_plan_entry_category')
+    sa.PrimaryKeyConstraint('month_id'),
+    sa.UniqueConstraint('plan_id', 'year', 'month', name='uq_plan_year_month')
     )
     op.create_table('investment_holdings',
     sa.Column('holding_id', sa.Integer(), autoincrement=True, nullable=False),
@@ -224,6 +225,18 @@ def upgrade() -> None:
     op.create_index('idx_debt_payments_loan_account', 'debt_payments', ['loan_account_id'], unique=False)
     op.create_index('idx_debt_payments_source_account', 'debt_payments', ['payment_source_account_id'], unique=False)
     op.create_index('idx_debt_payments_transaction', 'debt_payments', ['transaction_id'], unique=False)
+    op.create_table('financial_plan_expenses',
+    sa.Column('expense_id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('month_id', sa.Integer(), nullable=False),
+    sa.Column('category_id', sa.Integer(), nullable=False),
+    sa.Column('description', sa.String(length=255), nullable=False),
+    sa.Column('amount', sa.DECIMAL(precision=15, scale=2), nullable=False),
+    sa.Column('expense_type', sa.String(length=20), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['category_id'], ['categories.id'], ),
+    sa.ForeignKeyConstraint(['month_id'], ['financial_plan_months.month_id'], ),
+    sa.PrimaryKeyConstraint('expense_id')
+    )
     op.create_table('investment_transactions',
     sa.Column('investment_transaction_id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('account_id', sa.Integer(), nullable=True),
@@ -286,6 +299,7 @@ def downgrade() -> None:
     op.drop_index('idx_investment_transactions_date', table_name='investment_transactions')
     op.drop_index('idx_investment_transactions_account_date', table_name='investment_transactions')
     op.drop_table('investment_transactions')
+    op.drop_table('financial_plan_expenses')
     op.drop_index('idx_debt_payments_transaction', table_name='debt_payments')
     op.drop_index('idx_debt_payments_source_account', table_name='debt_payments')
     op.drop_index('idx_debt_payments_loan_account', table_name='debt_payments')
@@ -298,7 +312,7 @@ def downgrade() -> None:
     op.drop_index('idx_holdings_symbol', table_name='investment_holdings')
     op.drop_index('idx_holdings_account', table_name='investment_holdings')
     op.drop_table('investment_holdings')
-    op.drop_table('financial_plan_entries')
+    op.drop_table('financial_plan_months')
     op.drop_table('debt_repayment_schedules')
     op.drop_table('debt_plan_account_links')
     op.drop_table('budget_categories')

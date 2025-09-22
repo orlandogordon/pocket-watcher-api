@@ -545,30 +545,44 @@ class FinancialPlanDB(Base):
     plan_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
     plan_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    monthly_income: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user = relationship("UserDB", back_populates="financial_plans")
-    entries = relationship("FinancialPlanEntryDB", back_populates="plan", cascade="all, delete-orphan")
+    monthly_periods = relationship("FinancialPlanMonthDB", back_populates="plan", cascade="all, delete-orphan")
 
 
-class FinancialPlanEntryDB(Base):
-    __tablename__ = "financial_plan_entries"
-
+class FinancialPlanMonthDB(Base):
+    __tablename__ = "financial_plan_months"
     __table_args__ = (
-        UniqueConstraint("plan_id", "category_id", name="uq_plan_entry_category"),
+        UniqueConstraint("plan_id", "year", "month", name="uq_plan_year_month"),
     )
-
-    entry_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    month_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     plan_id: Mapped[int] = mapped_column(ForeignKey("financial_plans.plan_id"))
-    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"))
-    monthly_amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
-
+    year: Mapped[int] = mapped_column(nullable=False)
+    month: Mapped[int] = mapped_column(nullable=False)
+    planned_income: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    plan = relationship("FinancialPlanDB", back_populates="entries")
+    plan = relationship("FinancialPlanDB", back_populates="monthly_periods")
+    expenses = relationship("FinancialPlanExpenseDB", back_populates="month", cascade="all, delete-orphan")
+
+
+class FinancialPlanExpenseDB(Base):
+    __tablename__ = "financial_plan_expenses"
+
+    expense_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    month_id: Mapped[int] = mapped_column(ForeignKey("financial_plan_months.month_id"))
+    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"))
+    description: Mapped[str] = mapped_column(String(255), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
+    expense_type: Mapped[str] = mapped_column(String(20), nullable=False)  # 'recurring' or 'one_time'
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    month = relationship("FinancialPlanMonthDB", back_populates="expenses")
     category = relationship("CategoryDB")
 
 
