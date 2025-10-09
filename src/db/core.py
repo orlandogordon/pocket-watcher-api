@@ -187,11 +187,11 @@ class BudgetCategoryDB(Base):
 
 class InvestmentHoldingDB(Base):
     __tablename__ = "investment_holdings"
-    
+
     __table_args__ = (
         # Prevent duplicate holdings per account/symbol
         UniqueConstraint("account_id", "symbol", name="uq_account_symbol"),
-        
+
         # Query indexes
         Index("idx_holdings_account", "account_id"),
         Index("idx_holdings_symbol", "symbol"),
@@ -199,17 +199,23 @@ class InvestmentHoldingDB(Base):
 
     # Primary Key
     holding_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    
+
     # Foreign Key
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
-    
+
     # Holding Data
-    symbol: Mapped[str] = mapped_column(String(20), nullable=False)  # e.g., "AAPL", "VTSAX"
-    quantity: Mapped[Decimal] = mapped_column(DECIMAL(15, 6), nullable=False)  # shares/units owned
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False)  # e.g., "AAPL", "VTSAX", "AAPL250117C00150000"
+    quantity: Mapped[Decimal] = mapped_column(DECIMAL(15, 6), nullable=False)  # shares/units/contracts owned
     average_cost_basis: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 4))  # average price paid per share
     current_price: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 4))  # latest market price
     last_price_update: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    
+
+    # Options-specific fields (nullable for stocks)
+    underlying_symbol: Mapped[Optional[str]] = mapped_column(String(10))  # e.g., "AAPL" for option
+    option_type: Mapped[Optional[str]] = mapped_column(String(4))  # "CALL" or "PUT"
+    strike_price: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))  # e.g., 150.00
+    expiration_date: Mapped[Optional[date]] = mapped_column(Date)  # e.g., 2025-01-17
+
     # Audit Trail
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -491,7 +497,7 @@ class TransactionTagDB(Base):
 
 class AccountDB(Base):
     __tablename__ = "accounts"
-    
+
     __table_args__ = (
         # Prevent duplicate account names per user
         UniqueConstraint("user_id", "account_name", name="uq_user_account_name"),
@@ -500,30 +506,30 @@ class AccountDB(Base):
     # Core Account Identification
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
-    
+
     # Account Details
     account_name: Mapped[str] = mapped_column(String(255), nullable=False)  # "Chase Checking", "Amex Gold Card"
     account_type: Mapped[AccountType] = mapped_column(Enum(AccountType))
     institution_name: Mapped[str] = mapped_column(String(255), nullable=False)
     account_number_last4: Mapped[Optional[str]] = mapped_column(String(4))
-    
+
     # Loan-specific fields (only used for LOAN account types)
     original_principal: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))
     minimum_payment: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))
     interest_rate: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(5, 4))  # e.g., 0.0525 for 5.25%
     interest_rate_type: Mapped[Optional[str]] = mapped_column(String(20))  # "FIXED" or "VARIABLE"
-    
+
     # Balance Tracking
     balance: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), default=0.00)
     balance_last_updated: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    
+
     # Optional Metadata
     comments: Mapped[Optional[str]] = mapped_column(Text)
-    
+
     # Audit Trail
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     # Relationships
     user = relationship("UserDB", back_populates="accounts")
     transactions = relationship("TransactionDB", back_populates="account")
@@ -533,6 +539,53 @@ class AccountDB(Base):
     debt_payments_from = relationship("DebtPaymentDB", foreign_keys="DebtPaymentDB.payment_source_account_id", back_populates="payment_source_account")
     debt_repayment_plans_link = relationship("DebtPlanAccountLinkDB", back_populates="account", cascade="all, delete-orphan")
     debt_repayment_schedules = relationship("DebtRepaymentScheduleDB", back_populates="account", cascade="all, delete-orphan")
+    value_history = relationship("AccountValueHistoryDB", back_populates="account", cascade="all, delete-orphan")
+
+
+class AccountValueHistoryDB(Base):
+    """
+    Daily snapshots of account values for historical tracking and net worth calculations.
+    Supports all account types: checking, savings, credit cards, loans, and investments.
+    """
+    __tablename__ = "account_value_history"
+
+    __table_args__ = (
+        # Ensure only one snapshot per account per day
+        UniqueConstraint("account_id", "value_date", name="uq_account_value_date"),
+
+        # Query indexes for performance
+        Index("idx_account_value_account", "account_id"),
+        Index("idx_account_value_date", "value_date"),
+        Index("idx_account_value_account_date", "account_id", "value_date"),
+    )
+
+    # Primary Key
+    snapshot_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    # Foreign Key
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+
+    # Snapshot Data
+    value_date: Mapped[date] = mapped_column(Date, nullable=False)  # The date of this snapshot
+    balance: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)  # Account value on this date
+
+    # Investment-specific fields (nullable for non-investment accounts)
+    total_cost_basis: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))  # Total amount invested
+    unrealized_gain_loss: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))  # Current value - cost basis
+    realized_gain_loss: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))  # Gain/loss from sells
+
+    # Loan-specific fields (nullable for non-loan accounts)
+    principal_paid_ytd: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))  # Principal paid this year
+    interest_paid_ytd: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))  # Interest paid this year
+
+    # Metadata
+    snapshot_source: Mapped[str] = mapped_column(String(50), default="SYSTEM")  # SYSTEM, MANUAL, EOD_JOB, etc.
+
+    # Audit Trail
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    account = relationship("AccountDB", back_populates="value_history")
 
 
 class FinancialPlanDB(Base):

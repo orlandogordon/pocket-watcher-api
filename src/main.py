@@ -10,6 +10,7 @@ from .routers.accounts import router as accounts_router
 from .routers.tags import router as tags_router
 from .routers.debts import router as debts_router
 from .routers.uploads import router as uploads_router
+from .routers.account_history import router as account_history_router
 
 # Initialize logging
 setup_logging()
@@ -31,6 +32,7 @@ app.include_router(accounts_router)
 app.include_router(tags_router)
 app.include_router(debts_router)
 app.include_router(uploads_router)
+app.include_router(account_history_router)
 
 # app.state.limiter = limiter
 # app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)

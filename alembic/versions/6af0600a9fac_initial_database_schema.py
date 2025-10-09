@@ -1,8 +1,8 @@
 """Initial database schema
 
-Revision ID: 6cb4f79cd0c7
+Revision ID: 6af0600a9fac
 Revises: 
-Create Date: 2025-09-22 15:41:08.557456
+Create Date: 2025-10-09 13:50:21.073325
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '6cb4f79cd0c7'
+revision: str = '6af0600a9fac'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -115,6 +115,25 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('tag_id'),
     sa.UniqueConstraint('user_id', 'tag_name', name='uq_user_tag_name')
     )
+    op.create_table('account_value_history',
+    sa.Column('snapshot_id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('account_id', sa.Integer(), nullable=False),
+    sa.Column('value_date', sa.Date(), nullable=False),
+    sa.Column('balance', sa.DECIMAL(precision=15, scale=2), nullable=False),
+    sa.Column('total_cost_basis', sa.DECIMAL(precision=15, scale=2), nullable=True),
+    sa.Column('unrealized_gain_loss', sa.DECIMAL(precision=15, scale=2), nullable=True),
+    sa.Column('realized_gain_loss', sa.DECIMAL(precision=15, scale=2), nullable=True),
+    sa.Column('principal_paid_ytd', sa.DECIMAL(precision=15, scale=2), nullable=True),
+    sa.Column('interest_paid_ytd', sa.DECIMAL(precision=15, scale=2), nullable=True),
+    sa.Column('snapshot_source', sa.String(length=50), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['account_id'], ['accounts.id'], ),
+    sa.PrimaryKeyConstraint('snapshot_id'),
+    sa.UniqueConstraint('account_id', 'value_date', name='uq_account_value_date')
+    )
+    op.create_index('idx_account_value_account', 'account_value_history', ['account_id'], unique=False)
+    op.create_index('idx_account_value_account_date', 'account_value_history', ['account_id', 'value_date'], unique=False)
+    op.create_index('idx_account_value_date', 'account_value_history', ['value_date'], unique=False)
     op.create_table('budget_categories',
     sa.Column('budget_category_id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('budget_id', sa.Integer(), nullable=False),
@@ -164,6 +183,10 @@ def upgrade() -> None:
     sa.Column('average_cost_basis', sa.DECIMAL(precision=15, scale=4), nullable=True),
     sa.Column('current_price', sa.DECIMAL(precision=15, scale=4), nullable=True),
     sa.Column('last_price_update', sa.DateTime(), nullable=True),
+    sa.Column('underlying_symbol', sa.String(length=10), nullable=True),
+    sa.Column('option_type', sa.String(length=4), nullable=True),
+    sa.Column('strike_price', sa.DECIMAL(precision=15, scale=2), nullable=True),
+    sa.Column('expiration_date', sa.Date(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.ForeignKeyConstraint(['account_id'], ['accounts.id'], ),
@@ -316,6 +339,10 @@ def downgrade() -> None:
     op.drop_table('debt_repayment_schedules')
     op.drop_table('debt_plan_account_links')
     op.drop_table('budget_categories')
+    op.drop_index('idx_account_value_date', table_name='account_value_history')
+    op.drop_index('idx_account_value_account_date', table_name='account_value_history')
+    op.drop_index('idx_account_value_account', table_name='account_value_history')
+    op.drop_table('account_value_history')
     op.drop_table('tags')
     op.drop_table('financial_plans')
     op.drop_table('debt_repayment_plans')
