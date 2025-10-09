@@ -138,10 +138,13 @@ def create_db_investment_transaction(db: Session, user_id: int, transaction_data
         db.add(db_transaction)
         db.commit()
         db.refresh(db_transaction)
-        
+
         # Update holding based on transaction
         if holding:
             update_holding_from_transaction(db, holding, db_transaction)
+
+        # NOTE: Account balance will be updated by end-of-day snapshot job
+        # which fetches live market prices and calculates true portfolio value
 
         return db_transaction
     except IntegrityError:
@@ -234,6 +237,10 @@ def bulk_create_investment_transactions_from_parsed_data(
                 holding = db.query(InvestmentHoldingDB).get(t.holding_id)
                 if holding:
                     update_holding_from_transaction(db, holding, t)
+
+        # NOTE: Account balance will be updated by end-of-day snapshot job
+        # which fetches live market prices and calculates true portfolio value
+
         return created_transactions
     except Exception as e:
         db.rollback()
@@ -334,6 +341,22 @@ def delete_db_investment_transaction(db: Session, transaction_id: int, user_id: 
 
 
 # ===== UTILITY FUNCTIONS =====
+
+def calculate_account_total_value(db: Session, account_id: int) -> Decimal:
+    """Calculate the total market value of all holdings in an investment account."""
+    holdings = db.query(InvestmentHoldingDB).filter(
+        InvestmentHoldingDB.account_id == account_id
+    ).all()
+
+    total_value = Decimal('0.00')
+    for holding in holdings:
+        if holding.quantity and holding.current_price:
+            total_value += holding.quantity * holding.current_price
+        elif holding.quantity and holding.average_cost_basis:
+            # Fallback to cost basis if current price not available
+            total_value += holding.quantity * holding.average_cost_basis
+
+    return total_value
 
 def update_holding_from_transaction(db: Session, holding: InvestmentHoldingDB, transaction: InvestmentTransactionDB):
     """Updates a holding's quantity and cost basis after a transaction."""
