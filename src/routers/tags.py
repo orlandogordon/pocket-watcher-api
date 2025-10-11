@@ -178,8 +178,7 @@ def remove_tag_from_transaction(
 
 @router.post("/transactions/bulk-tag", status_code=status.HTTP_201_CREATED)
 def bulk_tag_transactions(
-    transaction_ids: List[int],
-    tag_id: int,
+    bulk_tag_request: tag_models.BulkTagRequest,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
@@ -187,7 +186,15 @@ def bulk_tag_transactions(
     Add a single tag to multiple transactions at once.
     """
     try:
-        created_relations = crud_tag.bulk_tag_transactions(db=db, user_id=user_id, transaction_ids=transaction_ids, tag_id=tag_id)
-        return {"message": f"{len(created_relations)} tags added successfully."}
+        created_relations = crud_tag.bulk_tag_transactions(
+            db=db,
+            user_id=user_id,
+            transaction_ids=bulk_tag_request.transaction_ids,
+            tag_id=bulk_tag_request.tag_id
+        )
+        return {
+            "message": f"{len(created_relations)} transaction(s) tagged successfully.",
+            "tagged_count": len(created_relations)
+        }
     except (NotFoundError, ValueError) as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

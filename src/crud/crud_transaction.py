@@ -167,6 +167,78 @@ def create_transaction_relationship(db: Session, user_id: int, from_transaction_
         raise ValueError("Relationship creation failed due to database constraint")
 
 
+def update_transaction_relationship(db: Session, user_id: int, relationship_id: int, relationship_updates: Dict[str, Any]) -> TransactionRelationshipDB:
+    """Update an existing transaction relationship"""
+
+    # Get the existing relationship
+    db_relationship = db.query(TransactionRelationshipDB).filter(
+        TransactionRelationshipDB.relationship_id == relationship_id
+    ).first()
+
+    if not db_relationship:
+        raise NotFoundError(f"Relationship with id {relationship_id} not found")
+
+    # Verify user owns both transactions in the relationship
+    from_transaction = db.query(TransactionDB).filter(
+        TransactionDB.db_id == db_relationship.from_transaction_id,
+        TransactionDB.user_id == user_id
+    ).first()
+
+    if not from_transaction:
+        raise NotFoundError(f"Transaction relationship not found or doesn't belong to user")
+
+    # If updating to_transaction_id, verify new transaction exists and belongs to user
+    if 'to_transaction_id' in relationship_updates:
+        to_transaction = db.query(TransactionDB).filter(
+            TransactionDB.db_id == relationship_updates['to_transaction_id'],
+            TransactionDB.user_id == user_id
+        ).first()
+        if not to_transaction:
+            raise NotFoundError(f"Transaction with id {relationship_updates['to_transaction_id']} not found")
+
+    # Update the relationship fields
+    for field, value in relationship_updates.items():
+        if hasattr(db_relationship, field):
+            setattr(db_relationship, field, value)
+
+    try:
+        db.commit()
+        db.refresh(db_relationship)
+        return db_relationship
+    except IntegrityError:
+        db.rollback()
+        raise ValueError("Relationship update failed due to database constraint")
+
+
+def delete_transaction_relationship(db: Session, user_id: int, relationship_id: int) -> bool:
+    """Delete a transaction relationship"""
+
+    # Get the relationship
+    db_relationship = db.query(TransactionRelationshipDB).filter(
+        TransactionRelationshipDB.relationship_id == relationship_id
+    ).first()
+
+    if not db_relationship:
+        raise NotFoundError(f"Relationship with id {relationship_id} not found")
+
+    # Verify user owns the from_transaction
+    from_transaction = db.query(TransactionDB).filter(
+        TransactionDB.db_id == db_relationship.from_transaction_id,
+        TransactionDB.user_id == user_id
+    ).first()
+
+    if not from_transaction:
+        raise NotFoundError(f"Transaction relationship not found or doesn't belong to user")
+
+    try:
+        db.delete(db_relationship)
+        db.commit()
+        return True
+    except Exception as e:
+        db.rollback()
+        raise ValueError(f"Failed to delete transaction relationship: {str(e)}")
+
+
 def read_db_transaction(db: Session, transaction_id: int, user_id: Optional[int] = None) -> Optional[TransactionDB]:
     """Read a transaction by ID"""
     

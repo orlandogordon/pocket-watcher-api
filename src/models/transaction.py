@@ -184,6 +184,13 @@ class TransactionRelationshipBase(BaseModel):
 class TransactionRelationshipCreate(TransactionRelationshipBase):
     pass
 
+class TransactionRelationshipUpdate(BaseModel):
+    """Update transaction relationship - all fields optional"""
+    to_transaction_id: Optional[int] = None
+    relationship_type: Optional[RelationshipType] = None
+    amount_allocated: Optional[Decimal] = None
+    notes: Optional[str] = None
+
 class TransactionRelationship(TransactionRelationshipBase):
     relationship_id: int
     from_transaction_id: int

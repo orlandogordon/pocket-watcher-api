@@ -68,6 +68,12 @@ class TransactionTagResponse(BaseModel):
         from_attributes = True
 
 
+class BulkTagRequest(BaseModel):
+    """Bulk tag assignment request"""
+    transaction_ids: List[int] = Field(..., description="List of transaction DB IDs to tag")
+    tag_id: int = Field(..., description="Tag ID to apply to all transactions")
+
+
 class TagStats(BaseModel):
     """Tag usage statistics"""
     tag_id: int
