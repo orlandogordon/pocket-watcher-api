@@ -4,7 +4,7 @@ from fastapi.params import Depends
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from src.db.core import NotFoundError, get_db
-from src.models.transaction import TransactionCreate, TransactionUpdate, TransactionResponse, TransactionImport, TransactionRelationshipCreate, TransactionRelationship, TransactionBulkUpdate
+from src.models.transaction import TransactionCreate, TransactionUpdate, TransactionResponse, TransactionImport, TransactionRelationshipCreate, TransactionRelationshipUpdate, TransactionRelationship, TransactionBulkUpdate
 from src.crud.crud_transaction import (
     create_db_transaction,
     read_db_transaction,
@@ -12,6 +12,8 @@ from src.crud.crud_transaction import (
     delete_db_transaction,
     bulk_create_transactions,
     create_transaction_relationship,
+    update_transaction_relationship,
+    delete_transaction_relationship,
     bulk_update_db_transactions
 )
 
@@ -99,8 +101,18 @@ def delete_transaction(request: Request, transaction_id: str, db: Session = Depe
         raise HTTPException(status_code=400, detail=str(e)) from e
     return TransactionResponse.model_validate(db_transaction)
 
-@router.post("/{transaction_id}/relationships")
+@router.post("/{transaction_id}/relationships", status_code=201)
 def create_relationship(transaction_id: int, relationship: TransactionRelationshipCreate, db: Session = Depends(get_db)) -> TransactionRelationship:
+    """
+    Create a relationship between two transactions.
+
+    Relationship types:
+    - REFUNDS: To transaction is a refund of from transaction
+    - OFFSETS: Transactions offset each other
+    - SPLITS: Part of a split transaction
+    - FEES_FOR: To transaction is a fee for from transaction
+    - REVERSES: To transaction reverses from transaction
+    """
     user_id = get_current_user_id()
     try:
         db_relationship = create_transaction_relationship(db, user_id, transaction_id, relationship)
@@ -109,3 +121,41 @@ def create_relationship(transaction_id: int, relationship: TransactionRelationsh
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return TransactionRelationship.model_validate(db_relationship)
+
+
+@router.put("/relationships/{relationship_id}")
+def update_relationship(relationship_id: int, relationship_update: TransactionRelationshipUpdate, db: Session = Depends(get_db)) -> TransactionRelationship:
+    """
+    Update an existing transaction relationship.
+    All fields are optional - only provided fields will be updated.
+    """
+    user_id = get_current_user_id()
+
+    # Convert to dict and exclude unset values
+    update_data = relationship_update.model_dump(exclude_unset=True)
+
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No update fields provided")
+
+    try:
+        db_relationship = update_transaction_relationship(db, user_id, relationship_id, update_data)
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return TransactionRelationship.model_validate(db_relationship)
+
+
+@router.delete("/relationships/{relationship_id}", status_code=204)
+def delete_relationship(relationship_id: int, db: Session = Depends(get_db)):
+    """
+    Delete a transaction relationship.
+    """
+    user_id = get_current_user_id()
+    try:
+        delete_transaction_relationship(db, user_id, relationship_id)
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return None

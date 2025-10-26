@@ -1,8 +1,8 @@
-"""Initial database schema
+"""Initial migration
 
-Revision ID: 6af0600a9fac
+Revision ID: 36a502940a86
 Revises: 
-Create Date: 2025-10-09 13:50:21.073325
+Create Date: 2025-10-11 04:20:43.809126
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '6af0600a9fac'
+revision: str = '36a502940a86'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -262,8 +262,10 @@ def upgrade() -> None:
     )
     op.create_table('investment_transactions',
     sa.Column('investment_transaction_id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False),
     sa.Column('account_id', sa.Integer(), nullable=True),
     sa.Column('holding_id', sa.Integer(), nullable=True),
+    sa.Column('transaction_hash', sa.String(length=64), nullable=False),
     sa.Column('transaction_type', sa.Enum('BUY', 'SELL', 'DIVIDEND', 'INTEREST', 'SPLIT', 'MERGER', 'SPINOFF', 'REINVESTMENT', name='investmenttransactiontype'), nullable=False),
     sa.Column('symbol', sa.String(length=20), nullable=False),
     sa.Column('quantity', sa.DECIMAL(precision=15, scale=6), nullable=True),
@@ -272,16 +274,20 @@ def upgrade() -> None:
     sa.Column('fees', sa.DECIMAL(precision=15, scale=2), nullable=True),
     sa.Column('transaction_date', sa.Date(), nullable=False),
     sa.Column('description', sa.String(length=500), nullable=True),
+    sa.Column('needs_review', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.ForeignKeyConstraint(['account_id'], ['accounts.id'], ),
     sa.ForeignKeyConstraint(['holding_id'], ['investment_holdings.holding_id'], ),
-    sa.PrimaryKeyConstraint('investment_transaction_id')
+    sa.ForeignKeyConstraint(['user_id'], ['users.db_id'], ),
+    sa.PrimaryKeyConstraint('investment_transaction_id'),
+    sa.UniqueConstraint('user_id', 'transaction_hash', name='uq_user_investment_transaction_hash')
     )
     op.create_index('idx_investment_transactions_account_date', 'investment_transactions', ['account_id', 'transaction_date'], unique=False)
     op.create_index('idx_investment_transactions_date', 'investment_transactions', ['transaction_date'], unique=False)
     op.create_index('idx_investment_transactions_holding', 'investment_transactions', ['holding_id'], unique=False)
     op.create_index('idx_investment_transactions_type', 'investment_transactions', ['transaction_type'], unique=False)
+    op.create_index('idx_investment_transactions_user_date', 'investment_transactions', ['user_id', 'transaction_date'], unique=False)
     op.create_table('transaction_relationships',
     sa.Column('relationship_id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('from_transaction_id', sa.Integer(), nullable=False),
@@ -317,6 +323,7 @@ def downgrade() -> None:
     op.drop_index('idx_rel_to_transaction', table_name='transaction_relationships')
     op.drop_index('idx_rel_from_transaction', table_name='transaction_relationships')
     op.drop_table('transaction_relationships')
+    op.drop_index('idx_investment_transactions_user_date', table_name='investment_transactions')
     op.drop_index('idx_investment_transactions_type', table_name='investment_transactions')
     op.drop_index('idx_investment_transactions_holding', table_name='investment_transactions')
     op.drop_index('idx_investment_transactions_date', table_name='investment_transactions')

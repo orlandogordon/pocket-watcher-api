@@ -227,39 +227,52 @@ class InvestmentHoldingDB(Base):
 
 class InvestmentTransactionDB(Base):
     __tablename__ = "investment_transactions"
-    
+
     __table_args__ = (
         # Query indexes
+        Index("idx_investment_transactions_user_date", "user_id", "transaction_date"),
         Index("idx_investment_transactions_account_date", "account_id", "transaction_date"),
-        Index("idx_investment_transactions_holding", "holding_id"), 
+        Index("idx_investment_transactions_holding", "holding_id"),
         Index("idx_investment_transactions_date", "transaction_date"),
         Index("idx_investment_transactions_type", "transaction_type"),
+
+        # Duplicate prevention
+        UniqueConstraint("user_id", "transaction_hash", name="uq_user_investment_transaction_hash"),
     )
 
     # Primary Key
     investment_transaction_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    
+
     # Foreign Keys
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"), nullable=False)
     account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))
     holding_id: Mapped[Optional[int]] = mapped_column(ForeignKey("investment_holdings.holding_id"))  # Optional for dividends, etc.
-    
+
+    # Deduplication & Source Tracking
+    transaction_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
     # Transaction Data
     transaction_type: Mapped[InvestmentTransactionType] = mapped_column(Enum(InvestmentTransactionType))
-    symbol: Mapped[str] = mapped_column(String(20), nullable=False)  # Redundant but useful for queries
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False)  # Underlying ticker (e.g., "AAPL", "SPY")
+    api_symbol: Mapped[Optional[str]] = mapped_column(String(50))  # yfinance API format (OCC for options)
     quantity: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 6))  # shares/units (null for dividends)
     price_per_share: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 4))  # price per share/unit
     total_amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)  # total transaction value
     fees: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))  # transaction fees
     transaction_date: Mapped[date] = mapped_column(Date, nullable=False)
-    
+
     # Description & Details
     description: Mapped[Optional[str]] = mapped_column(String(500))
-    
+
+    # Processing
+    needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # Audit Trail
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
+    user = relationship("UserDB")
     account = relationship("AccountDB", back_populates="investment_transactions")
     holding = relationship("InvestmentHoldingDB", back_populates="investment_transactions")
 

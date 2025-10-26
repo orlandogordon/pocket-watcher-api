@@ -4,8 +4,9 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import List, Optional, Union, IO
 import io
+from itertools import groupby
 
-from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo
+from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo, SecurityType
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -17,6 +18,45 @@ def _parse_date(date_str: str) -> Optional[datetime.date]:
     except ValueError:
         logger.warning(f"Could not parse date: {date_str}")
         return None
+
+def _handle_investment_duplicates(transactions: List[ParsedInvestmentTransaction]) -> List[ParsedInvestmentTransaction]:
+    """
+    Handles duplicate investment transactions by appending a counter to the description.
+    Groups by date, transaction_type, symbol, and description.
+    """
+    updated_transactions = []
+    keyfunc = lambda t: (t.transaction_date, t.transaction_type, t.symbol, t.description)
+
+    sorted_transactions = sorted(transactions, key=keyfunc)
+
+    for key, group in groupby(sorted_transactions, key=keyfunc):
+        group_list = list(group)
+        if len(group_list) > 1:
+            # Duplicates found
+            for i, transaction in enumerate(group_list):
+                if i == 0:
+                    # First one is kept as is
+                    updated_transactions.append(transaction)
+                else:
+                    # Subsequent ones get a modified description
+                    new_description = f"{transaction.description} ({i + 1})"
+                    updated_transactions.append(
+                        ParsedInvestmentTransaction(
+                            transaction_date=transaction.transaction_date,
+                            transaction_type=transaction.transaction_type,
+                            symbol=transaction.symbol,
+                            description=new_description,
+                            quantity=transaction.quantity,
+                            price_per_share=transaction.price_per_share,
+                            total_amount=transaction.total_amount,
+                            is_duplicate=True
+                        )
+                    )
+        else:
+            # No duplicates for this key
+            updated_transactions.append(group_list[0])
+
+    return updated_transactions
 
 def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses an Ameriprise CSV from a file path or in-memory stream."""
@@ -76,5 +116,10 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
 
     if isinstance(file_source, Path):
         text_stream.close()
+
+    logger.info(f"Successfully parsed {len(investment_transactions)} investment transactions from Ameriprise CSV")
+
+    # Handle duplicates
+    investment_transactions = _handle_investment_duplicates(investment_transactions)
 
     return ParsedData(account_info=account_info, investment_transactions=investment_transactions)

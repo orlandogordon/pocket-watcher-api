@@ -6,6 +6,10 @@ from datetime import datetime
 from decimal import Decimal
 import hashlib
 
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 # Import your database models
 from src.db.core import (
     InvestmentHoldingDB, 
@@ -151,6 +155,62 @@ def create_db_investment_transaction(db: Session, user_id: int, transaction_data
         db.rollback()
         raise ValueError("Investment transaction creation failed.")
 
+def map_transaction_type_to_enum(transaction_type_str: str) -> Optional[InvestmentTransactionType]:
+    """
+    Map various transaction type strings from different institutions to the InvestmentTransactionType enum.
+    Returns None if no mapping is found.
+    """
+    # Normalize the string
+    normalized = transaction_type_str.upper().strip().replace(" ", "_")
+
+    # Direct mapping attempts
+    mapping = {
+        # Direct matches
+        "BUY": InvestmentTransactionType.BUY,
+        "SELL": InvestmentTransactionType.SELL,
+        "DIVIDEND": InvestmentTransactionType.DIVIDEND,
+        "INTEREST": InvestmentTransactionType.INTEREST,
+        "SPLIT": InvestmentTransactionType.SPLIT,
+        "MERGER": InvestmentTransactionType.MERGER,
+        "SPINOFF": InvestmentTransactionType.SPINOFF,
+        "REINVESTMENT": InvestmentTransactionType.REINVESTMENT,
+
+        # Schwab-specific mappings
+        "BUY_TO_OPEN": InvestmentTransactionType.BUY,
+        "BUY_TO_CLOSE": InvestmentTransactionType.BUY,
+        "SELL_TO_OPEN": InvestmentTransactionType.SELL,
+        "SELL_TO_CLOSE": InvestmentTransactionType.SELL,
+        "CREDIT_INTEREST": InvestmentTransactionType.INTEREST,
+        "BOND_INTEREST": InvestmentTransactionType.INTEREST,
+
+        # TD Ameritrade mappings
+        "BOUGHT_TO_OPEN": InvestmentTransactionType.BUY,
+        "SOLD_TO_CLOSE": InvestmentTransactionType.SELL,
+
+        # Ameriprise mappings
+        "PURCHASE": InvestmentTransactionType.BUY,
+        "SALE": InvestmentTransactionType.SELL,
+    }
+
+    # Try direct lookup
+    if normalized in mapping:
+        return mapping[normalized]
+
+    # Try partial matches
+    if "BUY" in normalized or "PURCHASE" in normalized:
+        return InvestmentTransactionType.BUY
+    if "SELL" in normalized or "SALE" in normalized:
+        return InvestmentTransactionType.SELL
+    if "INTEREST" in normalized:
+        return InvestmentTransactionType.INTEREST
+    if "DIVIDEND" in normalized or "DIV" in normalized:
+        return InvestmentTransactionType.DIVIDEND
+    if "REINVEST" in normalized:
+        return InvestmentTransactionType.REINVESTMENT
+
+    # No mapping found
+    return None
+
 def generate_investment_transaction_hash(transaction_data: ParsedInvestmentTransaction, user_id: int, institution_name: str) -> str:
     """Generate a hash for investment transaction deduplication."""
     hash_string = (
@@ -181,25 +241,40 @@ def bulk_create_investment_transactions_from_parsed_data(
             raise NotFoundError(f"Account with id {account_id} not found for this user.")
 
     created_transactions = []
+    skipped_duplicates = 0
+
     for t_data in transactions:
+        # Generate transaction hash for deduplication
         transaction_hash = generate_investment_transaction_hash(t_data, user_id, institution_name)
 
-        existing = db.query(InvestmentTransactionDB).filter(
+        # Check if transaction already exists
+        existing_transaction = db.query(InvestmentTransactionDB).filter(
             InvestmentTransactionDB.user_id == user_id,
             InvestmentTransactionDB.transaction_hash == transaction_hash
         ).first()
-        if existing:
+
+        if existing_transaction:
+            logger.debug(f"Skipping duplicate investment transaction: {t_data.transaction_date} - {t_data.description}")
+            skipped_duplicates += 1
             continue
 
-        # Find or create the corresponding holding
+        # Map the transaction type string to the enum FIRST
+        transaction_type_enum = map_transaction_type_to_enum(t_data.transaction_type)
+        if not transaction_type_enum:
+            # Log and skip transactions we can't map
+            logger.warning(f"Could not map transaction type '{t_data.transaction_type}' to enum. Skipping transaction.")
+            continue
+
+        # Find or create the corresponding holding (only for transactions with symbols)
         holding = None
-        if account_id:
+        if account_id and t_data.symbol:
             holding = db.query(InvestmentHoldingDB).filter(
                 InvestmentHoldingDB.account_id == account_id,
                 InvestmentHoldingDB.symbol == t_data.symbol
             ).first()
 
-            if not holding and t_data.transaction_type in [InvestmentTransactionTypeEnum.BUY, InvestmentTransactionTypeEnum.REINVESTMENT]:
+            # Create holding for BUY/REINVESTMENT transactions if it doesn't exist
+            if not holding and transaction_type_enum in [InvestmentTransactionType.BUY, InvestmentTransactionType.REINVESTMENT]:
                 holding_create = InvestmentHoldingCreate(
                     account_id=account_id,
                     symbol=t_data.symbol,
@@ -212,19 +287,22 @@ def bulk_create_investment_transactions_from_parsed_data(
             user_id=user_id,
             account_id=account_id,
             holding_id=holding.holding_id if holding else None,
-            transaction_hash=transaction_hash,
             transaction_date=t_data.transaction_date,
-            transaction_type=InvestmentTransactionType(t_data.transaction_type.value),
-            symbol=t_data.symbol,
+            transaction_type=transaction_type_enum,
+            symbol=t_data.symbol if t_data.symbol else "UNKNOWN",  # symbol is required, use placeholder if missing
             quantity=t_data.quantity,
             price_per_share=t_data.price_per_share,
-            amount=t_data.amount,
-            fees=t_data.fees,
+            total_amount=t_data.total_amount,
+            fees=None,  # Not currently parsed
             description=t_data.description,
-            needs_review=True if not account_id else False,
+            transaction_hash=transaction_hash,
+            needs_review=t_data.is_duplicate  # Flag transactions that were marked as duplicates by parser
         )
         db.add(db_transaction)
         created_transactions.append(db_transaction)
+
+    if skipped_duplicates > 0:
+        logger.info(f"Skipped {skipped_duplicates} duplicate investment transactions")
 
     if not created_transactions:
         return []
@@ -238,8 +316,8 @@ def bulk_create_investment_transactions_from_parsed_data(
                 if holding:
                     update_holding_from_transaction(db, holding, t)
 
-        # NOTE: Account balance will be updated by end-of-day snapshot job
-        # which fetches live market prices and calculates true portfolio value
+        # NOTE: Account balance should be updated separately by a snapshot job
+        # that fetches current market prices, not from historical statement imports
 
         return created_transactions
     except Exception as e:

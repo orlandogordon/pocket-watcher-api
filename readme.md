@@ -44,6 +44,16 @@
 - Streamlined testing setup? (pre written bash script maybe?)
 - Add model factory to UserCreate pydantic model id field (see transactionCreate)
 
+- The add categories endpoint is not including the parent category id when given
+- Financial plans takes in a target amount but doesn't store it in the db. instead it is storing a monthyl income value that i don't find to be as useful
+- Financial plan entires bulk upload endpoint does not work
+- The endpoint for assigning a tag to a transaction takes in the db id rather than the public (uuid)
+- The bulk transaction-tag assignment endpoint is broken
+- Transaction Relationship update and deletion endpoints seem to be missing
+- The debt payment creation endpoint is not populating principal/interest amount data and remaining balance data. The endpoint also is not checking to make sure the account_id provided is a loan account (and maybe a credit_card) and returning an error if it is not. 
+- Investment Transactions endpoint is not updating the account value based on the transaction processed. 
+- Investment transaction parsing is not implemented. 
+
 
 ## Architectural Notes
 
