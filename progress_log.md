@@ -1,28 +1,25 @@
-# Parser Update Plan: Duplicate Transaction Handling
+# Parser Update Plan: Duplicate Transaction Handling (COMPLETED November 14, 2025)
 
-To ensure consistent and robust transaction importing, the duplicate handling logic needs to be implemented for the remaining parsers. This involves updating each parser to correctly identify and manage duplicate transactions within a single file import by appending a counter to the description.
+## ✅ COMPLETED: Duplicate Detection Refactor
 
-The following parsers need to be updated:
+**Previous (Incorrect) Behavior:**
+- Parsers flagged transactions as duplicates if they appeared multiple times within the same statement
+- Modified descriptions with "(2)", "(3)" counters
+- Set `is_duplicate=True` for subsequent occurrences
+- This was WRONG - legitimate transactions (e.g., multiple Starbucks purchases same day) were being flagged
 
-### 1. Schwab (`src/parser/schwab.py`)
-- **Task:** Implement duplicate handling for investment transactions in the `parse_csv` function.
-- **Context Needed:** The content of `src/parser/schwab.py`.
-- **Notes:** The `parse_statement` (PDF) function is a placeholder and does not need changes. The logic must be adapted for `ParsedInvestmentTransaction` objects.
+**New (Correct) Behavior:**
+- Parsers import ALL transactions as-is, no modification
+- Duplicate detection moved to CRUD layer (database-level check)
+- Only flag duplicates when transaction hash already exists in database
+- Flagged duplicates: `needs_review=True` + "duplicate" tag (for regular transactions)
+- User can review and decide whether to keep or delete
 
-### 2. TD Ameritrade (`src/parser/tdameritrade.py`)
-- **Task:** Implement duplicate handling for transactions. This will likely involve updating both `parse_statement` (PDF) and `parse_csv` functions if they exist.
-- **Context Needed:** The content of `src/parser/tdameritrade.py`.
-
-### 3. Ameriprise (`src/parser/ameriprise.py`)
-- **Task:** Implement duplicate handling for transactions. This will likely involve updating both `parse_statement` (PDF) and `parse_csv` functions if they exist.
-- **Context Needed:** The content of `src/parser/ameriprise.py`.
-
-**Action Plan:**
-For each parser, the following steps will be taken:
-1. Read the content of the parser file.
-2. Add the necessary imports (`itertools.groupby`).
-3. Define a helper function (`_handle_duplicates` or `_handle_investment_duplicates`) to manage duplicate descriptions.
-4. Integrate the helper function into the main parsing logic before the `ParsedData` object is returned.
+**Why This Is Better:**
+- Prevents data loss from skipping legitimate duplicate transactions
+- Same day, same merchant, same amount scenarios (coffee, parking, subway, etc.)
+- User maintains control - can review flagged duplicates and make decisions
+- No modification of original transaction data
 
 
 **Database TODOs**
@@ -129,6 +126,59 @@ alembic revision --autogenerate -m "Initial database schema"
     * Validation checklist and shell commands
     * Reference to working implementations
 
+### Completed Items (November 14, 2025)
+- ✅ **Fixed Duplicate Detection System** (COMPLETED - November 14, 2025)
+  - Removed within-statement duplicate handling from ALL parsers
+  - Moved duplicate detection to CRUD layer (database-level check)
+  - Updated parsers: schwab_new.py, tdameritrade_new.py, ameriprise.py, tdbank.py, amex.py, amzn_syf.py
+  - Updated CRUD layers: crud_investment.py, crud_transaction.py
+  - Added duplicate count logging to both investment and regular transaction imports
+  - Duplicates now created with `needs_review=True` and "duplicate" tag
+  - Created comprehensive test scripts: test_amex_parser_output.py, test_amex_parser_and_duplicates.py
+
+  **Files Modified:**
+  - `src/parser/schwab_new.py` - Removed `_handle_investment_duplicates()`
+  - `src/parser/tdameritrade_new.py` - Removed `_handle_investment_duplicates()`
+  - `src/parser/ameriprise.py` - Removed `_handle_investment_duplicates()`
+  - `src/parser/tdbank.py` - Removed `_handle_duplicates()` (PDF & CSV)
+  - `src/parser/amex.py` - Removed `_handle_duplicates()` (PDF & CSV)
+  - `src/parser/amzn_syf.py` - Removed `_handle_duplicates()` (PDF & CSV)
+  - `src/crud/crud_investment.py` - Changed to create duplicates with `needs_review=True`
+  - `src/crud/crud_transaction.py` - Changed to create duplicates with `needs_review=True` + "duplicate" tag
+  - All parsers: Removed `from itertools import groupby` import
+
+### Completed Items (November 15, 2025)
+- ✅ **Removed Database Unique Constraints** (COMPLETED - November 15, 2025)
+  - Created and applied Alembic migration `6eef45153a9d` to drop unique constraints
+  - Dropped `uq_user_transaction_hash` from `transactions` table
+  - Dropped `uq_user_investment_transaction_hash` from `investment_transactions` table
+  - Used SQLite batch mode for constraint modifications
+  - Tested duplicate detection with Amex parser - working correctly
+  - Duplicates now created with `needs_review=True` and "duplicate" tag
+
+- ✅ **Completed Ameriprise Investment Transaction Parser** (COMPLETED - November 15, 2025)
+  - Implemented table-based PDF parser using fixed column boundaries
+  - Supports both PDF and CSV formats
+  - Features implemented:
+    * Account number extraction from any page
+    * Normalized transaction types (BUY, SELL, DIVIDEND, INTEREST, FEE, TRANSFER, OTHER)
+    * Security type classification (STOCK/OPTION) for BUY/SELL only
+    * Symbol extraction (underlying ticker only)
+    * API symbol formatting (OCC format for options)
+    * Section boundary detection to parse only "Trade activity" section
+  - Column boundaries (PDF): Date(40-100), Transaction(100-190), Description(190-430), Symbol(430-550), Quantity(550-625), Price(625-705), Amount(705-761)
+  - Visual debugging script created with table boundary overlays
+  - Test results: 5 BUY transactions from PDF, 77 transactions from CSV
+  - File: `src/parser/ameriprise.py`
+
+- ✅ **Parser Folder Cleanup** (COMPLETED - November 15, 2025)
+  - Renamed `schwab_new.py` → `schwab.py` (removed `_new` suffix)
+  - Renamed `tdameritrade_new.py` → `tdameritrade.py` (removed `_new` suffix)
+  - Deleted old parser versions: `schwab_old.py`, `tdameritrade_old.py`
+  - Deleted unused parsers: `base.py`, `empower.py`, `fidelity.py`
+  - Updated `src/services/importer.py` to use renamed parsers
+  - Final active parsers: ameriprise, amex, amzn_syf, schwab, tdameritrade, tdbank
+
 ### Remaining Open Items
 1. **Audit all API endpoints to use UUIDs instead of db_ids in URL paths for security and consistency**
    - Need to examine: categories, tags, financial plans, budgets, debt, investments, transaction relationships
@@ -136,10 +186,10 @@ alembic revision --autogenerate -m "Initial database schema"
    - Keep db_ids internal for database relationships only
    - Update Postman collection after changes
 
-2. **Complete Remaining Investment Transaction Parsers** (NEARLY COMPLETE)
-   - ✅ Schwab parser (`src/parser/schwab_new.py`) - COMPLETED (October 26, 2025)
-   - ✅ TD Ameritrade parser (`src/parser/tdameritrade_new.py`) - COMPLETED (October 26, 2025)
-   - 🔄 Ameriprise parser (`src/parser/ameriprise.py`) - PENDING
+2. **Complete Remaining Investment Transaction Parsers** (ALL COMPLETE!)
+   - ✅ Schwab parser (`src/parser/schwab.py`) - COMPLETED (October 26, 2025)
+   - ✅ TD Ameritrade parser (`src/parser/tdameritrade.py`) - COMPLETED (October 26, 2025)
+   - ✅ Ameriprise parser (`src/parser/ameriprise.py`) - COMPLETED (November 15, 2025)
 
    **TD Ameritrade Parser - Table-Based Rewrite (October 12, 2025)**
 
@@ -448,118 +498,66 @@ alembic revision --autogenerate -m "Initial database schema"
    - `PARSER_DEVELOPMENT_GUIDE.md` - Comprehensive guide for creating new parsers
 
    **Remaining Tasks:**
-   1. ✅ Apply database migration: `alembic upgrade head`
-   2. Update CRUD layer to handle api_symbol (check `crud_investment.py`)
-   3. Update API models to include api_symbol (check `src/models/investment.py`)
-   4. Test end-to-end with upload endpoint
-   5. Verify EOD snapshot job uses api_symbol for price fetching
-   6. Deprecate or update old parsers (`schwab.py`, `tdameritrade.py`)
+   1. ✅ Apply database migration: `alembic upgrade head` (COMPLETED)
+   2. ✅ Update old parsers to new versions (COMPLETED - November 15, 2025)
+   3. ✅ Complete Ameriprise parser (COMPLETED - November 15, 2025)
+   4. Update CRUD layer to handle api_symbol (check `crud_investment.py`)
+   5. Update API models to include api_symbol (check `src/models/investment.py`)
+   6. Test end-to-end with upload endpoint
+   7. Verify EOD snapshot job uses api_symbol for price fetching
 
-   **Next Steps for Ameriprise:**
-   1. Use `PARSER_DEVELOPMENT_GUIDE.md` as reference for development
-   2. Locate sample files in `input/input/ameriprise/` or `input/ameriprise/`
-   3. Create table-based parser following same pattern as Schwab and TD Ameritrade
-   4. Implement all required features:
-      - Account number extraction
-      - Normalized transaction types (BUY, SELL, DIVIDEND, etc.)
-      - Security type classification (STOCK/OPTION)
-      - Symbol extraction (underlying ticker only)
-      - API symbol formatting (OCC for options)
-   5. Create visual debugging script to verify table boundaries
-   6. Create test script and validate all transactions
-   7. Test end-to-end with upload endpoint and holdings creation
-
-3. **Duplicate Detection Logic - ALL PARSERS** (CRITICAL ISSUE)
-
-   **Current Behavior (INCORRECT):**
-   - Parsers flag transactions as duplicates if they appear multiple times in the same statement
-   - Uses `_handle_investment_duplicates()` function to group by (date, type, symbol, description)
-   - Adds counter to description: "Description (2)", "Description (3)", etc.
-   - Sets `is_duplicate = True` for subsequent occurrences in same file
-
-   **Required Behavior:**
-   - **DO NOT flag duplicates based on transactions within the same statement**
-   - If transactions are in the same statement, they are NOT duplicates of each other
-   - **ONLY flag as duplicate if similar transaction already exists in the database**
-   - Duplicate detection should happen during database import, not during parsing
-   - This applies to BOTH PDF and CSV parsing
-
-   **Affected Parsers:**
-   - `src/parser/schwab.py` and `src/parser/schwab_new.py` ⚠️
-   - `src/parser/tdameritrade.py` and `src/parser/tdameritrade_new.py` ⚠️
-   - `src/parser/ameriprise.py` (when created)
-
-   **Status:** NEW parsers (`schwab_new.py`, `tdameritrade_new.py`) still have duplicate handling logic that needs removal.
-
-   **Implementation Changes Needed:**
-   1. Remove or refactor `_handle_investment_duplicates()` from all parsers
-   2. Keep transaction descriptions as-is (no "(2)", "(3)" counters)
-   3. Parsers should always set `is_duplicate = False`
-   4. Move duplicate detection to the transaction import/upload logic (in CRUD or router layer)
-   5. Check against database using transaction hash (user_id + date + type + amount + description)
-   6. Flag `needs_review = True` when matching transaction found in database
-
-   **Priority:** HIGH - Should be completed before production use to avoid incorrect duplicate flagging
-
-4. **Database Export/Import Functionality**
+3. **Database Export/Import Functionality**
    - Create script to export all database tables to CSV/JSON
    - Create upload endpoint or import method to populate new database from export
 
-5. **Logging Improvements**
+4. **Logging Improvements**
    - Replace print statements with proper logging infrastructure
    - Set up environment-based log level configuration
    - Create error logging table for non-compromising errors
    - Add structured logging with correlation IDs
    - Confirm CSV uploads don't duplicate existing statement transactions
 
-6. **Financial Plan Bulk Upload Endpoint**
+5. **Financial Plan Bulk Upload Endpoint**
    - Fix the bulk upload endpoint for financial plan entries (currently not working)
 
 ---
 
 ## Quick Reference: Immediate Next Steps
 
-### Investment Transaction Parsers (Last Updated: October 26, 2025)
+### Investment Transaction Parsers (Last Updated: November 15, 2025)
 
 **Status:**
-- ✅ Schwab parser - COMPLETE
-- ✅ TD Ameritrade parser - COMPLETE
-- 🔄 Ameriprise parser - TO BE CREATED
-- ⚠️ Duplicate detection - NEEDS REFACTORING (all parsers)
+- ✅ Schwab parser - COMPLETE (`src/parser/schwab.py`)
+- ✅ TD Ameritrade parser - COMPLETE (`src/parser/tdameritrade.py`)
+- ✅ Ameriprise parser - COMPLETE (`src/parser/ameriprise.py`)
+- ✅ Duplicate detection - COMPLETED (all parsers)
+- ✅ Database unique constraints - REMOVED
+- ✅ Parser cleanup - COMPLETED (removed `_new` suffixes, deleted old parsers)
+
+**Active Parsers:**
+- Investment Transactions: `ameriprise.py`, `schwab.py`, `tdameritrade.py`
+- Regular Transactions: `amex.py`, `amzn_syf.py`, `tdbank.py`
 
 **Immediate Actions Required:**
 
-1. **Apply Database Migration** (REQUIRED)
-   ```bash
-   venv/Scripts/python.exe -m alembic upgrade head
-   ```
-
-2. **Update CRUD Layer** (check `src/crud/crud_investment.py`)
+1. **Update CRUD Layer** (check `src/crud/crud_investment.py`)
    - Verify `api_symbol` field is being saved to database
    - Ensure all investment transaction creation uses new field
 
-3. **Update API Models** (check `src/models/investment.py`)
+2. **Update API Models** (check `src/models/investment.py`)
    - Add `api_symbol` field to request/response models
    - Test API endpoints return api_symbol
 
-4. **Remove Duplicate Detection from Parsers** (HIGH PRIORITY)
-   - Remove `_handle_investment_duplicates()` from:
-     * `src/parser/schwab_new.py`
-     * `src/parser/tdameritrade_new.py`
-   - Move duplicate detection to CRUD/router layer
-   - Check against database, not within statement
-
-5. **Create Ameriprise Parser** (when ready)
-   - Use `PARSER_DEVELOPMENT_GUIDE.md` as reference
-   - Follow same pattern as Schwab and TD Ameritrade
-   - Include all features: api_symbol, normalized types, security_type
-
-6. **Test End-to-End**
-   - Upload statements via API
+3. **Test End-to-End**
+   - Upload statements via API for all institutions
    - Verify holdings created correctly
    - Test EOD snapshot job with api_symbol for price fetching
+
+4. **Audit API Endpoints for UUID Usage**
+   - Review: categories, tags, financial plans, budgets, debt, investments, transaction relationships
+   - Ensure all public endpoints use UUIDs (not db_ids) in URL paths
 
 **Reference Documentation:**
 - Parser Development: `PARSER_DEVELOPMENT_GUIDE.md`
 - Progress Log: This file
-- Working Examples: `src/parser/schwab_new.py`, `src/parser/tdameritrade_new.py`
+- Working Examples: `src/parser/schwab.py`, `src/parser/tdameritrade.py`, `src/parser/ameriprise.py`

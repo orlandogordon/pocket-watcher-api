@@ -731,6 +731,7 @@ def bulk_create_transactions_from_parsed_data(
     created_transactions = []
     processed_hashes = set()
     duplicate_tag = None
+    duplicate_count = 0
 
     for t_data in transactions:
         try:
@@ -759,6 +760,7 @@ def bulk_create_transactions_from_parsed_data(
 
         processed_hashes.add(transaction_hash)
 
+        # Check if transaction already exists in database
         existing = (
             db.query(TransactionDB)
             .filter(
@@ -767,13 +769,15 @@ def bulk_create_transactions_from_parsed_data(
             )
             .first()
         )
-        if existing:
-            continue
 
+        # Flag for review if: no account specified OR duplicate found in database
         needs_review_flag = True if not account_id else False
-        is_duplicate = getattr(t_data, 'is_duplicate', False)
-        if is_duplicate:
+        is_duplicate = False
+        if existing:
             needs_review_flag = True
+            is_duplicate = True
+            duplicate_count += 1
+            logger.debug(f"Found duplicate transaction in database (will flag for review): {t_data.transaction_date} - {t_data.description}")
 
         db_transaction = TransactionDB(
             id=uuid4(),
@@ -790,7 +794,8 @@ def bulk_create_transactions_from_parsed_data(
             source_type=transaction_to_create.source_type,
             needs_review=needs_review_flag,
         )
-        
+
+        # Apply duplicate tag if duplicate found in database
         if is_duplicate:
             if duplicate_tag is None:
                 duplicate_tag = db.query(TagDB).filter(TagDB.user_id == user_id, TagDB.tag_name == "duplicate").first()
@@ -801,6 +806,9 @@ def bulk_create_transactions_from_parsed_data(
 
         db.add(db_transaction)
         created_transactions.append(db_transaction)
+
+    if duplicate_count > 0:
+        logger.info(f"Flagged {duplicate_count} duplicate transactions for review")
 
     if not created_transactions:
         return []

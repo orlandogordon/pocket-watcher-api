@@ -6,7 +6,6 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import List, Optional, Union, IO
 import io
-from itertools import groupby
 
 from src.parser.models import ParsedData, ParsedTransaction, ParsedAccountInfo
 from src.logging_config import get_logger
@@ -18,41 +17,6 @@ DATES = {
     'Jan': '01/', 'Feb': '02/', 'Mar': '03/', 'Apr': '04/', 'May': '05/', 'Jun': '06/', 
     'Jul': '07/', 'Aug': '08/', 'Sep': '09/', 'Oct': '10/', 'Nov': '11/', 'Dec': '12/'
 }
-
-def _handle_duplicates(transactions: List[ParsedTransaction]) -> List[ParsedTransaction]:
-    """
-    Handles duplicate transactions by appending a counter to the description.
-    """
-    updated_transactions = []
-    keyfunc = lambda t: (t.transaction_date, t.amount, t.description)
-    
-    sorted_transactions = sorted(transactions, key=keyfunc)
-
-    for key, group in groupby(sorted_transactions, key=keyfunc):
-        group_list = list(group)
-        if len(group_list) > 1:
-            # Duplicates found
-            for i, transaction in enumerate(group_list):
-                if i == 0:
-                    # First one is kept as is
-                    updated_transactions.append(transaction)
-                else:
-                    # Subsequent ones get a modified description
-                    new_description = f"{transaction.description} ({i + 1})"
-                    updated_transactions.append(
-                        ParsedTransaction(
-                            transaction_date=transaction.transaction_date,
-                            description=new_description,
-                            amount=transaction.amount,
-                            transaction_type=transaction.transaction_type,
-                            is_duplicate=True
-                        )
-                    )
-        else:
-            # No duplicates for this key
-            updated_transactions.append(group_list[0])
-            
-    return updated_transactions
 
 def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses a TD Bank PDF statement from a file path or in-memory stream."""
@@ -331,8 +295,6 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 logger.warning(f"Error parsing purchase: date={date_str}, amount={amount_str}, error={e}")
     
     logger.info(f"Successfully parsed {len(transactions)} transactions from TD Bank statement")
-    
-    transactions = _handle_duplicates(transactions)
 
     # Create account info
     account_info = None
@@ -386,9 +348,7 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
         text_stream.close()
     
     logger.info(f"Successfully parsed {len(parsed_transactions)} transactions from TD Bank CSV")
-    
-    parsed_transactions = _handle_duplicates(parsed_transactions)
-    
+
     return ParsedData(transactions=parsed_transactions, account_info=account_info)
 
 

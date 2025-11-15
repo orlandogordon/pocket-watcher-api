@@ -241,22 +241,23 @@ def bulk_create_investment_transactions_from_parsed_data(
             raise NotFoundError(f"Account with id {account_id} not found for this user.")
 
     created_transactions = []
-    skipped_duplicates = 0
+    duplicate_count = 0
 
     for t_data in transactions:
         # Generate transaction hash for deduplication
         transaction_hash = generate_investment_transaction_hash(t_data, user_id, institution_name)
 
-        # Check if transaction already exists
+        # Check if transaction already exists in database
         existing_transaction = db.query(InvestmentTransactionDB).filter(
             InvestmentTransactionDB.user_id == user_id,
             InvestmentTransactionDB.transaction_hash == transaction_hash
         ).first()
 
-        if existing_transaction:
-            logger.debug(f"Skipping duplicate investment transaction: {t_data.transaction_date} - {t_data.description}")
-            skipped_duplicates += 1
-            continue
+        # Flag as needing review if duplicate found in database
+        needs_review = existing_transaction is not None
+        if needs_review:
+            logger.debug(f"Found duplicate investment transaction in database (will flag for review): {t_data.transaction_date} - {t_data.description}")
+            duplicate_count += 1
 
         # Map the transaction type string to the enum FIRST
         transaction_type_enum = map_transaction_type_to_enum(t_data.transaction_type)
@@ -296,13 +297,13 @@ def bulk_create_investment_transactions_from_parsed_data(
             fees=None,  # Not currently parsed
             description=t_data.description,
             transaction_hash=transaction_hash,
-            needs_review=t_data.is_duplicate  # Flag transactions that were marked as duplicates by parser
+            needs_review=needs_review  # Flag if duplicate found in database
         )
         db.add(db_transaction)
         created_transactions.append(db_transaction)
 
-    if skipped_duplicates > 0:
-        logger.info(f"Skipped {skipped_duplicates} duplicate investment transactions")
+    if duplicate_count > 0:
+        logger.info(f"Flagged {duplicate_count} duplicate investment transactions for review")
 
     if not created_transactions:
         return []
