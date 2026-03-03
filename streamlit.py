@@ -1,25 +1,45 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.express as px
-from sklearn.preprocessing import MinMaxScaler
 
 st.set_page_config(page_title="Airline Health Dashboard", layout="wide")
 st.title("✈️ Airline Health Dashboard")
 
-# ── Data loader ────────────────────────────────────────────────────────────────
 @st.cache_data
-def load_data(uploaded_file):
-    df = pd.read_csv(uploaded_file, low_memory=False)
+def load_data():
+    df = pd.read_csv("DelayedFlights.csv", low_memory=False, nrows=200000)
     df.columns = df.columns.str.strip()
-    df["FL_DATE"] = pd.to_datetime(df["FL_DATE"], errors="coerce")
+
+    df["FL_DATE"] = pd.to_datetime(
+        df["Year"].astype(str) + "-" +
+        df["Month"].astype(str) + "-" +
+        df["DayofMonth"].astype(str),
+        errors="coerce"
+    )
+
+    df = df.rename(columns={
+        "UniqueCarrier": "OP_CARRIER",
+        "DepDelay":      "DEP_DELAY",
+        "ArrDelay":      "ARR_DELAY",
+        "Cancelled":     "CANCELLED",
+    })
+
+    df["DEP_DEL15"] = (df["DEP_DELAY"] > 15).astype(float)
+
     for col in ["DEP_DELAY", "ARR_DELAY", "CANCELLED", "DEP_DEL15"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
     df["OP_CARRIER"] = df["OP_CARRIER"].str.strip()
     return df
 
-# ── Health score ───────────────────────────────────────────────────────────────
+
+def minmax(series):
+    mn, mx = series.min(), series.max()
+    if mx == mn:
+        return series * 0
+    return (series - mn) / (mx - mn)
+
+
 def compute_health_scores(df, weights):
     grp = df.groupby("OP_CARRIER").agg(
         total_flights  = ("FL_DATE",   "count"),
@@ -31,11 +51,10 @@ def compute_health_scores(df, weights):
 
     grp["cancel_score"] = 1 - grp["cancel_rate"]
 
-    scaler = MinMaxScaler()
-    grp["on_time_norm"]  = scaler.fit_transform(grp[["on_time_pct"]])
-    grp["cancel_norm"]   = scaler.fit_transform(grp[["cancel_score"]])
-    grp["delay_norm"]    = 1 - scaler.fit_transform(grp[["avg_delay"]])
-    grp["recovery_norm"] = scaler.fit_transform(grp[["recovery_score"]])
+    grp["on_time_norm"]  = minmax(grp["on_time_pct"])
+    grp["cancel_norm"]   = minmax(grp["cancel_score"])
+    grp["delay_norm"]    = 1 - minmax(grp["avg_delay"])
+    grp["recovery_norm"] = minmax(grp["recovery_score"])
 
     total_w = sum(weights.values())
     grp["health_score"] = (
@@ -47,10 +66,8 @@ def compute_health_scores(df, weights):
 
     return grp
 
-# ── Sidebar ────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    uploaded = st.file_uploader("Upload BTS On-Time CSV", type=["csv"])
 
+with st.sidebar:
     st.markdown("### Score Weights")
     weights = {
         "on_time":  st.slider("On-Time Rate",        0.0, 1.0, 0.35, 0.05),
@@ -59,12 +76,7 @@ with st.sidebar:
         "recovery": st.slider("Delay Recovery",      0.0, 1.0, 0.15, 0.05),
     }
 
-if not uploaded:
-    st.info("Upload a BTS On-Time Performance CSV from the sidebar to get started.")
-    st.stop()
-
-# ── Load & score ───────────────────────────────────────────────────────────────
-df = load_data(uploaded)
+df = load_data()
 stats = compute_health_scores(df, weights).sort_values("health_score", ascending=False)
 
 # ── Fleet health bar chart ─────────────────────────────────────────────────────
@@ -106,7 +118,6 @@ c3.metric("On-Time Rate",  f"{row['on_time_pct']*100:.1f}%")
 c4.metric("Cancel Rate",   f"{row['cancel_rate']*100:.2f}%")
 c5.metric("Avg Dep Delay", f"{row['avg_delay']:.1f} min")
 
-# Weekly on-time trend
 carrier_df = df[df["OP_CARRIER"] == selected].copy()
 weekly = (
     carrier_df.set_index("FL_DATE")
