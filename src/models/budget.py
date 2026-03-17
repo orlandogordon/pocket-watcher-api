@@ -1,14 +1,17 @@
-from pydantic import BaseModel, Field, field_validator, computed_field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List
-from datetime import datetime, date
+from datetime import datetime
 from decimal import Decimal
+from uuid import UUID
 
 from src.models.category import CategoryResponse
 
-# ===== BUDGET PYDANTIC MODELS =====
 
-class BudgetCategoryCreate(BaseModel):
-    category_id: int = Field(..., description="The ID of the category")
+# ===== BUDGET TEMPLATE PYDANTIC MODELS =====
+
+class TemplateCategoryCreate(BaseModel):
+    category_uuid: UUID = Field(..., description="The UUID of the parent category")
+    subcategory_uuid: Optional[UUID] = Field(None, description="Optional UUID of the subcategory")
     allocated_amount: Decimal = Field(..., ge=0, description="Allocated budget amount")
 
     @field_validator('allocated_amount')
@@ -16,7 +19,8 @@ class BudgetCategoryCreate(BaseModel):
     def validate_allocated_amount(cls, v: Decimal) -> Decimal:
         return round(v, 2)
 
-class BudgetCategoryUpdate(BaseModel):
+
+class TemplateCategoryUpdate(BaseModel):
     allocated_amount: Decimal = Field(..., ge=0, description="Allocated budget amount")
 
     @field_validator('allocated_amount')
@@ -24,92 +28,90 @@ class BudgetCategoryUpdate(BaseModel):
     def validate_allocated_amount(cls, v: Decimal) -> Decimal:
         return round(v, 2)
 
-class BudgetCategoryResponse(BaseModel):
-    budget_category_id: int
-    budget_id: int
-    category_id: int
-    allocated_amount: Decimal
-    spent_amount: Optional[Decimal] = None
-    remaining_amount: Optional[Decimal] = None
-    percentage_used: Optional[float] = None
-    created_at: datetime
+
+class TemplateCategoryResponse(BaseModel):
+    id: UUID
     category: CategoryResponse
+    subcategory: Optional[CategoryResponse] = None
+    allocated_amount: Decimal
+    created_at: datetime
 
     class Config:
         from_attributes = True
 
-class BudgetCreate(BaseModel):
-    budget_name: str = Field(..., min_length=1, max_length=255, description="Budget name")
-    start_date: date = Field(..., description="Budget start date")
-    end_date: date = Field(..., description="Budget end date")
-    categories: List[BudgetCategoryCreate] = Field(..., min_items=1, description="Budget categories")
 
-    @field_validator('budget_name')
+class TemplateCreate(BaseModel):
+    template_name: str = Field(..., min_length=1, max_length=255, description="Template name")
+    is_default: bool = Field(False, description="Whether this is the default template")
+    categories: List[TemplateCategoryCreate] = Field(default_factory=list, description="Template categories")
+
+    @field_validator('template_name')
     @classmethod
-    def validate_budget_name(cls, v: str) -> str:
+    def validate_template_name(cls, v: str) -> str:
         return v.strip()
 
-    @field_validator('end_date')
-    @classmethod
-    def validate_end_date(cls, v: date, info) -> date:
-        if 'start_date' in info.data and v <= info.data['start_date']:
-            raise ValueError('end_date must be after start_date')
-        return v
 
-    @field_validator('categories')
-    @classmethod
-    def validate_categories(cls, v: List[BudgetCategoryCreate]) -> List[BudgetCategoryCreate]:
-        # Check for duplicate category IDs
-        category_ids = [cat.category_id for cat in v]
-        if len(category_ids) != len(set(category_ids)):
-            raise ValueError('Duplicate category IDs are not allowed')
-        return v
+class TemplateUpdate(BaseModel):
+    template_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    is_default: Optional[bool] = None
 
-class BudgetUpdate(BaseModel):
-    budget_name: Optional[str] = Field(None, min_length=1, max_length=255)
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
-
-    @field_validator('budget_name')
+    @field_validator('template_name')
     @classmethod
-    def validate_budget_name(cls, v: Optional[str]) -> Optional[str]:
+    def validate_template_name(cls, v: Optional[str]) -> Optional[str]:
         return v.strip() if v else v
 
-class BudgetResponse(BaseModel):
-    budget_id: int
-    budget_name: str
-    start_date: date
-    end_date: date
+
+class TemplateResponse(BaseModel):
+    id: UUID
+    template_name: str
+    is_default: bool
+    created_at: datetime
+    updated_at: datetime
+    categories: Optional[List[TemplateCategoryResponse]] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ===== BUDGET MONTH PYDANTIC MODELS =====
+
+class BudgetMonthUpdate(BaseModel):
+    template_uuid: Optional[UUID] = Field(None, description="UUID of the template to assign (null to unassign)")
+
+
+class BudgetMonthCategorySpending(BaseModel):
+    category: CategoryResponse
+    subcategory: Optional[CategoryResponse] = None
+    allocated_amount: Decimal
+    spent_amount: Decimal
+    remaining_amount: Decimal
+    percentage_used: float
+
+
+class BudgetMonthResponse(BaseModel):
+    id: UUID
+    year: int
+    month: int
+    template: Optional[TemplateResponse] = None
+    categories: Optional[List[BudgetMonthCategorySpending]] = None
     total_allocated: Optional[Decimal] = None
     total_spent: Optional[Decimal] = None
     total_remaining: Optional[Decimal] = None
     percentage_used: Optional[float] = None
-    is_active: Optional[bool] = None  # Whether budget period is current
     created_at: datetime
     updated_at: datetime
-    budget_categories: Optional[List[BudgetCategoryResponse]] = None
 
     class Config:
         from_attributes = True
 
-class BudgetSummary(BaseModel):
-    """Lightweight budget summary"""
-    budget_id: int
-    budget_name: str
-    start_date: date
-    end_date: date
-    total_allocated: Decimal
-    total_spent: Decimal
-    percentage_used: float
-    is_active: bool
 
-    class Config:
-        from_attributes = True
+# ===== STATS / PERFORMANCE =====
 
-class BudgetStats(BaseModel):
-    """Budget statistics and insights"""
-    budget_id: int
-    budget_name: str
+class BudgetMonthStats(BaseModel):
+    id: UUID
+    year: int
+    month: int
+    template_name: Optional[str] = None
     period_days: int
     days_remaining: int
     categories_count: int
@@ -122,15 +124,16 @@ class BudgetStats(BaseModel):
     daily_burn_rate: Decimal
     projected_total_spend: Decimal
 
-class BudgetPerformance(BaseModel):
-    """Budget performance analysis"""
-    budget_id: int
-    category_id: int
+
+class BudgetMonthPerformance(BaseModel):
+    category_uuid: UUID
     category_name: str
+    subcategory_uuid: Optional[UUID] = None
+    subcategory_name: Optional[str] = None
     allocated_amount: Decimal
     spent_amount: Decimal
     remaining_amount: Decimal
     percentage_used: float
-    status: str  # "over_budget", "on_track", "under_budget"
+    status: str
     daily_average: Decimal
     projected_spend: Decimal

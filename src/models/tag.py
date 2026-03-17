@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List
 from datetime import datetime
+from uuid import UUID
 
 
 # ===== TAG PYDANTIC MODELS =====
@@ -42,11 +43,11 @@ class TagUpdate(BaseModel):
 
 class TagResponse(BaseModel):
     """Tag data returned to client"""
-    tag_id: int
+    id: UUID
     tag_name: str
     color: Optional[str]
     created_at: datetime
-    transaction_count: Optional[int] = None  # Number of transactions with this tag
+    transaction_count: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -54,29 +55,39 @@ class TagResponse(BaseModel):
 
 class TransactionTagCreate(BaseModel):
     """Add tag to transaction"""
-    transaction_id: int = Field(..., description="Transaction DB ID")
-    tag_id: int = Field(..., description="Tag ID")
+    transaction_uuid: UUID = Field(..., description="Transaction UUID")
+    tag_uuid: UUID = Field(..., description="Tag UUID")
 
 
 class TransactionTagResponse(BaseModel):
     """Transaction-Tag relationship response"""
-    transaction_id: int
-    tag_id: int
+    transaction_uuid: UUID
+    tag_uuid: UUID
     created_at: datetime
 
     class Config:
         from_attributes = True
 
+    @model_validator(mode='before')
+    @classmethod
+    def resolve_uuids(cls, data):
+        if hasattr(data, '__dict__'):
+            if hasattr(data, 'transaction') and data.transaction:
+                data.__dict__['transaction_uuid'] = data.transaction.id
+            if hasattr(data, 'tag') and data.tag:
+                data.__dict__['tag_uuid'] = data.tag.id
+        return data
+
 
 class BulkTagRequest(BaseModel):
     """Bulk tag assignment request"""
-    transaction_ids: List[int] = Field(..., description="List of transaction DB IDs to tag")
-    tag_id: int = Field(..., description="Tag ID to apply to all transactions")
+    transaction_uuids: List[UUID] = Field(..., description="List of transaction UUIDs to tag")
+    tag_uuid: UUID = Field(..., description="Tag UUID to apply to all transactions")
 
 
 class TagStats(BaseModel):
     """Tag usage statistics"""
-    tag_id: int
+    id: UUID
     tag_name: str
     color: Optional[str]
     transaction_count: int

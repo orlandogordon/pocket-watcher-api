@@ -11,6 +11,7 @@ from .routers.tags import router as tags_router
 from .routers.debts import router as debts_router
 from .routers.uploads import router as uploads_router
 from .routers.account_history import router as account_history_router
+from .services.job_runner import recover_interrupted_jobs
 
 # Initialize logging
 setup_logging()
@@ -21,6 +22,19 @@ logger = get_logger(__name__)
 #     yield
 
 app = FastAPI()  # FastAPI(lifespan=lifespan)
+
+
+@app.on_event("startup")
+def startup_event():
+    """
+    Run startup tasks.
+
+    Mark interrupted backfill jobs as FAILED since threading jobs
+    don't survive server restarts.
+    """
+    logger.info("Running startup tasks...")
+    recover_interrupted_jobs()
+    logger.info("Startup complete")
 
 app.include_router(users_router)
 app.include_router(transactions_router)

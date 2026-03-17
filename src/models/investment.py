@@ -1,21 +1,35 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List
 from datetime import datetime, date
 from decimal import Decimal
 from enum import Enum
+from uuid import UUID
 
 
 # ===== ENUMS =====
+
+class SecurityTypeEnum(str, Enum):
+    STOCK = "STOCK"
+    ETF = "ETF"
+    MUTUAL_FUND = "MUTUAL_FUND"
+    OPTION = "OPTION"
+    FUTURE = "FUTURE"
+    BOND = "BOND"
+    CRYPTO = "CRYPTO"
 
 class InvestmentTransactionTypeEnum(str, Enum):
     BUY = "BUY"
     SELL = "SELL"
     DIVIDEND = "DIVIDEND"
     INTEREST = "INTEREST"
+    FEE = "FEE"
+    TRANSFER = "TRANSFER"
     SPLIT = "SPLIT"
     MERGER = "MERGER"
     SPINOFF = "SPINOFF"
     REINVESTMENT = "REINVESTMENT"
+    EXPIRATION = "EXPIRATION"
+    OTHER = "OTHER"
 
 
 # ===== INVESTMENT HOLDING PYDANTIC MODELS =====
@@ -32,46 +46,54 @@ class InvestmentHoldingBase(BaseModel):
             return round(v, 6)
         return v
 
-class InvestmentHoldingCreate(InvestmentHoldingBase):
-    account_id: int = Field(..., description="The account this holding belongs to")
-
 class InvestmentHoldingUpdate(BaseModel):
-    quantity: Optional[Decimal] = None
-    average_cost_basis: Optional[Decimal] = None
-
-    @field_validator('quantity', 'average_cost_basis')
-    @classmethod
-    def round_decimal_fields(cls, v: Optional[Decimal]) -> Optional[Decimal]:
-        if v is not None:
-            return round(v, 6)
-        return v
+    security_type: Optional[SecurityTypeEnum] = None
+    underlying_symbol: Optional[str] = Field(None, max_length=10)
+    option_type: Optional[str] = Field(None, max_length=4)
+    strike_price: Optional[Decimal] = None
+    expiration_date: Optional[date] = None
 
 class InvestmentHoldingResponse(InvestmentHoldingBase):
-    holding_id: int
-    account_id: int
+    id: UUID
+    account_uuid: UUID
     current_price: Optional[Decimal]
     last_price_update: Optional[datetime]
+    security_type: Optional[SecurityTypeEnum] = None
+    underlying_symbol: Optional[str] = None
+    option_type: Optional[str] = None
+    strike_price: Optional[Decimal] = None
+    expiration_date: Optional[date] = None
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
 
+    @model_validator(mode='before')
+    @classmethod
+    def resolve_uuids(cls, data):
+        if hasattr(data, '__dict__'):
+            if hasattr(data, 'account') and data.account:
+                data.__dict__['account_uuid'] = data.account.uuid
+        return data
+
 
 # ===== INVESTMENT TRANSACTION PYDANTIC MODELS =====
 
 class InvestmentTransactionBase(BaseModel):
     transaction_type: InvestmentTransactionTypeEnum
-    symbol: str = Field(..., max_length=20)
+    symbol: Optional[str] = Field(None, max_length=20)
     quantity: Optional[Decimal] = Field(None, description="Number of shares/units")
     price_per_share: Optional[Decimal] = Field(None, description="Price per share/unit")
     total_amount: Decimal = Field(..., description="Total transaction value")
     fees: Optional[Decimal] = Field(default=0.00)
+    security_type: Optional[SecurityTypeEnum] = None
     transaction_date: date
     description: Optional[str] = Field(None, max_length=500)
+    api_symbol: Optional[str] = Field(None, max_length=50, description="Symbol for yfinance API (OCC format for options)")
 
 class InvestmentTransactionCreate(InvestmentTransactionBase):
-    account_id: int
+    account_uuid: UUID
 
 class InvestmentTransactionBulkCreate(BaseModel):
     transactions: List[InvestmentTransactionCreate]
@@ -86,26 +108,35 @@ class InvestmentTransactionUpdate(BaseModel):
     description: Optional[str] = Field(None, max_length=500)
 
 class InvestmentTransactionBulkUpdate(BaseModel):
-    """
-    Model for bulk updating investment transactions.
-    """
-    transaction_ids: List[int] = Field(..., description="A list of investment transaction database IDs to update.")
-    account_id: Optional[int] = Field(None, description="Set a new account for all specified transactions.")
+    """Model for bulk updating investment transactions."""
+    transaction_uuids: List[UUID] = Field(..., description="A list of investment transaction UUIDs to update.")
+    account_uuid: Optional[UUID] = Field(None, description="Set a new account for all specified transactions.")
     description: Optional[str] = Field(None, max_length=500, description="Set a new description for all specified transactions.")
 
-    @field_validator('transaction_ids')
+    @field_validator('transaction_uuids')
     @classmethod
-    def validate_transaction_ids(cls, v: List[int]) -> List[int]:
+    def validate_transaction_uuids(cls, v: List[UUID]) -> List[UUID]:
         if not v:
-            raise ValueError("transaction_ids list cannot be empty.")
+            raise ValueError("transaction_uuids list cannot be empty.")
         return v
 
 class InvestmentTransactionResponse(InvestmentTransactionBase):
-    investment_transaction_id: int
-    account_id: int
-    holding_id: Optional[int]
+    id: UUID
+    account_uuid: UUID
+    holding_uuid: Optional[UUID] = None
+    cost_basis_at_sale: Optional[Decimal] = None
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+    @model_validator(mode='before')
+    @classmethod
+    def resolve_uuids(cls, data):
+        if hasattr(data, '__dict__'):
+            if hasattr(data, 'account') and data.account:
+                data.__dict__['account_uuid'] = data.account.uuid
+            if hasattr(data, 'holding') and data.holding:
+                data.__dict__['holding_uuid'] = data.holding.id
+        return data

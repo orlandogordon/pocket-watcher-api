@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import List, Optional, Union, IO
 import io
 
-from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo, SecurityType
+from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo, SecurityType, classify_security_type
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -112,9 +112,8 @@ def _classify_security_type(description: str, symbol: Optional[str], transaction
     if any(keyword in desc_upper for keyword in option_keywords):
         return SecurityType.OPTION
 
-    # If we have a symbol and it's a BUY/SELL transaction, assume it's a stock
-    # (unless we already identified it as an option above)
-    return SecurityType.STOCK
+    # Classify non-option securities (STOCK, ETF, MUTUAL_FUND)
+    return classify_security_type(symbol)
 
 
 def _extract_symbol(description: str, security_type: Optional[SecurityType]) -> Optional[str]:

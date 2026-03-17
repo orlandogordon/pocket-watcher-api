@@ -57,20 +57,21 @@ class UserDB(Base):
     accounts = relationship("AccountDB", back_populates="user")
     transactions = relationship("TransactionDB", back_populates="user")
     tags = relationship("TagDB", back_populates="user")
-    budgets = relationship("BudgetDB", back_populates="user")
+    budget_templates = relationship("BudgetTemplateDB", back_populates="user")
     debt_repayment_plans = relationship("DebtRepaymentPlanDB", back_populates="user")
     financial_plans = relationship("FinancialPlanDB", back_populates="user")
 
 
 class CategoryDB(Base):
     __tablename__ = "categories"
-    
+
     __table_args__ = (
         UniqueConstraint("name", name="uq_category_name"),
         Index("idx_category_name", "name"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     parent_category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
     
@@ -79,7 +80,7 @@ class CategoryDB(Base):
     children = relationship("CategoryDB", back_populates="parent")
 
     # Relationships to budget categories
-    budget_allocations = relationship("BudgetCategoryDB", back_populates="category")
+    budget_allocations = relationship("BudgetTemplateCategoryDB", foreign_keys="BudgetTemplateCategoryDB.category_id", back_populates="category")
 
     # Relationships to transactions (as primary and sub-category)
     primary_transactions = relationship("TransactionDB", foreign_keys="TransactionDB.category_id", back_populates="category")
@@ -101,10 +102,13 @@ class InvestmentTransactionType(enum.Enum):
     SELL = "SELL"
     DIVIDEND = "DIVIDEND"
     INTEREST = "INTEREST"
+    FEE = "FEE"
+    TRANSFER = "TRANSFER"
     SPLIT = "SPLIT"
     MERGER = "MERGER"
     SPINOFF = "SPINOFF"
     REINVESTMENT = "REINVESTMENT"
+    EXPIRATION = "EXPIRATION"
 
 
 class SourceType(enum.Enum):
@@ -117,7 +121,6 @@ class SourceType(enum.Enum):
 class RelationshipType(enum.Enum):
     OFFSETS = "OFFSETS"
     REFUNDS = "REFUNDS"
-    SPLITS = "SPLITS"
     FEES_FOR = "FEES_FOR"
     REVERSES = "REVERSES"
 
@@ -131,58 +134,91 @@ class AccountType(enum.Enum):
     OTHER = "OTHER"
 
 
-class BudgetDB(Base):
-    __tablename__ = "budgets"
-    
+class BudgetTemplateDB(Base):
+    __tablename__ = "budget_templates"
+
     __table_args__ = (
-        # Prevent duplicate budget names per user
-        UniqueConstraint("user_id", "budget_name", name="uq_user_budget_name"),
+        UniqueConstraint("user_id", "template_name", name="uq_user_template_name"),
     )
 
     # Primary Key
-    budget_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    
+    template_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+
     # Foreign Key
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
-    
-    # Budget Data
-    budget_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    start_date: Mapped[date] = mapped_column(Date, nullable=False)
-    end_date: Mapped[date] = mapped_column(Date, nullable=False)
-    
+
+    # Template Data
+    template_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # Audit Trail
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    user = relationship("UserDB", back_populates="budgets")
-    budget_categories = relationship("BudgetCategoryDB", back_populates="budget")
+    user = relationship("UserDB", back_populates="budget_templates")
+    categories = relationship("BudgetTemplateCategoryDB", back_populates="template", cascade="all, delete-orphan")
+    month_assignments = relationship("BudgetMonthDB", back_populates="template")
 
 
-class BudgetCategoryDB(Base):
-    __tablename__ = "budget_categories"
-    
+class BudgetTemplateCategoryDB(Base):
+    __tablename__ = "budget_template_categories"
+
     __table_args__ = (
-        # Prevent duplicate category allocations per budget
-        UniqueConstraint("budget_id", "category_id", name="uq_budget_category"),
+        UniqueConstraint("template_id", "category_id", "subcategory_id",
+                         name="uq_template_category_sub"),
     )
 
     # Primary Key
-    budget_category_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    
+    allocation_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+
     # Foreign Keys
-    budget_id: Mapped[int] = mapped_column(ForeignKey("budgets.budget_id"))
+    template_id: Mapped[int] = mapped_column(ForeignKey("budget_templates.template_id"))
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"))
-    
+    subcategory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
+
     # Budget Allocation
     allocated_amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
-    
+
     # Audit Trail
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Relationships
-    budget = relationship("BudgetDB", back_populates="budget_categories")
-    category = relationship("CategoryDB", back_populates="budget_allocations")
+    template = relationship("BudgetTemplateDB", back_populates="categories")
+    category = relationship("CategoryDB", foreign_keys=[category_id], back_populates="budget_allocations")
+    subcategory = relationship("CategoryDB", foreign_keys=[subcategory_id])
+
+
+class BudgetMonthDB(Base):
+    __tablename__ = "budget_months"
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "year", "month", name="uq_user_year_month"),
+        Index("idx_budget_months_user", "user_id"),
+        Index("idx_budget_months_template", "template_id"),
+    )
+
+    # Primary Key
+    month_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+
+    # Foreign Keys
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
+    template_id: Mapped[Optional[int]] = mapped_column(ForeignKey("budget_templates.template_id"))
+
+    # Month Data
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Audit Trail
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user = relationship("UserDB")
+    template = relationship("BudgetTemplateDB", back_populates="month_assignments")
 
 
 class InvestmentHoldingDB(Base):
@@ -199,6 +235,7 @@ class InvestmentHoldingDB(Base):
 
     # Primary Key
     holding_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
 
     # Foreign Key
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
@@ -210,7 +247,10 @@ class InvestmentHoldingDB(Base):
     current_price: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 4))  # latest market price
     last_price_update: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
-    # Options-specific fields (nullable for stocks)
+    # Security classification
+    security_type: Mapped[Optional[str]] = mapped_column(String(20))  # STOCK, ETF, MUTUAL_FUND, OPTION, FUTURE, BOND, CRYPTO
+
+    # Options-specific fields (nullable for non-options)
     underlying_symbol: Mapped[Optional[str]] = mapped_column(String(10))  # e.g., "AAPL" for option
     option_type: Mapped[Optional[str]] = mapped_column(String(4))  # "CALL" or "PUT"
     strike_price: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))  # e.g., 150.00
@@ -235,13 +275,13 @@ class InvestmentTransactionDB(Base):
         Index("idx_investment_transactions_holding", "holding_id"),
         Index("idx_investment_transactions_date", "transaction_date"),
         Index("idx_investment_transactions_type", "transaction_type"),
-
-        # Duplicate prevention
-        UniqueConstraint("user_id", "transaction_hash", name="uq_user_investment_transaction_hash"),
     )
 
-    # Primary Key
+    # Primary Key (internal)
     investment_transaction_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    # External-facing UUID (for API consistency with regular transactions)
+    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
 
     # Foreign Keys
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"), nullable=False)
@@ -253,7 +293,7 @@ class InvestmentTransactionDB(Base):
 
     # Transaction Data
     transaction_type: Mapped[InvestmentTransactionType] = mapped_column(Enum(InvestmentTransactionType))
-    symbol: Mapped[str] = mapped_column(String(20), nullable=False)  # Underlying ticker (e.g., "AAPL", "SPY")
+    symbol: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # Underlying ticker (e.g., "AAPL", "SPY"); NULL for non-share types
     api_symbol: Mapped[Optional[str]] = mapped_column(String(50))  # yfinance API format (OCC for options)
     quantity: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 6))  # shares/units (null for dividends)
     price_per_share: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 4))  # price per share/unit
@@ -264,8 +304,11 @@ class InvestmentTransactionDB(Base):
     # Description & Details
     description: Mapped[Optional[str]] = mapped_column(String(500))
 
-    # Processing
-    needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Security classification
+    security_type: Mapped[Optional[str]] = mapped_column(String(20))  # STOCK, ETF, MUTUAL_FUND, OPTION, FUTURE, BOND, CRYPTO
+
+    # Sale-specific fields
+    cost_basis_at_sale: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 4))  # Snapshot of avg cost basis at time of SELL
 
     # Audit Trail
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -290,7 +333,8 @@ class DebtPaymentDB(Base):
 
     # Primary Key
     payment_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    
+    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+
     # Foreign Keys
     loan_account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))  # The loan account
     payment_source_account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))  # Checking account used for payment
@@ -329,6 +373,7 @@ class DebtRepaymentPlanDB(Base):
     )
 
     plan_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
     plan_name: Mapped[str] = mapped_column(String(255), nullable=False)
     strategy: Mapped[DebtStrategy] = mapped_column(Enum(DebtStrategy), default=DebtStrategy.CUSTOM)
@@ -361,9 +406,10 @@ class DebtRepaymentScheduleDB(Base):
     )
 
     schedule_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
-    
+
     payment_month: Mapped[date] = mapped_column(Date, nullable=False)
     scheduled_payment_amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
     
@@ -373,16 +419,12 @@ class DebtRepaymentScheduleDB(Base):
 
 class TransactionDB(Base):
     __tablename__ = "transactions"
-    
+
     __table_args__ = (
         # Performance indexes for common queries
         Index("idx_transactions_user_date", "user_id", "transaction_date"),
-        Index("idx_transactions_user_account", "user_id", "account_id"), 
+        Index("idx_transactions_user_account", "user_id", "account_id"),
         Index("idx_transactions_date", "transaction_date"),
-        
-        # Duplicate prevention
-        UniqueConstraint("user_id", "transaction_hash", name="uq_user_transaction_hash"),
-        
     )
 
     # Core Transaction Identification
@@ -409,11 +451,7 @@ class TransactionDB(Base):
     comments: Mapped[Optional[str]] = mapped_column(Text)
 
     # Financial Institution Data
-    institution_name: Mapped[Optional[str]] = mapped_column(String(255))
     account_number_last4: Mapped[Optional[str]] = mapped_column(String(4))
-
-    # Processing
-    needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Audit Trail
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -426,11 +464,19 @@ class TransactionDB(Base):
     subcategory = relationship("CategoryDB", foreign_keys=[subcategory_id], back_populates="sub_transactions")
     
     # Relationship tables
-    relationship_from = relationship("TransactionRelationshipDB", foreign_keys="TransactionRelationshipDB.from_transaction_id", back_populates="from_transaction")
-    relationship_to = relationship("TransactionRelationshipDB", foreign_keys="TransactionRelationshipDB.to_transaction_id", back_populates="to_transaction")
-    
+    relationship_from = relationship("TransactionRelationshipDB", foreign_keys="TransactionRelationshipDB.from_transaction_id", back_populates="from_transaction", cascade="all, delete-orphan")
+    relationship_to = relationship("TransactionRelationshipDB", foreign_keys="TransactionRelationshipDB.to_transaction_id", back_populates="to_transaction", cascade="all, delete-orphan")
+
     # Tags relationship
-    transaction_tags = relationship("TransactionTagDB", back_populates="transaction")
+    transaction_tags = relationship("TransactionTagDB", back_populates="transaction", cascade="all, delete-orphan")
+
+    # Split allocations
+    split_allocations = relationship("TransactionSplitAllocationDB", back_populates="transaction",
+                                      cascade="all, delete-orphan")
+
+    # Amortization schedule
+    amortization_schedule = relationship("TransactionAmortizationScheduleDB", back_populates="transaction",
+                                          cascade="all, delete-orphan")
 
 
 class TransactionRelationshipDB(Base):
@@ -449,7 +495,8 @@ class TransactionRelationshipDB(Base):
 
     # Primary Key
     relationship_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    
+    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+
     # Foreign Keys
     from_transaction_id: Mapped[int] = mapped_column(ForeignKey("transactions.db_id"))
     to_transaction_id: Mapped[int] = mapped_column(ForeignKey("transactions.db_id"))
@@ -467,6 +514,51 @@ class TransactionRelationshipDB(Base):
     to_transaction = relationship("TransactionDB", foreign_keys=[to_transaction_id], back_populates="relationship_to")
 
 
+class TransactionSplitAllocationDB(Base):
+    __tablename__ = "transaction_split_allocations"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "transaction_id", "category_id", "subcategory_id",
+            name="uq_split_allocation_txn_cat_sub"
+        ),
+        Index("idx_split_alloc_transaction", "transaction_id"),
+        Index("idx_split_alloc_category", "category_id"),
+    )
+
+    allocation_id: Mapped[int]           = mapped_column(primary_key=True, autoincrement=True)
+    id:            Mapped[UUID]          = mapped_column(unique=True, nullable=False)
+    transaction_id: Mapped[int]          = mapped_column(ForeignKey("transactions.db_id"))
+    category_id:   Mapped[int]           = mapped_column(ForeignKey("categories.id"))
+    subcategory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
+    amount:        Mapped[Decimal]       = mapped_column(DECIMAL(15, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    transaction = relationship("TransactionDB", back_populates="split_allocations")
+    category    = relationship("CategoryDB", foreign_keys=[category_id])
+    subcategory = relationship("CategoryDB", foreign_keys=[subcategory_id])
+
+
+class TransactionAmortizationScheduleDB(Base):
+    __tablename__ = "transaction_amortization_schedules"
+
+    __table_args__ = (
+        UniqueConstraint("transaction_id", "month_date", name="uq_amortization_txn_month"),
+        Index("idx_amortization_transaction", "transaction_id"),
+        Index("idx_amortization_month", "month_date"),
+    )
+
+    schedule_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    transaction_id: Mapped[int] = mapped_column(ForeignKey("transactions.db_id"))
+    month_date: Mapped[date] = mapped_column(Date, nullable=False)
+    amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    transaction = relationship("TransactionDB", back_populates="amortization_schedule")
+
+
 class TagDB(Base):
     __tablename__ = "tags"
     
@@ -477,10 +569,11 @@ class TagDB(Base):
 
     # Primary Key
     tag_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    
+    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+
     # Foreign Key
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
-    
+
     # Tag Data
     tag_name: Mapped[str] = mapped_column(String(100), nullable=False)
     color: Mapped[Optional[str]] = mapped_column(String(7))  # Hex color code
@@ -518,6 +611,7 @@ class AccountDB(Base):
 
     # Core Account Identification
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
 
     # Account Details
@@ -531,6 +625,9 @@ class AccountDB(Base):
     minimum_payment: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))
     interest_rate: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(5, 4))  # e.g., 0.0525 for 5.25%
     interest_rate_type: Mapped[Optional[str]] = mapped_column(String(20))  # "FIXED" or "VARIABLE"
+
+    # Investment-specific fields (only used for INVESTMENT account types)
+    initial_cash_balance: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), default=0.00)  # Starting cash for transaction replay
 
     # Balance Tracking
     balance: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), default=0.00)
@@ -574,6 +671,7 @@ class AccountValueHistoryDB(Base):
 
     # Primary Key
     snapshot_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
 
     # Foreign Key
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
@@ -583,6 +681,8 @@ class AccountValueHistoryDB(Base):
     balance: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)  # Account value on this date
 
     # Investment-specific fields (nullable for non-investment accounts)
+    securities_value: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))  # Market value of holdings
+    cash_balance: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))  # Cash in account
     total_cost_basis: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))  # Total amount invested
     unrealized_gain_loss: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))  # Current value - cost basis
     realized_gain_loss: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))  # Gain/loss from sells
@@ -592,7 +692,14 @@ class AccountValueHistoryDB(Base):
     interest_paid_ytd: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))  # Interest paid this year
 
     # Metadata
-    snapshot_source: Mapped[str] = mapped_column(String(50), default="SYSTEM")  # SYSTEM, MANUAL, EOD_JOB, etc.
+    snapshot_source: Mapped[str] = mapped_column(String(50), default="MANUAL")  # MANUAL, SCHEDULED, BACKFILL
+
+    # Backfill audit trail
+    last_recalculated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    recalculation_count: Mapped[int] = mapped_column(Integer, default=0)
+    recalculation_reason: Mapped[Optional[str]] = mapped_column(String(255))
+    needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
+    review_reason: Mapped[Optional[str]] = mapped_column(String(255))
 
     # Audit Trail
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -609,6 +716,7 @@ class FinancialPlanDB(Base):
     )
 
     plan_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
     plan_name: Mapped[str] = mapped_column(String(255), nullable=False)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -627,6 +735,7 @@ class FinancialPlanMonthDB(Base):
         UniqueConstraint("plan_id", "year", "month", name="uq_plan_year_month"),
     )
     month_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     plan_id: Mapped[int] = mapped_column(ForeignKey("financial_plans.plan_id"))
     year: Mapped[int] = mapped_column(nullable=False)
     month: Mapped[int] = mapped_column(nullable=False)
@@ -641,6 +750,7 @@ class FinancialPlanExpenseDB(Base):
     __tablename__ = "financial_plan_expenses"
 
     expense_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     month_id: Mapped[int] = mapped_column(ForeignKey("financial_plan_months.month_id"))
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"))
     description: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -650,6 +760,148 @@ class FinancialPlanExpenseDB(Base):
 
     month = relationship("FinancialPlanMonthDB", back_populates="expenses")
     category = relationship("CategoryDB")
+
+    @property
+    def category_uuid(self):
+        return self.category.uuid if self.category else None
+
+
+class SnapshotBackfillJobDB(Base):
+    """
+    Tracks async backfill jobs that recalculate historical account snapshots.
+    Created when historical investment transactions are uploaded.
+    """
+    __tablename__ = "snapshot_backfill_jobs"
+
+    __table_args__ = (
+        Index("idx_backfill_jobs_account", "account_id"),
+        Index("idx_backfill_jobs_status", "status"),
+        Index("idx_backfill_jobs_created", "created_at"),
+    )
+
+    # Primary Key
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    # Foreign Keys
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+
+    # Job Parameters
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False)
+
+    # Job Status
+    status: Mapped[str] = mapped_column(String(20), nullable=False)  # PENDING, IN_PROGRESS, COMPLETED, FAILED, QUEUED
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+    # Results
+    snapshots_created: Mapped[int] = mapped_column(Integer, default=0)
+    snapshots_updated: Mapped[int] = mapped_column(Integer, default=0)
+    snapshots_failed: Mapped[int] = mapped_column(Integer, default=0)
+    snapshots_skipped: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Relationships
+    user = relationship("UserDB")
+    account = relationship("AccountDB")
+
+
+class UploadJobDB(Base):
+    """
+    Tracks statement upload jobs and their processing status.
+    Enables async processing with result tracking.
+    """
+    __tablename__ = "upload_jobs"
+
+    __table_args__ = (
+        Index("idx_upload_jobs_user", "user_id"),
+        Index("idx_upload_jobs_account", "account_id"),
+        Index("idx_upload_jobs_status", "status"),
+        Index("idx_upload_jobs_created", "created_at"),
+    )
+
+    # Primary Key
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    # Foreign Keys
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"), nullable=False)
+    account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))
+
+    # Upload Details
+    file_path: Mapped[Optional[str]] = mapped_column(String(500))  # S3 key, local path, or null if deleted
+    institution: Mapped[str] = mapped_column(String(100), nullable=False)
+    skip_duplicates: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # Job Status
+    status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)  # PENDING, PROCESSING, COMPLETED, FAILED
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Result Metrics
+    transactions_created: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    transactions_skipped: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    investment_transactions_created: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    investment_transactions_skipped: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+    # Relationships
+    user = relationship("UserDB")
+    account = relationship("AccountDB")
+    skipped_transactions = relationship("SkippedTransactionDB", back_populates="upload_job")
+
+
+class SkippedTransactionDB(Base):
+    """
+    Stores details of transactions that were skipped during upload due to being duplicates.
+    Preserves audit trail even if original transaction is deleted.
+    """
+    __tablename__ = "skipped_transactions"
+
+    __table_args__ = (
+        Index("idx_skipped_transactions_job", "upload_job_id"),
+        Index("idx_skipped_transactions_date", "parsed_date"),
+    )
+
+    # Primary Key
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    # Foreign Keys
+    upload_job_id: Mapped[int] = mapped_column(ForeignKey("upload_jobs.id"), nullable=False)
+
+    # Transaction Type
+    transaction_type: Mapped[str] = mapped_column(String(20), nullable=False)  # "REGULAR" or "INVESTMENT"
+
+    # Parsed Transaction Data (preserved for audit trail)
+    parsed_date: Mapped[date] = mapped_column(Date, nullable=False)
+    parsed_amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
+    parsed_description: Mapped[str] = mapped_column(Text, nullable=False)
+    parsed_transaction_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    parsed_symbol: Mapped[Optional[str]] = mapped_column(String(20))  # For investment transactions
+    parsed_quantity: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 6))  # For investment transactions
+    parsed_data_json: Mapped[Optional[str]] = mapped_column(JSON)  # Full parsed data as backup
+
+    # References to Existing Transactions (SET NULL on delete for audit preservation)
+    existing_transaction_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("transactions.id", ondelete="SET NULL")
+    )
+    existing_investment_transaction_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("investment_transactions.id", ondelete="SET NULL")
+    )
+
+    # Timestamp
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    upload_job = relationship("UploadJobDB", back_populates="skipped_transactions")
+    existing_transaction = relationship("TransactionDB", foreign_keys=[existing_transaction_id])
+    existing_investment_transaction = relationship("InvestmentTransactionDB", foreign_keys=[existing_investment_transaction_id])
 
 
 engine = create_engine(DATABASE_URL, echo=os.getenv("SQL_ECHO", "false").lower() == "true")

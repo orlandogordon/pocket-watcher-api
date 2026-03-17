@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from typing import Optional, List
 from datetime import datetime
 from decimal import Decimal
+from uuid import UUID, uuid4
 
 # Import your database models
 from src.db.core import AccountDB, UserDB, NotFoundError, AccountType
@@ -29,6 +30,7 @@ def create_db_account(db: Session, user_id: int, account_data: AccountCreate) ->
     
     # Create new account
     db_account = AccountDB(
+        uuid=uuid4(),
         user_id=user_id,
         account_name=account_data.account_name,
         account_type=AccountType(account_data.account_type.value),
@@ -144,8 +146,8 @@ def delete_db_account(db: Session, account_id: int, user_id: int) -> bool:
         raise ValueError("Cannot delete account with existing transactions")
     
     # Check if account has any investment holdings
-    if hasattr(db_account, 'investment_holdings') and db_account.investment_holdings:
-        raise ValueError("Cannot delete account with existing investment holdings")
+    if hasattr(db_account, 'investment_transactions') and db_account.investment_transactions:
+        raise ValueError("Cannot delete account with existing investment transactions")
     
     try:
         db.delete(db_account)
@@ -236,3 +238,81 @@ def get_db_account_by_last_four(db: Session, user_id: int, last_four: str) -> Ac
     if not account:
         raise NotFoundError(f"Account with last four digits {last_four} not found.")
     return account
+
+
+# ===== UUID-BASED OPERATIONS =====
+
+def read_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int) -> Optional[AccountDB]:
+    """Read an account by UUID, filtered by user ownership."""
+    return db.query(AccountDB).filter(
+        AccountDB.uuid == account_uuid,
+        AccountDB.user_id == user_id
+    ).first()
+
+
+def update_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int, account_updates: AccountUpdate) -> AccountDB:
+    """Update an existing account by UUID."""
+    db_account = db.query(AccountDB).filter(
+        AccountDB.uuid == account_uuid,
+        AccountDB.user_id == user_id
+    ).first()
+
+    if not db_account:
+        raise NotFoundError(f"Account not found")
+
+    # Check for account name uniqueness if name is being updated
+    if account_updates.account_name and account_updates.account_name != db_account.account_name:
+        existing_name = db.query(AccountDB).filter(
+            AccountDB.user_id == user_id,
+            AccountDB.account_name == account_updates.account_name,
+            AccountDB.id != db_account.id
+        ).first()
+        if existing_name:
+            raise ValueError(f"Account name '{account_updates.account_name}' already exists")
+
+    update_data = account_updates.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if field == 'account_type' and value:
+            setattr(db_account, field, AccountType(value.value))
+        elif field == 'balance' and value is not None:
+            setattr(db_account, field, value)
+            db_account.balance_last_updated = datetime.utcnow()
+        elif field == 'interest_rate_type' and value:
+            setattr(db_account, field, value.value)
+        else:
+            setattr(db_account, field, value)
+
+    db_account.updated_at = datetime.utcnow()
+
+    try:
+        db.commit()
+        db.refresh(db_account)
+        return db_account
+    except IntegrityError:
+        db.rollback()
+        raise ValueError("Account update failed due to database constraint")
+
+
+def delete_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int) -> bool:
+    """Delete an account by UUID (only if it has no transactions)."""
+    db_account = db.query(AccountDB).filter(
+        AccountDB.uuid == account_uuid,
+        AccountDB.user_id == user_id
+    ).first()
+
+    if not db_account:
+        raise NotFoundError(f"Account not found")
+
+    if db_account.transactions:
+        raise ValueError("Cannot delete account with existing transactions")
+
+    if hasattr(db_account, 'investment_transactions') and db_account.investment_transactions:
+        raise ValueError("Cannot delete account with existing investment transactions")
+
+    try:
+        db.delete(db_account)
+        db.commit()
+        return True
+    except Exception as e:
+        db.rollback()
+        raise ValueError(f"Failed to delete account: {str(e)}")

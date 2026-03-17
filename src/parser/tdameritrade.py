@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import List, Optional, Union, IO
 
-from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo, SecurityType
+from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo, SecurityType, classify_security_type
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -56,6 +56,10 @@ def _normalize_transaction_type(transaction_type: str, description: str) -> str:
     if "funds disbursed" in txn_lower or "ach out" in desc_lower:
         return "TRANSFER"
 
+    # Expirations
+    if "expir" in txn_lower or "expi" in desc_lower:
+        return "EXPIRATION"
+
     # Fees
     if "fee" in txn_lower:
         return "FEE"
@@ -94,6 +98,10 @@ def _classify_security_type(transaction_type: str, description: str) -> Security
         else:
             # Default to interest if we can't determine from description
             return SecurityType.INTEREST
+
+    # Check for expirations — always options
+    if "expir" in txn_type_lower or "expi" in desc_lower:
+        return SecurityType.OPTION
 
     # Check for fees and adjustments
     if "fee" in txn_type_lower:
@@ -226,17 +234,6 @@ def _format_api_symbol(symbol: str, description: str, security_type: Optional[Se
     # If no option pattern found, return None
     logger.warning(f"Option transaction but could not format API symbol from: {description[:100]}")
     return None
-
-def _extract_symbol_from_description(desc: str) -> Optional[str]:
-    """
-    DEPRECATED: Old symbol extraction function. Use _extract_symbol() instead.
-    Extract symbol from description (first all-caps word 1-5 chars)
-    """
-    if not desc:
-        return None
-    # Look for all-caps ticker symbols (1-5 letters)
-    match = re.search(r'\b([A-Z]{1,5})\b', desc)
-    return match.group(1) if match else None
 
 def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses a TD Ameritrade PDF statement using table-based extraction."""
@@ -451,10 +448,13 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 # Extract symbol based on security type
                 symbol = _extract_symbol(description, temp_security_type)
 
-                # Only set security_type for BUY/SELL transactions
+                # Set security_type for BUY/SELL/EXPIRATION transactions
                 security_type = None
-                if transaction_type in ["BUY", "SELL"] and symbol:
-                    security_type = temp_security_type
+                if transaction_type in ["BUY", "SELL", "EXPIRATION"] and symbol:
+                    if temp_security_type == SecurityType.OPTION:
+                        security_type = SecurityType.OPTION
+                    else:
+                        security_type = classify_security_type(symbol)
 
                 # Format API symbol for yfinance
                 api_symbol = _format_api_symbol(symbol, description, security_type) if symbol else None
@@ -475,16 +475,19 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                         pass
 
                 # Parse amount (handle parentheses for negative)
+                # Expirations have no cash impact, so allow amount=0
                 if not amount_str or amount_str == '-':
-                    skip_reasons["no_amount"] += 1
-                    logger.warning(f"Row {row_idx} skipped - no amount. Date: {trade_date_str}, Desc: {description[:50]}, Amount column: '{amount_str}'")
-                    continue
-
-                amount_str = amount_str.replace(',', '').replace('$', '')
-                if '(' in amount_str:
-                    amount_str = '-' + amount_str.replace('(', '').replace(')', '')
-
-                clean_amount = Decimal(amount_str)
+                    if transaction_type == "EXPIRATION":
+                        clean_amount = Decimal('0')
+                    else:
+                        skip_reasons["no_amount"] += 1
+                        logger.warning(f"Row {row_idx} skipped - no amount. Date: {trade_date_str}, Desc: {description[:50]}, Amount column: '{amount_str}'")
+                        continue
+                else:
+                    amount_str = amount_str.replace(',', '').replace('$', '')
+                    if '(' in amount_str:
+                        amount_str = '-' + amount_str.replace('(', '').replace(')', '')
+                    clean_amount = Decimal(amount_str)
 
                 investment_transactions.append(
                     ParsedInvestmentTransaction(
@@ -520,3 +523,12 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
         logger.info(f"Successfully parsed {len(investment_transactions)} investment transactions from TD Ameritrade statement")
 
     return ParsedData(account_info=account_info, investment_transactions=investment_transactions)
+
+def parse(file_source: Union[Path, IO[bytes]], is_csv: bool = False) -> ParsedData:
+    """
+    Main entry point for parsing TD Ameritrade statements.
+    Currently only supports PDF format.
+    """
+    if is_csv:
+        raise NotImplementedError("TD Ameritrade CSV parsing is not yet implemented. Please use PDF statements.")
+    return parse_statement(file_source)

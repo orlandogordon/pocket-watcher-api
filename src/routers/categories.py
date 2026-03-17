@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
+from uuid import UUID
 
 from src.crud import crud_category
 from src.models import category as category_models
@@ -25,8 +26,15 @@ def create_category(
     """
     Create a new global category. (Admin only)
     """
+    # Resolve parent_category_uuid to int ID
+    parent_category_id = None
+    if category.parent_category_uuid is not None:
+        parent = crud_category.read_db_category_by_uuid(db, category.parent_category_uuid)
+        if not parent:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parent category not found")
+        parent_category_id = parent.id
     try:
-        return crud_category.create_db_category(db=db, category_data=category)
+        return crud_category.create_db_category(db=db, category_data=category, parent_category_id=parent_category_id)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -41,22 +49,26 @@ def read_categories(
     """
     return crud_category.read_db_categories(db=db, skip=skip, limit=limit)
 
-@router.get("/{category_id}", response_model=category_models.CategoryResponse)
+@router.get("/{category_uuid}", response_model=category_models.CategoryResponse)
 def read_category(
-    category_id: int,
+    category_uuid: str,
     db: Session = Depends(get_db)
 ):
     """
-    Retrieve a specific category by its ID.
+    Retrieve a specific category by its UUID.
     """
-    db_category = crud_category.read_db_category(db=db, category_id=category_id)
+    try:
+        parsed_uuid = UUID(category_uuid)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid UUID format")
+    db_category = crud_category.read_db_category_by_uuid(db=db, category_uuid=parsed_uuid)
     if db_category is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
     return db_category
 
-@router.put("/{category_id}", response_model=category_models.CategoryResponse)
+@router.put("/{category_uuid}", response_model=category_models.CategoryResponse)
 def update_category(
-    category_id: int,
+    category_uuid: str,
     category: category_models.CategoryUpdate,
     db: Session = Depends(get_db),
     admin: dict = Depends(get_admin_user) # Protect this endpoint
@@ -65,23 +77,49 @@ def update_category(
     Update a category's name or parent. (Admin only)
     """
     try:
-        return crud_category.update_db_category(db=db, category_id=category_id, category_updates=category)
+        parsed_uuid = UUID(category_uuid)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid UUID format")
+
+    # Resolve parent_category_uuid if provided
+    from src.crud.crud_category import _UNSET
+    parent_category_id = _UNSET
+    update_data = category.model_dump(exclude_unset=True)
+    if 'parent_category_uuid' in update_data:
+        if category.parent_category_uuid is not None:
+            parent = crud_category.read_db_category_by_uuid(db, category.parent_category_uuid)
+            if not parent:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parent category not found")
+            parent_category_id = parent.id
+        else:
+            parent_category_id = None  # Explicitly setting to None (removing parent)
+
+    try:
+        return crud_category.update_db_category_by_uuid(db=db, category_uuid=parsed_uuid, category_updates=category, parent_category_id=parent_category_id)
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-@router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{category_uuid}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_category(
-    category_id: int,
+    category_uuid: str,
+    force: bool = False,
     db: Session = Depends(get_db),
     admin: dict = Depends(get_admin_user) # Protect this endpoint
 ):
     """
     Delete a global category. (Admin only)
+
+    Use ?force=true to remove all references (budget allocations, transaction categories,
+    financial plan expenses) and reassign child categories before deleting.
     """
     try:
-        crud_category.delete_db_category(db=db, category_id=category_id)
+        parsed_uuid = UUID(category_uuid)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid UUID format")
+    try:
+        crud_category.delete_db_category_by_uuid(db=db, category_uuid=parsed_uuid, force=force)
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except ValueError as e:

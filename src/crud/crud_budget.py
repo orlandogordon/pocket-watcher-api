@@ -1,567 +1,759 @@
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import and_, or_, desc, asc, func
-from typing import Optional, List, Dict, Any
+from sqlalchemy import and_, or_
+from typing import Optional, List, Dict, Tuple
 from datetime import datetime, date
 from decimal import Decimal
-from uuid import uuid4
+from uuid import uuid4, UUID
+from calendar import monthrange
 
-# Import your database models
-from src.db.core import BudgetDB, BudgetCategoryDB, UserDB, TransactionDB, NotFoundError, TransactionType, CategoryDB
-from src.models.budget import BudgetCreate, BudgetUpdate, BudgetCategoryCreate, BudgetCategoryUpdate, BudgetStats, BudgetPerformance
+from src.db.core import (
+    BudgetTemplateDB, BudgetTemplateCategoryDB, BudgetMonthDB,
+    UserDB, TransactionDB, NotFoundError, TransactionType, CategoryDB,
+    TransactionSplitAllocationDB, TransactionAmortizationScheduleDB,
+)
+from src.models.budget import (
+    TemplateCreate, TemplateUpdate, TemplateCategoryCreate, TemplateCategoryUpdate,
+    BudgetMonthUpdate,
+)
+from src.crud.crud_transaction import get_refund_adjustments
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
-# ===== DATABASE OPERATIONS =====
+# ===== TEMPLATE OPERATIONS =====
 
-def create_db_budget(db: Session, user_id: int, budget_data: BudgetCreate) -> BudgetDB:
-    """Create a new budget with categories"""
-    
-    # Verify user exists
+def create_template(db: Session, user_id: int, data: TemplateCreate,
+                    *, resolved_category_ids: Optional[Dict[UUID, int]] = None) -> BudgetTemplateDB:
     user = db.query(UserDB).filter(UserDB.db_id == user_id).first()
     if not user:
         raise NotFoundError(f"User with id {user_id} not found")
-    
-    # Check for duplicate budget name for this user
-    existing_budget = db.query(BudgetDB).filter(
-        BudgetDB.user_id == user_id,
-        BudgetDB.budget_name.ilike(budget_data.budget_name.strip())
+
+    existing = db.query(BudgetTemplateDB).filter(
+        BudgetTemplateDB.user_id == user_id,
+        BudgetTemplateDB.template_name.ilike(data.template_name.strip())
     ).first()
-    if existing_budget:
-        raise ValueError(f"Budget with name '{budget_data.budget_name}' already exists")
-    
-    # Create new budget
-    db_budget = BudgetDB(
+    if existing:
+        raise ValueError(f"Template with name '{data.template_name}' already exists")
+
+    template = BudgetTemplateDB(
+        id=uuid4(),
         user_id=user_id,
-        budget_name=budget_data.budget_name.strip(),
-        start_date=budget_data.start_date,
-        end_date=budget_data.end_date,
+        template_name=data.template_name.strip(),
+        is_default=data.is_default,
         created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        updated_at=datetime.utcnow(),
     )
-    
-    try:
-        db.add(db_budget)
-        db.flush()  # Get the budget_id without committing
-        
-        # Create budget categories
-        for category_data in budget_data.categories:
-            # Verify category exists
-            category = db.query(CategoryDB).filter(CategoryDB.id == category_data.category_id).first()
-            if not category:
-                raise NotFoundError(f"Category with id {category_data.category_id} not found")
 
-            db_category = BudgetCategoryDB(
-                budget_id=db_budget.budget_id,
-                category_id=category_data.category_id,
-                allocated_amount=category_data.allocated_amount,
-                created_at=datetime.utcnow()
-            )
-            db.add(db_category)
-        
+    try:
+        # If marking as default, clear any existing default
+        if data.is_default:
+            _clear_default_template(db, user_id)
+
+        db.add(template)
+        db.flush()
+
+        # Add categories
+        if data.categories and resolved_category_ids:
+            _add_template_categories(db, template, data.categories, resolved_category_ids)
+
         db.commit()
-        db.refresh(db_budget)
-        return db_budget
+        db.refresh(template)
+        return template
     except IntegrityError:
         db.rollback()
-        raise ValueError("Budget creation failed due to database constraint")
+        raise ValueError("Template creation failed due to database constraint")
 
 
-def read_db_budget(db: Session, budget_id: int, user_id: Optional[int] = None, 
-                   include_categories: bool = True, include_spending: bool = True) -> Optional[BudgetDB]:
-    """Read a budget by ID with optional spending calculations"""
-    
-    query = db.query(BudgetDB).filter(BudgetDB.budget_id == budget_id)
-    
-    if user_id:
-        query = query.filter(BudgetDB.user_id == user_id)
-
-    # Eager load categories and their nested category details
-    query = query.options(joinedload(BudgetDB.budget_categories).joinedload(BudgetCategoryDB.category))
-    
-    budget = query.first()
-    
-    if budget and include_spending:
-        # Calculate spending for each category
-        for category_item in budget.budget_categories:
-            spent = calculate_category_spending(db, budget, category_item.category_id)
-            category_item.spent_amount = spent
-            category_item.remaining_amount = category_item.allocated_amount - spent
-            if category_item.allocated_amount > 0:
-                category_item.percentage_used = float(spent / category_item.allocated_amount * 100)
-            else:
-                category_item.percentage_used = 0.0
-    
-    return budget
-
-
-def read_db_budgets(db: Session, user_id: int, skip: int = 0, limit: int = 100, 
-                   include_spending: bool = False, active_only: bool = False) -> List[BudgetDB]:
-    """Read all budgets for a user"""
-    
-    query = db.query(BudgetDB).filter(BudgetDB.user_id == user_id)
-    
-    if active_only:
-        current_date = date.today()
-        query = query.filter(
-            BudgetDB.start_date <= current_date,
-            BudgetDB.end_date >= current_date
+def read_template(db: Session, template_uuid: UUID, user_id: int) -> Optional[BudgetTemplateDB]:
+    return (
+        db.query(BudgetTemplateDB)
+        .filter(BudgetTemplateDB.id == template_uuid, BudgetTemplateDB.user_id == user_id)
+        .options(
+            joinedload(BudgetTemplateDB.categories).joinedload(BudgetTemplateCategoryDB.category),
+            joinedload(BudgetTemplateDB.categories).joinedload(BudgetTemplateCategoryDB.subcategory),
         )
-    
-    query = query.order_by(desc(BudgetDB.start_date))
-    query = query.options(joinedload(BudgetDB.budget_categories).joinedload(BudgetCategoryDB.category))
-    budgets = query.offset(skip).limit(limit).all()
-    
-    if include_spending:
-        for budget in budgets:
-            budget.total_allocated = sum(cat.allocated_amount for cat in budget.budget_categories)
-            budget.total_spent = sum(calculate_category_spending(db, budget, cat.category_id) 
-                                   for cat in budget.budget_categories)
-            budget.total_remaining = budget.total_allocated - budget.total_spent
-            if budget.total_allocated > 0:
-                budget.percentage_used = float(budget.total_spent / budget.total_allocated * 100)
-            else:
-                budget.percentage_used = 0.0
-            
-            # Check if budget is currently active
-            current_date = date.today()
-            budget.is_active = budget.start_date <= current_date <= budget.end_date
-    
-    return budgets
-
-
-def update_db_budget(db: Session, budget_id: int, user_id: int, budget_updates: BudgetUpdate) -> BudgetDB:
-    """Update an existing budget"""
-    
-    # Get the existing budget
-    db_budget = db.query(BudgetDB).filter(
-        BudgetDB.budget_id == budget_id,
-        BudgetDB.user_id == user_id
-    ).first()
-    
-    if not db_budget:
-        raise NotFoundError(f"Budget with id {budget_id} not found")
-    
-    # Check for duplicate budget name if name is being updated
-    update_data = budget_updates.model_dump(exclude_unset=True)
-    if 'budget_name' in update_data:
-        existing_budget = db.query(BudgetDB).filter(
-            BudgetDB.user_id == user_id,
-            BudgetDB.budget_name.ilike(update_data['budget_name'].strip()),
-            BudgetDB.budget_id != budget_id
-        ).first()
-        if existing_budget:
-            raise ValueError(f"Budget with name '{update_data['budget_name']}' already exists")
-    
-    # Validate date range if both dates are being updated
-    if 'start_date' in update_data and 'end_date' in update_data:
-        if update_data['end_date'] <= update_data['start_date']:
-            raise ValueError("end_date must be after start_date")
-    elif 'start_date' in update_data:
-        if update_data['start_date'] >= db_budget.end_date:
-            raise ValueError("start_date must be before current end_date")
-    elif 'end_date' in update_data:
-        if update_data['end_date'] <= db_budget.start_date:
-            raise ValueError("end_date must be after current start_date")
-    
-    # Update the budget
-    for field, value in update_data.items():
-        setattr(db_budget, field, value)
-    
-    db_budget.updated_at = datetime.utcnow()
-    
-    try:
-        db.commit()
-        db.refresh(db_budget)
-        return db_budget
-    except IntegrityError:
-        db.rollback()
-        raise ValueError("Budget update failed due to database constraint")
-
-
-def delete_db_budget(db: Session, budget_id: int, user_id: int) -> bool:
-    """Delete a budget and all its categories"""
-    
-    db_budget = db.query(BudgetDB).filter(
-        BudgetDB.budget_id == budget_id,
-        BudgetDB.user_id == user_id
-    ).first()
-    
-    if not db_budget:
-        raise NotFoundError(f"Budget with id {budget_id} not found")
-    
-    try:
-        # First delete all budget categories
-        db.query(BudgetCategoryDB).filter(BudgetCategoryDB.budget_id == budget_id).delete()
-        
-        # Then delete the budget
-        db.delete(db_budget)
-        db.commit()
-        return True
-    except Exception as e:
-        db.rollback()
-        raise ValueError(f"Failed to delete budget: {str(e)}")
-
-
-def add_budget_category(db: Session, budget_id: int, user_id: int, category_data: BudgetCategoryCreate) -> BudgetCategoryDB:
-    """Add a category to an existing budget"""
-    
-    # Verify budget belongs to user
-    budget = db.query(BudgetDB).filter(
-        BudgetDB.budget_id == budget_id,
-        BudgetDB.user_id == user_id
-    ).first()
-    if not budget:
-        raise NotFoundError(f"Budget with id {budget_id} not found")
-    
-    # Check for duplicate category in this budget
-    existing_category = db.query(BudgetCategoryDB).filter(
-        BudgetCategoryDB.budget_id == budget_id,
-        BudgetCategoryDB.category_id == category_data.category_id
-    ).first()
-    if existing_category:
-        raise ValueError(f"Category ID '{category_data.category_id}' already exists in this budget")
-    
-    # Create new category
-    db_category = BudgetCategoryDB(
-        budget_id=budget_id,
-        category_id=category_data.category_id,
-        allocated_amount=category_data.allocated_amount,
-        created_at=datetime.utcnow()
+        .first()
     )
-    
-    try:
-        db.add(db_category)
-        db.commit()
-        db.refresh(db_category)
-        return db_category
-    except IntegrityError:
-        db.rollback()
-        raise ValueError("Budget category creation failed due to database constraint")
 
 
-def update_budget_category(db: Session, budget_category_id: int, user_id: int, 
-                          category_updates: BudgetCategoryUpdate) -> BudgetCategoryDB:
-    """Update a budget category"""
-    
-    # Get the existing category and verify user owns the budget
-    db_category = db.query(BudgetCategoryDB).join(BudgetDB).filter(
-        BudgetCategoryDB.budget_category_id == budget_category_id,
-        BudgetDB.user_id == user_id
+def read_templates(db: Session, user_id: int, skip: int = 0, limit: int = 100) -> List[BudgetTemplateDB]:
+    return (
+        db.query(BudgetTemplateDB)
+        .filter(BudgetTemplateDB.user_id == user_id)
+        .options(
+            joinedload(BudgetTemplateDB.categories).joinedload(BudgetTemplateCategoryDB.category),
+            joinedload(BudgetTemplateDB.categories).joinedload(BudgetTemplateCategoryDB.subcategory),
+        )
+        .order_by(BudgetTemplateDB.template_name)
+        .offset(skip).limit(limit)
+        .all()
+    )
+
+
+def update_template(db: Session, template_uuid: UUID, user_id: int,
+                     updates: TemplateUpdate) -> BudgetTemplateDB:
+    template = db.query(BudgetTemplateDB).filter(
+        BudgetTemplateDB.id == template_uuid, BudgetTemplateDB.user_id == user_id
     ).first()
-    
-    if not db_category:
-        raise NotFoundError(f"Budget category with id {budget_category_id} not found")
-    
-    # Update the category
-    update_data = category_updates.model_dump(exclude_unset=True)
+    if not template:
+        raise NotFoundError("Template not found")
+
+    update_data = updates.model_dump(exclude_unset=True)
+
+    if 'template_name' in update_data:
+        existing = db.query(BudgetTemplateDB).filter(
+            BudgetTemplateDB.user_id == user_id,
+            BudgetTemplateDB.template_name.ilike(update_data['template_name'].strip()),
+            BudgetTemplateDB.template_id != template.template_id,
+        ).first()
+        if existing:
+            raise ValueError(f"Template with name '{update_data['template_name']}' already exists")
+
+    if update_data.get('is_default'):
+        _clear_default_template(db, user_id, exclude_id=template.template_id)
+
     for field, value in update_data.items():
-        setattr(db_category, field, value)
-    
+        setattr(template, field, value)
+    template.updated_at = datetime.utcnow()
+
     try:
         db.commit()
-        db.refresh(db_category)
-        return db_category
+        db.refresh(template)
+        return template
     except IntegrityError:
         db.rollback()
-        raise ValueError("Budget category update failed due to database constraint")
+        raise ValueError("Template update failed due to database constraint")
 
 
-def delete_budget_category(db: Session, budget_category_id: int, user_id: int) -> bool:
-    """Delete a budget category"""
-    
-    # Get the existing category and verify user owns the budget
-    db_category = db.query(BudgetCategoryDB).join(BudgetDB).filter(
-        BudgetCategoryDB.budget_category_id == budget_category_id,
-        BudgetDB.user_id == user_id
+def delete_template(db: Session, template_uuid: UUID, user_id: int) -> bool:
+    template = db.query(BudgetTemplateDB).filter(
+        BudgetTemplateDB.id == template_uuid, BudgetTemplateDB.user_id == user_id
     ).first()
-    
-    if not db_category:
-        raise NotFoundError(f"Budget category with id {budget_category_id} not found")
-    
+    if not template:
+        raise NotFoundError("Template not found")
+
+    # Unassign from any months using this template
+    db.query(BudgetMonthDB).filter(
+        BudgetMonthDB.template_id == template.template_id
+    ).update({BudgetMonthDB.template_id: None})
+
+    db.delete(template)  # cascade deletes categories
+    db.commit()
+    return True
+
+
+# ===== TEMPLATE CATEGORY OPERATIONS =====
+
+def add_template_category(db: Session, template_uuid: UUID, user_id: int,
+                           data: TemplateCategoryCreate,
+                           *, category_id: int,
+                           subcategory_id: Optional[int] = None) -> BudgetTemplateCategoryDB:
+    template = db.query(BudgetTemplateDB).filter(
+        BudgetTemplateDB.id == template_uuid, BudgetTemplateDB.user_id == user_id
+    ).first()
+    if not template:
+        raise NotFoundError("Template not found")
+
+    # Validate subcategory belongs to parent
+    if subcategory_id:
+        _validate_subcategory(db, category_id, subcategory_id)
+
+    # Check for duplicate
+    existing = db.query(BudgetTemplateCategoryDB).filter(
+        BudgetTemplateCategoryDB.template_id == template.template_id,
+        BudgetTemplateCategoryDB.category_id == category_id,
+        BudgetTemplateCategoryDB.subcategory_id == subcategory_id,
+    ).first()
+    if existing:
+        raise ValueError("This category allocation already exists in the template")
+
+    # Envelope validation: subcategory allocations must not exceed parent
+    if subcategory_id:
+        _validate_envelope(db, template.template_id, category_id, data.allocated_amount)
+
+    alloc = BudgetTemplateCategoryDB(
+        id=uuid4(),
+        template_id=template.template_id,
+        category_id=category_id,
+        subcategory_id=subcategory_id,
+        allocated_amount=data.allocated_amount,
+        created_at=datetime.utcnow(),
+    )
+
     try:
-        db.delete(db_category)
+        db.add(alloc)
         db.commit()
-        return True
-    except Exception as e:
+        db.refresh(alloc)
+        return alloc
+    except IntegrityError:
         db.rollback()
-        raise ValueError(f"Failed to delete budget category: {str(e)}")
+        raise ValueError("Template category creation failed due to database constraint")
 
 
-def calculate_category_spending(db: Session, budget: BudgetDB, category_id: int) -> Decimal:
-    """Calculate total spending for a category within budget period"""
-    
-    result = db.query(func.coalesce(func.sum(TransactionDB.amount), 0)).filter(
-        TransactionDB.user_id == budget.user_id,
-        TransactionDB.category_id == category_id,
-        TransactionDB.transaction_date >= budget.start_date,
-        TransactionDB.transaction_date <= budget.end_date,
-        TransactionDB.transaction_type.in_([
-            TransactionType.PURCHASE,
-            TransactionType.WITHDRAWAL,
-            TransactionType.FEE
-        ])
-    ).scalar()
-    
-    return abs(Decimal(str(result))) if result else Decimal('0.00')
+def update_template_category(db: Session, allocation_uuid: UUID, user_id: int,
+                              updates: TemplateCategoryUpdate) -> BudgetTemplateCategoryDB:
+    alloc = (
+        db.query(BudgetTemplateCategoryDB)
+        .join(BudgetTemplateDB)
+        .filter(BudgetTemplateCategoryDB.id == allocation_uuid, BudgetTemplateDB.user_id == user_id)
+        .first()
+    )
+    if not alloc:
+        raise NotFoundError("Template category not found")
+
+    # Envelope validation
+    if alloc.subcategory_id:
+        _validate_envelope(db, alloc.template_id, alloc.category_id,
+                          updates.allocated_amount, exclude_allocation_id=alloc.allocation_id)
+    else:
+        # Updating a parent allocation — ensure it's still >= sum of subcategory allocations
+        sub_sum = _subcategory_sum(db, alloc.template_id, alloc.category_id)
+        if updates.allocated_amount < sub_sum:
+            raise ValueError(
+                f"Parent allocation ({updates.allocated_amount}) cannot be less than "
+                f"sum of subcategory allocations ({sub_sum})"
+            )
+
+    alloc.allocated_amount = updates.allocated_amount
+
+    try:
+        db.commit()
+        db.refresh(alloc)
+        return alloc
+    except IntegrityError:
+        db.rollback()
+        raise ValueError("Template category update failed due to database constraint")
 
 
-def get_budget_stats(db: Session, budget_id: int, user_id: int) -> BudgetStats:
-    """Get detailed budget statistics"""
-    
-    budget = read_db_budget(db, budget_id, user_id)
-    
-    if not budget:
-        raise NotFoundError(f"Budget with id {budget_id} not found")
-    
+def delete_template_category(db: Session, allocation_uuid: UUID, user_id: int) -> bool:
+    alloc = (
+        db.query(BudgetTemplateCategoryDB)
+        .join(BudgetTemplateDB)
+        .filter(BudgetTemplateCategoryDB.id == allocation_uuid, BudgetTemplateDB.user_id == user_id)
+        .first()
+    )
+    if not alloc:
+        raise NotFoundError("Template category not found")
+
+    # If deleting a parent allocation, also delete its subcategory allocations
+    if alloc.subcategory_id is None:
+        db.query(BudgetTemplateCategoryDB).filter(
+            BudgetTemplateCategoryDB.template_id == alloc.template_id,
+            BudgetTemplateCategoryDB.category_id == alloc.category_id,
+            BudgetTemplateCategoryDB.subcategory_id.isnot(None),
+        ).delete()
+
+    db.delete(alloc)
+    db.commit()
+    return True
+
+
+# ===== BUDGET MONTH OPERATIONS =====
+
+def get_or_create_budget_month(db: Session, user_id: int, year: int, month: int) -> BudgetMonthDB:
+    """Get-or-create a budget month entry. Auto-assigns the default template if one exists."""
+    if month < 1 or month > 12:
+        raise ValueError("Month must be between 1 and 12")
+
+    budget_month = db.query(BudgetMonthDB).filter(
+        BudgetMonthDB.user_id == user_id,
+        BudgetMonthDB.year == year,
+        BudgetMonthDB.month == month,
+    ).first()
+
+    if budget_month:
+        return budget_month
+
+    # Find user's default template
+    default_template = db.query(BudgetTemplateDB).filter(
+        BudgetTemplateDB.user_id == user_id,
+        BudgetTemplateDB.is_default == True,
+    ).first()
+
+    budget_month = BudgetMonthDB(
+        id=uuid4(),
+        user_id=user_id,
+        template_id=default_template.template_id if default_template else None,
+        year=year,
+        month=month,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.add(budget_month)
+    db.commit()
+    db.refresh(budget_month)
+    return budget_month
+
+
+def update_budget_month(db: Session, user_id: int, year: int, month: int,
+                         updates: BudgetMonthUpdate,
+                         *, resolved_template_id: Optional[int] = None) -> BudgetMonthDB:
+    """Update a budget month's template assignment."""
+    budget_month = get_or_create_budget_month(db, user_id, year, month)
+
+    if updates.template_uuid is None:
+        budget_month.template_id = None
+    else:
+        budget_month.template_id = resolved_template_id
+
+    budget_month.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(budget_month)
+    return budget_month
+
+
+def list_budget_months(db: Session, user_id: int,
+                        start_year: Optional[int] = None, start_month: Optional[int] = None,
+                        end_year: Optional[int] = None, end_month: Optional[int] = None) -> List[BudgetMonthDB]:
+    """List existing budget months for a user (does NOT auto-create)."""
+    query = db.query(BudgetMonthDB).filter(BudgetMonthDB.user_id == user_id)
+
+    if start_year and start_month:
+        query = query.filter(
+            (BudgetMonthDB.year > start_year) |
+            ((BudgetMonthDB.year == start_year) & (BudgetMonthDB.month >= start_month))
+        )
+    if end_year and end_month:
+        query = query.filter(
+            (BudgetMonthDB.year < end_year) |
+            ((BudgetMonthDB.year == end_year) & (BudgetMonthDB.month <= end_month))
+        )
+
+    return query.order_by(BudgetMonthDB.year.desc(), BudgetMonthDB.month.desc()).all()
+
+
+# ===== SPENDING CALCULATION =====
+
+def _month_date_range(year: int, month: int) -> Tuple[date, date]:
+    """Get the first and last day of a given month."""
+    start = date(year, month, 1)
+    _, last_day = monthrange(year, month)
+    end = date(year, month, last_day)
+    return start, end
+
+
+def calculate_category_spending(db: Session, user_id: int, year: int, month: int,
+                                 category_id: int,
+                                 subcategory_id: Optional[int] = None) -> Decimal:
+    """Calculate total spending for a category (optionally subcategory) within a calendar month.
+    Accounts for refund/offset/reversal relationships by adjusting effective amounts."""
+
+    start_date, end_date = _month_date_range(year, month)
+
+    # Build category filter for transactions
+    def _txn_category_filter(query):
+        if subcategory_id is not None:
+            return query.filter(
+                TransactionDB.category_id == category_id,
+                TransactionDB.subcategory_id == subcategory_id,
+            )
+        return query.filter(TransactionDB.category_id == category_id)
+
+    expense_txns = _txn_category_filter(
+        db.query(TransactionDB.db_id, TransactionDB.amount)
+        .filter(
+            TransactionDB.user_id == user_id,
+            TransactionDB.transaction_date >= start_date,
+            TransactionDB.transaction_date <= end_date,
+            TransactionDB.transaction_type.in_([
+                TransactionType.PURCHASE,
+                TransactionType.WITHDRAWAL,
+                TransactionType.FEE,
+            ]),
+        )
+    ).all()
+
+    if not expense_txns:
+        # Still check amortization allocations from transactions outside this period
+        amort_query = (
+            db.query(TransactionAmortizationScheduleDB)
+            .join(TransactionDB, TransactionAmortizationScheduleDB.transaction_id == TransactionDB.db_id)
+            .filter(
+                TransactionDB.user_id == user_id,
+                TransactionAmortizationScheduleDB.month_date >= start_date,
+                TransactionAmortizationScheduleDB.month_date <= end_date,
+            )
+        )
+        amort_query = _txn_category_filter(amort_query)
+        amort_allocs_only = amort_query.all()
+        return sum(a.amount for a in amort_allocs_only)
+
+    txn_ids = [t.db_id for t in expense_txns]
+    adjustments, absorbed_ids = get_refund_adjustments(db, user_id, txn_ids)
+
+    # Find amortized transactions
+    amortized_txn_ids = set(
+        row[0] for row in
+        db.query(TransactionAmortizationScheduleDB.transaction_id)
+        .filter(TransactionAmortizationScheduleDB.transaction_id.in_(txn_ids))
+        .distinct()
+        .all()
+    )
+
+    total = Decimal('0.00')
+    for txn in expense_txns:
+        if txn.db_id in absorbed_ids:
+            continue
+        if txn.db_id in amortized_txn_ids:
+            continue
+        effective = abs(txn.amount) - adjustments.get(txn.db_id, Decimal('0.00'))
+        total += max(effective, Decimal('0.00'))
+
+    # Amortization allocations for this category within the month
+    amort_query = (
+        db.query(
+            TransactionAmortizationScheduleDB.amount,
+            TransactionAmortizationScheduleDB.transaction_id,
+            TransactionDB.amount.label("txn_amount"),
+        )
+        .join(TransactionDB, TransactionAmortizationScheduleDB.transaction_id == TransactionDB.db_id)
+        .filter(
+            TransactionDB.user_id == user_id,
+            TransactionAmortizationScheduleDB.month_date >= start_date,
+            TransactionAmortizationScheduleDB.month_date <= end_date,
+        )
+    )
+    amort_query = _txn_category_filter(amort_query)
+    amort_allocs = amort_query.all()
+
+    if amort_allocs:
+        amort_txn_ids_list = list(set(a[1] for a in amort_allocs))
+        amort_adjustments, amort_absorbed = get_refund_adjustments(db, user_id, amort_txn_ids_list)
+
+        for alloc_amount, txn_db_id, txn_amount in amort_allocs:
+            if txn_db_id in amort_absorbed:
+                continue
+            adj = amort_adjustments.get(txn_db_id, Decimal('0.00'))
+            if adj and txn_amount:
+                ratio = 1 - adj / abs(txn_amount)
+                effective = max(alloc_amount * ratio, Decimal('0.00'))
+            else:
+                effective = alloc_amount
+            total += effective
+
+    # Split allocations
+    split_query = (
+        db.query(
+            TransactionSplitAllocationDB.amount,
+            TransactionDB.db_id,
+            TransactionDB.amount.label("txn_amount"),
+        )
+        .join(TransactionDB, TransactionSplitAllocationDB.transaction_id == TransactionDB.db_id)
+        .filter(
+            TransactionDB.user_id == user_id,
+            TransactionSplitAllocationDB.category_id == category_id,
+            TransactionDB.transaction_date >= start_date,
+            TransactionDB.transaction_date <= end_date,
+            TransactionDB.transaction_type.in_([
+                TransactionType.PURCHASE,
+                TransactionType.WITHDRAWAL,
+                TransactionType.FEE,
+            ]),
+        )
+    )
+    if subcategory_id is not None:
+        split_query = split_query.filter(
+            TransactionSplitAllocationDB.subcategory_id == subcategory_id
+        )
+    split_allocs = split_query.all()
+
+    if split_allocs:
+        split_txn_ids = list(set(sa[1] for sa in split_allocs))
+        split_adjustments, split_absorbed = get_refund_adjustments(db, user_id, split_txn_ids)
+
+        for alloc_amount, txn_db_id, txn_amount in split_allocs:
+            if txn_db_id in split_absorbed:
+                continue
+            adj = split_adjustments.get(txn_db_id, Decimal('0.00'))
+            if adj and txn_amount:
+                ratio = 1 - adj / txn_amount
+                effective = max(alloc_amount * ratio, Decimal('0.00'))
+            else:
+                effective = alloc_amount
+            total += effective
+
+    return total
+
+
+def get_budget_month_with_spending(db: Session, user_id: int, year: int, month: int) -> dict:
+    """Get a budget month with its template allocations and calculated spending."""
+    budget_month = get_or_create_budget_month(db, user_id, year, month)
+
+    # Load template with categories if assigned
+    template = None
+    categories_spending = []
+    total_allocated = Decimal('0.00')
+    total_spent = Decimal('0.00')
+
+    if budget_month.template_id:
+        template = (
+            db.query(BudgetTemplateDB)
+            .filter(BudgetTemplateDB.template_id == budget_month.template_id)
+            .options(
+                joinedload(BudgetTemplateDB.categories).joinedload(BudgetTemplateCategoryDB.category),
+                joinedload(BudgetTemplateDB.categories).joinedload(BudgetTemplateCategoryDB.subcategory),
+            )
+            .first()
+        )
+
+        if template:
+            for alloc in template.categories:
+                spent = calculate_category_spending(
+                    db, user_id, year, month,
+                    alloc.category_id, alloc.subcategory_id
+                )
+                remaining = alloc.allocated_amount - spent
+                pct = float(spent / alloc.allocated_amount * 100) if alloc.allocated_amount > 0 else 0.0
+
+                categories_spending.append({
+                    "category": alloc.category,
+                    "subcategory": alloc.subcategory,
+                    "allocated_amount": alloc.allocated_amount,
+                    "spent_amount": spent,
+                    "remaining_amount": remaining,
+                    "percentage_used": pct,
+                })
+                total_allocated += alloc.allocated_amount
+                total_spent += spent
+
+    return {
+        "id": budget_month.id,
+        "year": budget_month.year,
+        "month": budget_month.month,
+        "template": template,
+        "categories": categories_spending,
+        "total_allocated": total_allocated,
+        "total_spent": total_spent,
+        "total_remaining": total_allocated - total_spent,
+        "percentage_used": float(total_spent / total_allocated * 100) if total_allocated > 0 else 0.0,
+        "created_at": budget_month.created_at,
+        "updated_at": budget_month.updated_at,
+    }
+
+
+def get_budget_month_stats(db: Session, user_id: int, year: int, month: int) -> dict:
+    """Get detailed stats for a budget month."""
+    data = get_budget_month_with_spending(db, user_id, year, month)
+
+    start_date, end_date = _month_date_range(year, month)
+    period_days = (end_date - start_date).days + 1
     current_date = date.today()
-    period_days = (budget.end_date - budget.start_date).days + 1
-    
-    if current_date > budget.end_date:
+
+    if current_date > end_date:
         days_remaining = 0
-    elif current_date < budget.start_date:
+    elif current_date < start_date:
         days_remaining = period_days
     else:
-        days_remaining = (budget.end_date - current_date).days + 1
-    
-    categories_over_budget = 0
+        days_remaining = (end_date - current_date).days + 1
+
+    categories_over = 0
     categories_on_track = 0
-    categories_under_budget = 0
+    categories_under = 0
     biggest_overspend_amount = Decimal('0.00')
     biggest_overspend_category = None
     most_efficient_category = None
     most_efficient_ratio = 0.0
-    
-    total_allocated = Decimal('0.00')
-    total_spent = Decimal('0.00')
-    
-    for category_item in budget.budget_categories:
-        spent = category_item.spent_amount # Already calculated in read_db_budget
-        total_allocated += category_item.allocated_amount
-        total_spent += spent
-        
-        overspend = spent - category_item.allocated_amount
+
+    for cat in data["categories"]:
+        spent = cat["spent_amount"]
+        allocated = cat["allocated_amount"]
+        overspend = spent - allocated
         if overspend > 0:
-            categories_over_budget += 1
+            categories_over += 1
             if overspend > biggest_overspend_amount:
                 biggest_overspend_amount = overspend
-                biggest_overspend_category = category_item.category.name
+                biggest_overspend_category = cat["category"].name
         elif spent == Decimal('0.00'):
-            categories_under_budget += 1
-        elif category_item.allocated_amount > 0:
-            usage_ratio = float(spent / category_item.allocated_amount)
-            if 0.8 <= usage_ratio <= 1.0:  # 80-100% usage considered "on track"
+            categories_under += 1
+        elif allocated > 0:
+            usage_ratio = float(spent / allocated)
+            if 0.8 <= usage_ratio <= 1.0:
                 categories_on_track += 1
                 if usage_ratio > most_efficient_ratio:
                     most_efficient_ratio = usage_ratio
-                    most_efficient_category = category_item.category.name
+                    most_efficient_category = cat["category"].name
             else:
-                categories_under_budget += 1
-    
-    # Calculate daily burn rate and projections
-    days_elapsed = max(1, (min(current_date, budget.end_date) - budget.start_date).days + 1)
+                categories_under += 1
+
+    days_elapsed = max(1, (min(current_date, end_date) - start_date).days + 1)
+    total_spent = data["total_spent"]
     daily_burn_rate = total_spent / days_elapsed if days_elapsed > 0 else Decimal('0.00')
     projected_total_spend = daily_burn_rate * period_days
-    
-    return BudgetStats(
-        budget_id=budget.budget_id,
-        budget_name=budget.budget_name,
-        period_days=period_days,
-        days_remaining=days_remaining,
-        categories_count=len(budget.budget_categories),
-        categories_over_budget=categories_over_budget,
-        categories_on_track=categories_on_track,
-        categories_under_budget=categories_under_budget,
-        biggest_overspend_category=biggest_overspend_category,
-        biggest_overspend_amount=biggest_overspend_amount if biggest_overspend_category else None,
-        most_efficient_category=most_efficient_category,
-        daily_burn_rate=daily_burn_rate,
-        projected_total_spend=projected_total_spend
-    )
+
+    return {
+        "id": data["id"],
+        "year": year,
+        "month": month,
+        "template_name": data["template"].template_name if data["template"] else None,
+        "period_days": period_days,
+        "days_remaining": days_remaining,
+        "categories_count": len(data["categories"]),
+        "categories_over_budget": categories_over,
+        "categories_on_track": categories_on_track,
+        "categories_under_budget": categories_under,
+        "biggest_overspend_category": biggest_overspend_category,
+        "biggest_overspend_amount": biggest_overspend_amount if biggest_overspend_category else None,
+        "most_efficient_category": most_efficient_category,
+        "daily_burn_rate": daily_burn_rate,
+        "projected_total_spend": projected_total_spend,
+    }
 
 
-def get_budget_performance(db: Session, budget_id: int, user_id: int) -> List[BudgetPerformance]:
-    """Get performance analysis for all categories in a budget"""
-    
-    budget = read_db_budget(db, budget_id, user_id)
-    
-    if not budget:
-        raise NotFoundError(f"Budget with id {budget_id} not found")
-    
+def get_budget_month_performance(db: Session, user_id: int, year: int, month: int) -> List[dict]:
+    """Get performance breakdown for each allocation in a budget month."""
+    data = get_budget_month_with_spending(db, user_id, year, month)
+
+    start_date, end_date = _month_date_range(year, month)
+    period_days = (end_date - start_date).days + 1
     current_date = date.today()
-    period_days = (budget.end_date - budget.start_date).days + 1
-    days_elapsed = max(1, (min(current_date, budget.end_date) - budget.start_date).days + 1)
-    
-    performance_list = []
-    
-    for category_item in budget.budget_categories:
-        spent = category_item.spent_amount # Already calculated
-        remaining = category_item.remaining_amount # Already calculated
-        percentage_used = category_item.percentage_used # Already calculated
-        
-        # Determine status
-        if spent > category_item.allocated_amount:
+    days_elapsed = max(1, (min(current_date, end_date) - start_date).days + 1)
+
+    results = []
+    for cat in data["categories"]:
+        spent = cat["spent_amount"]
+        allocated = cat["allocated_amount"]
+        remaining = cat["remaining_amount"]
+        pct = cat["percentage_used"]
+
+        if spent > allocated:
             status = "over_budget"
-        elif percentage_used >= 80:
+        elif pct >= 80:
             status = "on_track"
         else:
             status = "under_budget"
-        
+
         daily_average = spent / days_elapsed if days_elapsed > 0 else Decimal('0.00')
         projected_spend = daily_average * period_days
-        
-        performance_list.append(BudgetPerformance(
-            budget_id=budget.budget_id,
-            category_id=category_item.category_id,
-            category_name=category_item.category.name,
-            allocated_amount=category_item.allocated_amount,
-            spent_amount=spent,
-            remaining_amount=remaining,
-            percentage_used=percentage_used,
-            status=status,
-            daily_average=daily_average,
-            projected_spend=projected_spend
-        ))
-    
-    return performance_list
+
+        result = {
+            "category_uuid": cat["category"].uuid,
+            "category_name": cat["category"].name,
+            "allocated_amount": allocated,
+            "spent_amount": spent,
+            "remaining_amount": remaining,
+            "percentage_used": pct,
+            "status": status,
+            "daily_average": daily_average,
+            "projected_spend": projected_spend,
+        }
+        if cat["subcategory"]:
+            result["subcategory_uuid"] = cat["subcategory"].uuid
+            result["subcategory_name"] = cat["subcategory"].name
+
+        results.append(result)
+
+    return results
 
 
-def get_active_budgets(db: Session, user_id: int) -> List[BudgetDB]:
-    """Get all currently active budgets for a user"""
-    
-    current_date = date.today()
-    
-    return db.query(BudgetDB).filter(
-        BudgetDB.user_id == user_id,
-        BudgetDB.start_date <= current_date,
-        BudgetDB.end_date >= current_date
-    ).order_by(BudgetDB.budget_name).all()
+# ===== HELPERS =====
+
+def _clear_default_template(db: Session, user_id: int, exclude_id: Optional[int] = None):
+    """Clear the is_default flag on all templates for a user."""
+    query = db.query(BudgetTemplateDB).filter(
+        BudgetTemplateDB.user_id == user_id,
+        BudgetTemplateDB.is_default == True,
+    )
+    if exclude_id:
+        query = query.filter(BudgetTemplateDB.template_id != exclude_id)
+    query.update({BudgetTemplateDB.is_default: False})
 
 
-def get_budget_by_category_id(db: Session, user_id: int, category_id: int, 
-                               target_date: Optional[date] = None) -> Optional[BudgetDB]:
-    """Find the active budget that contains a specific category ID"""
-    
-    if target_date is None:
-        target_date = date.today()
-    
-    budget = db.query(BudgetDB).join(BudgetCategoryDB).filter(
-        BudgetDB.user_id == user_id,
-        BudgetDB.start_date <= target_date,
-        BudgetDB.end_date >= target_date,
-        BudgetCategoryDB.category_id == category_id
+def _validate_subcategory(db: Session, parent_category_id: int, subcategory_id: int):
+    """Validate that a subcategory belongs to the given parent category."""
+    sub = db.query(CategoryDB).filter(CategoryDB.id == subcategory_id).first()
+    if not sub:
+        raise NotFoundError("Subcategory not found")
+    if sub.parent_category_id != parent_category_id:
+        raise ValueError("Subcategory does not belong to the specified parent category")
+
+
+def _subcategory_sum(db: Session, template_id: int, category_id: int,
+                     exclude_allocation_id: Optional[int] = None) -> Decimal:
+    """Sum of all subcategory allocations for a given parent category in a template."""
+    query = db.query(BudgetTemplateCategoryDB).filter(
+        BudgetTemplateCategoryDB.template_id == template_id,
+        BudgetTemplateCategoryDB.category_id == category_id,
+        BudgetTemplateCategoryDB.subcategory_id.isnot(None),
+    )
+    if exclude_allocation_id:
+        query = query.filter(BudgetTemplateCategoryDB.allocation_id != exclude_allocation_id)
+    return sum(a.allocated_amount for a in query.all())
+
+
+def _validate_envelope(db: Session, template_id: int, category_id: int,
+                        new_amount: Decimal, exclude_allocation_id: Optional[int] = None):
+    """Validate that subcategory allocations don't exceed the parent envelope."""
+    parent_alloc = db.query(BudgetTemplateCategoryDB).filter(
+        BudgetTemplateCategoryDB.template_id == template_id,
+        BudgetTemplateCategoryDB.category_id == category_id,
+        BudgetTemplateCategoryDB.subcategory_id.is_(None),
     ).first()
-    
-    return budget
 
+    if not parent_alloc:
+        raise ValueError("Must create a parent category allocation before adding subcategory allocations")
 
-def copy_budget(db: Session, budget_id: int, user_id: int, new_budget_name: str,
-                new_start_date: date, new_end_date: date) -> BudgetDB:
-    """Copy an existing budget with new dates and name"""
-    
-    # Get the source budget
-    source_budget = db.query(BudgetDB).filter(
-        BudgetDB.budget_id == budget_id,
-        BudgetDB.user_id == user_id
-    ).first()
-    
-    if not source_budget:
-        raise NotFoundError(f"Budget with id {budget_id} not found")
-    
-    # Validate dates
-    if new_end_date <= new_start_date:
-        raise ValueError("end_date must be after start_date")
-    
-    # Check for duplicate budget name
-    existing_budget = db.query(BudgetDB).filter(
-        BudgetDB.user_id == user_id,
-        BudgetDB.budget_name.ilike(new_budget_name.strip())
-    ).first()
-    if existing_budget:
-        raise ValueError(f"Budget with name '{new_budget_name}' already exists")
-    
-    try:
-        # Create new budget
-        new_budget = BudgetDB(
-            user_id=user_id,
-            budget_name=new_budget_name.strip(),
-            start_date=new_start_date,
-            end_date=new_end_date,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+    existing_sub_sum = _subcategory_sum(db, template_id, category_id, exclude_allocation_id)
+    if existing_sub_sum + new_amount > parent_alloc.allocated_amount:
+        raise ValueError(
+            f"Subcategory allocations ({existing_sub_sum + new_amount}) would exceed "
+            f"parent envelope ({parent_alloc.allocated_amount})"
         )
-        
-        db.add(new_budget)
-        db.flush()  # Get the budget_id
-        
-        # Copy categories
-        for category in source_budget.budget_categories:
-            new_category = BudgetCategoryDB(
-                budget_id=new_budget.budget_id,
-                category_id=category.category_id,
-                allocated_amount=category.allocated_amount,
-                created_at=datetime.utcnow()
+
+
+def _add_template_categories(db: Session, template: BudgetTemplateDB,
+                              categories: List[TemplateCategoryCreate],
+                              resolved_ids: Dict[UUID, int]):
+    """Add categories to a template during creation."""
+    for cat_data in categories:
+        cat_id = resolved_ids.get(cat_data.category_uuid)
+        if cat_id is None:
+            raise ValueError(f"Category UUID {cat_data.category_uuid} was not resolved")
+
+        sub_id = None
+        if cat_data.subcategory_uuid:
+            sub_id = resolved_ids.get(cat_data.subcategory_uuid)
+            if sub_id is None:
+                raise ValueError(f"Subcategory UUID {cat_data.subcategory_uuid} was not resolved")
+            _validate_subcategory(db, cat_id, sub_id)
+
+        alloc = BudgetTemplateCategoryDB(
+            id=uuid4(),
+            template_id=template.template_id,
+            category_id=cat_id,
+            subcategory_id=sub_id,
+            allocated_amount=cat_data.allocated_amount,
+            created_at=datetime.utcnow(),
+        )
+        db.add(alloc)
+
+    # Validate envelopes after all categories are added
+    db.flush()
+    _validate_envelopes_bulk(db, template.template_id)
+
+
+def _validate_envelopes_bulk(db: Session, template_id: int):
+    """Validate all envelope constraints for a template."""
+    allocs = db.query(BudgetTemplateCategoryDB).filter(
+        BudgetTemplateCategoryDB.template_id == template_id
+    ).all()
+
+    # Group by category_id
+    parent_amounts: Dict[int, Decimal] = {}
+    sub_sums: Dict[int, Decimal] = {}
+
+    for alloc in allocs:
+        if alloc.subcategory_id is None:
+            parent_amounts[alloc.category_id] = alloc.allocated_amount
+        else:
+            sub_sums[alloc.category_id] = sub_sums.get(alloc.category_id, Decimal('0.00')) + alloc.allocated_amount
+
+    for cat_id, sub_sum in sub_sums.items():
+        parent = parent_amounts.get(cat_id)
+        if parent is None:
+            raise ValueError("Must create a parent category allocation before adding subcategory allocations")
+        if sub_sum > parent:
+            raise ValueError(
+                f"Subcategory allocations ({sub_sum}) exceed parent envelope ({parent})"
             )
-            db.add(new_category)
-        
-        db.commit()
-        db.refresh(new_budget)
-        return new_budget
-        
-    except IntegrityError:
-        db.rollback()
-        raise ValueError("Budget copy failed due to database constraint")
-
-
-def get_budget_variance_report(db: Session, user_id: int, 
-                              start_date: Optional[date] = None,
-                              end_date: Optional[date] = None) -> List[Dict[str, Any]]:
-    """Get budget variance report comparing planned vs actual spending"""
-    
-    query = db.query(BudgetDB).filter(BudgetDB.user_id == user_id)
-    
-    if start_date:
-        query = query.filter(BudgetDB.end_date >= start_date)
-    if end_date:
-        query = query.filter(BudgetDB.start_date <= end_date)
-    
-    budgets = query.options(joinedload(BudgetDB.budget_categories).joinedload(BudgetCategoryDB.category)).order_by(BudgetDB.start_date).all()
-    
-    variance_report = []
-    
-    for budget in budgets:
-        budget_total_allocated = sum(cat.allocated_amount for cat in budget.budget_categories)
-        budget_total_spent = Decimal('0.00')
-        
-        category_variances = []
-        
-        for category_item in budget.budget_categories:
-            spent = calculate_category_spending(db, budget, category_item.category_id)
-            budget_total_spent += spent
-            
-            variance_amount = spent - category_item.allocated_amount
-            variance_percentage = float(variance_amount / category_item.allocated_amount * 100) if category_item.allocated_amount > 0 else 0.0
-            
-            category_variances.append({
-                'category': category_item.category.name,
-                'allocated': float(category_item.allocated_amount),
-                'spent': float(spent),
-                'variance_amount': float(variance_amount),
-                'variance_percentage': variance_percentage
-            })
-        
-        budget_variance_amount = budget_total_spent - budget_total_allocated
-        budget_variance_percentage = float(budget_variance_amount / budget_total_allocated * 100) if budget_total_allocated > 0 else 0.0
-        
-        variance_report.append({
-            'budget_id': budget.budget_id,
-            'budget_name': budget.budget_name,
-            'start_date': budget.start_date.isoformat(),
-            'end_date': budget.end_date.isoformat(),
-            'total_allocated': float(budget_total_allocated),
-            'total_spent': float(budget_total_spent),
-            'variance_amount': float(budget_variance_amount),
-            'variance_percentage': budget_variance_percentage,
-            'categories': category_variances
-        })
-    
-    return variance_report

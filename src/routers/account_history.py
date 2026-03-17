@@ -2,11 +2,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import date, datetime
+from uuid import UUID
 
 from src.db.core import get_db, AccountDB
+from src.crud import crud_account
 from src.services import account_snapshot
 from src.models.account_history import (
     AccountSnapshotResponse,
+    DismissReviewRequest,
+    SnapshotUpdateRequest,
     NetWorthHistoryResponse,
     NetWorthDataPoint,
     AccountValueHistoryResponse
@@ -49,9 +53,9 @@ def create_all_snapshots(
     }
 
 
-@router.post("/snapshots/account/{account_id}", response_model=AccountSnapshotResponse, status_code=201)
+@router.post("/snapshots/account/{account_uuid}", response_model=AccountSnapshotResponse, status_code=201)
 def create_account_snapshot(
-    account_id: int,
+    account_uuid: str,
     snapshot_date: Optional[date] = None,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
@@ -60,12 +64,12 @@ def create_account_snapshot(
     Create a snapshot of an account's value for a specific date.
     If no date is provided, uses today's date.
     """
-    # Verify account ownership
-    account = db.query(AccountDB).filter(
-        AccountDB.id == account_id,
-        AccountDB.user_id == user_id
-    ).first()
+    try:
+        parsed_uuid = UUID(account_uuid)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
 
+    account = crud_account.read_db_account_by_uuid(db, parsed_uuid, user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
@@ -75,7 +79,7 @@ def create_account_snapshot(
     try:
         snapshot = account_snapshot.create_account_snapshot(
             db=db,
-            account_id=account_id,
+            account_id=account.id,
             snapshot_date=snapshot_date,
             snapshot_source="MANUAL"
         )
@@ -110,9 +114,9 @@ def get_net_worth_history(
     )
 
 
-@router.get("/accounts/{account_id}", response_model=AccountValueHistoryResponse)
+@router.get("/accounts/{account_uuid}", response_model=AccountValueHistoryResponse)
 def get_account_value_history(
-    account_id: int,
+    account_uuid: str,
     start_date: Optional[date] = Query(None, description="Start date for history (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="End date for history (YYYY-MM-DD)"),
     db: Session = Depends(get_db),
@@ -121,29 +125,100 @@ def get_account_value_history(
     """
     Get historical value data for a specific account.
     """
-    # Get account info
-    account = db.query(AccountDB).filter(
-        AccountDB.id == account_id,
-        AccountDB.user_id == user_id
-    ).first()
+    try:
+        parsed_uuid = UUID(account_uuid)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
 
+    account = crud_account.read_db_account_by_uuid(db, parsed_uuid, user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
     try:
         snapshots = account_snapshot.get_account_value_history(
             db=db,
-            account_id=account_id,
+            account_id=account.id,
             user_id=user_id,
             start_date=start_date,
             end_date=end_date
         )
 
         return AccountValueHistoryResponse(
-            account_id=account.id,
+            account_uuid=account.uuid,
             account_name=account.account_name,
             account_type=account.account_type.value,
             data=snapshots
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/accounts/{account_uuid}/snapshots/{snapshot_uuid}", response_model=AccountSnapshotResponse)
+def update_snapshot(
+    account_uuid: str,
+    snapshot_uuid: str,
+    request: SnapshotUpdateRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Edit a single snapshot's values. Supports partial updates.
+    Optionally dismiss the review flag in the same call.
+    """
+    try:
+        parsed_account_uuid = UUID(account_uuid)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid account UUID format")
+
+    try:
+        parsed_snapshot_uuid = UUID(snapshot_uuid)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid snapshot UUID format")
+
+    account = crud_account.read_db_account_by_uuid(db, parsed_account_uuid, user_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    updates = request.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No update fields provided")
+
+    try:
+        snapshot = account_snapshot.update_snapshot(
+            db=db,
+            account_id=account.id,
+            snapshot_uuid=parsed_snapshot_uuid,
+            updates=updates,
+        )
+        return snapshot
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/accounts/{account_uuid}/snapshots/dismiss-review")
+def dismiss_snapshot_reviews(
+    account_uuid: str,
+    request: DismissReviewRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Dismiss needs_review flags on specified snapshots for an account.
+    """
+    try:
+        parsed_uuid = UUID(account_uuid)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    account = crud_account.read_db_account_by_uuid(db, parsed_uuid, user_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    dismissed_count = account_snapshot.dismiss_snapshot_reviews(
+        db=db,
+        account_id=account.id,
+        snapshot_uuids=request.snapshot_uuids,
+        dismiss_reason=request.reason
+    )
+
+    return {"dismissed_count": dismissed_count}

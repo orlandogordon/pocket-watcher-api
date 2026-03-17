@@ -1,16 +1,16 @@
-"""Add api_symbol to investment_transactions
+"""add_uuid_to_all_models
 
-Revision ID: 0d6ca885ece1
-Revises: 36a502940a86
-Create Date: 2025-10-26 01:11:33.801026
+Revision ID: a1b2c3d4e5f6
+Revises: 755b84c702fe
+Create Date: 2026-02-16
 
 NOTE: Folded into initial migration. This is now a no-op.
 """
 from typing import Sequence, Union
 
 # revision identifiers, used by Alembic.
-revision: str = '0d6ca885ece1'
-down_revision: Union[str, Sequence[str], None] = '36a502940a86'
+revision: str = 'a1b2c3d4e5f6'
+down_revision: Union[str, Sequence[str], None] = '755b84c702fe'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

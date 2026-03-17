@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import List, Optional, Union, IO
 
-from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo, SecurityType
+from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo, SecurityType, classify_security_type
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -63,6 +63,10 @@ def _normalize_transaction_type(category: str) -> str:
     if 'interest' in category_lower:
         return "INTEREST"
 
+    # Expiration
+    if 'expir' in category_lower:
+        return "EXPIRATION"
+
     # Fee
     if 'fee' in category_lower:
         return "FEE"
@@ -83,9 +87,9 @@ def _extract_symbol(symbol_cusip: str, category: str) -> Optional[str]:
     if not symbol_cusip or not symbol_cusip.strip():
         return None
 
-    # Only extract symbols for buy/sell transactions
+    # Only extract symbols for buy/sell/expiration transactions
     normalized_type = _normalize_transaction_type(category)
-    if normalized_type not in ["BUY", "SELL"]:
+    if normalized_type not in ["BUY", "SELL", "EXPIRATION"]:
         return None
 
     symbol_cusip = symbol_cusip.strip()
@@ -124,38 +128,89 @@ def _format_api_symbol(symbol: str, description: str, security_type: Optional[Se
 
     desc_upper = description.upper()
 
-    # Extract option type
-    option_type = "C" if desc_upper.startswith("CALL") else "P"
-
-    # Extract expiry date (pattern: EXP05/17/24 or EXP 05/17/24)
+    # Try standard Schwab format first: "CALL ... $STRIKE EXP MM/DD/YY"
     expiry_match = re.search(r'EXP\s*(\d{2}/\d{2}/\d{2})', description)
-    if not expiry_match:
-        return None
+    if expiry_match:
+        option_type = "C" if desc_upper.startswith("CALL") else "P"
 
-    expiry = expiry_match.group(1)
-    # Convert MM/DD/YY to YYMMDD
-    try:
-        expiry_date = datetime.strptime(expiry, "%m/%d/%y")
-        expiry_formatted = expiry_date.strftime("%y%m%d")
-    except ValueError:
-        return None
+        expiry = expiry_match.group(1)
+        try:
+            expiry_date = datetime.strptime(expiry, "%m/%d/%y")
+            expiry_formatted = expiry_date.strftime("%y%m%d")
+        except ValueError:
+            return None
 
-    # Extract strike price (pattern: $XXX or $XX.XX)
-    strike_match = re.search(r'\$(\d+(?:\.\d{2})?)', description)
-    if not strike_match:
-        return None
+        strike_match = re.search(r'\$(\d+(?:\.\d{2})?)', description)
+        if not strike_match:
+            return None
 
-    strike = strike_match.group(1)
-    # Convert to 8-digit format (multiply by 1000 for 3 decimal places)
-    try:
-        strike_float = float(strike)
-        strike_int = int(strike_float * 1000)
-        strike_formatted = f"{strike_int:08d}"
-    except ValueError:
-        return None
+        strike = strike_match.group(1)
+        try:
+            strike_float = float(strike)
+            strike_int = int(strike_float * 1000)
+            strike_formatted = f"{strike_int:08d}"
+        except ValueError:
+            return None
 
-    # Build OCC format: TICKER + YYMMDD + C/P + 8-digit strike
-    return f"{symbol}{expiry_formatted}{option_type}{strike_formatted}"
+        return f"{symbol}{expiry_formatted}{option_type}{strike_formatted}"
+
+    # Try TDA-migrated format: "(TICKER Mon DD YYYY STRIKE.0 Call/Put) @PRICE"
+    tda_match = re.search(
+        r'\(([A-Z]{1,5})\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{4})\s+([\d.]+)\s+(Call|Put)\)',
+        description
+    )
+    if tda_match:
+        month_str = tda_match.group(2)
+        day = tda_match.group(3)
+        year = tda_match.group(4)
+        strike = tda_match.group(5)
+        option_type = "C" if tda_match.group(6) == "Call" else "P"
+
+        try:
+            expiry_date = datetime(int(year), datetime.strptime(month_str, "%b").month, int(day))
+            expiry_formatted = expiry_date.strftime("%y%m%d")
+        except ValueError:
+            return None
+
+        try:
+            strike_float = float(strike)
+            strike_int = int(strike_float * 1000)
+            strike_formatted = f"{strike_int:08d}"
+        except ValueError:
+            return None
+
+        return f"{symbol}{expiry_formatted}{option_type}{strike_formatted}"
+
+    # Try descriptive format: "... TICKER MON DD YYYY STRIKE CALL/PUT"
+    # Matches: "APPLE INC JAN 19 2024 180 CALL" or "EXPIRED WORTHLESS — AAPL JAN 19 2024 180 CALL"
+    desc_match = re.search(
+        re.escape(symbol) + r'\s+([A-Z]{3})\s+(\d{1,2})\s+(\d{4})\s+(\d+(?:\.\d+)?)\s+(CALL|PUT)',
+        desc_upper
+    )
+    if desc_match:
+        month_str = desc_match.group(1).capitalize()
+        day = desc_match.group(2)
+        year = desc_match.group(3)
+        strike = desc_match.group(4)
+        option_type = "C" if desc_match.group(5) == "CALL" else "P"
+
+        try:
+            expiry_date = datetime(int(year), datetime.strptime(month_str, "%b").month, int(day))
+            expiry_formatted = expiry_date.strftime("%y%m%d")
+        except ValueError:
+            return None
+
+        try:
+            strike_float = float(strike)
+            strike_int = int(strike_float * 1000)
+            strike_formatted = f"{strike_int:08d}"
+        except ValueError:
+            return None
+
+        return f"{symbol}{expiry_formatted}{option_type}{strike_formatted}"
+
+    logger.warning(f"Option transaction but could not format API symbol from: {description[:100]}")
+    return None
 
 def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses a Schwab PDF statement using table-based extraction."""
@@ -383,13 +438,18 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 # Extract symbol (only for BUY/SELL) - just the underlying ticker
                 symbol = _extract_symbol(symbol_cusip, category)
 
-                # Set security_type only for BUY/SELL
-                # Detect options by checking if description starts with CALL/PUT AND contains "EXP"
+                # Set security_type for BUY/SELL/EXPIRATION
+                # Detect options by checking description for CALL/PUT
                 security_type = None
-                if transaction_type in ["BUY", "SELL"] and symbol:
+                if transaction_type in ["BUY", "SELL", "EXPIRATION"] and symbol:
                     desc_upper = description.upper() if description else ""
-                    is_option = (desc_upper.startswith("CALL") or desc_upper.startswith("PUT")) and "EXP" in desc_upper
-                    security_type = SecurityType.OPTION if is_option else SecurityType.STOCK
+                    if transaction_type == "EXPIRATION":
+                        # Expirations are always options; CALL/PUT appears anywhere in description
+                        is_option = "CALL" in desc_upper or "PUT" in desc_upper
+                    else:
+                        # BUY/SELL: description starts with CALL/PUT and contains "EXP"
+                        is_option = (desc_upper.startswith("CALL") or desc_upper.startswith("PUT")) and "EXP" in desc_upper
+                    security_type = classify_security_type(symbol, is_option=is_option)
 
                 # Format API symbol for yfinance (stocks and options)
                 api_symbol = _format_api_symbol(symbol, description, security_type) if symbol else None
@@ -412,16 +472,19 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                         pass
 
                 # Parse amount (handle parentheses for negative)
+                # Expirations have no cash impact, so allow amount=0
                 if not amount_str or amount_str in ['-', 'None']:
-                    skip_reasons["no_amount"] += 1
-                    logger.warning(f"Row {row_idx} skipped - no amount")
-                    continue
-
-                amount_str = amount_str.replace(',', '').replace('$', '')
-                if '(' in amount_str:
-                    amount_str = '-' + amount_str.replace('(', '').replace(')', '')
-
-                clean_amount = Decimal(amount_str)
+                    if transaction_type == "EXPIRATION":
+                        clean_amount = Decimal('0')
+                    else:
+                        skip_reasons["no_amount"] += 1
+                        logger.warning(f"Row {row_idx} skipped - no amount")
+                        continue
+                else:
+                    amount_str = amount_str.replace(',', '').replace('$', '')
+                    if '(' in amount_str:
+                        amount_str = '-' + amount_str.replace('(', '').replace(')', '')
+                    clean_amount = Decimal(amount_str)
 
                 investment_transactions.append(
                     ParsedInvestmentTransaction(
@@ -456,3 +519,159 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
         logger.info(f"Successfully parsed {len(investment_transactions)} investment transactions from Schwab statement")
 
     return ParsedData(account_info=account_info, investment_transactions=investment_transactions)
+
+def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
+    """
+    Parses a Schwab CSV file (from online export).
+
+    CSV Format:
+    "Date","Action","Symbol","Description","Quantity","Price","Fees & Comm","Amount"
+    "12/30/2024","Credit Interest","","SCHWAB1 INT 11/27-12/29","","","","$0.09"
+    "06/17/2024","Sell to Close","JPM 08/16/2024 200.00 C","CALL J P MORGAN CHASE & $200 EXP 08/16/24","1","$4.60","$0.67","$459.33"
+    """
+    logger.info("Parsing investment transaction data from Schwab CSV...")
+    investment_transactions: List[ParsedInvestmentTransaction] = []
+    account_info: Optional[ParsedAccountInfo] = None
+
+    import io
+
+    # Handle both file path and in-memory stream
+    if isinstance(file_source, io.BytesIO):
+        text_stream = io.TextIOWrapper(file_source, encoding='utf-8')
+        lines = text_stream.readlines()
+    elif isinstance(file_source, Path):
+        with open(file_source, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+    else:
+        text_stream = io.TextIOWrapper(file_source, encoding='utf-8')
+        lines = text_stream.readlines()
+
+    # Parse CSV
+    csv_reader = csv.reader(lines)
+    header = next(csv_reader, None)
+
+    if not header or 'Date' not in header[0]:
+        logger.warning("Invalid Schwab CSV format - missing header row")
+        return ParsedData(account_info=account_info, investment_transactions=investment_transactions)
+
+    for row in csv_reader:
+        if not row or len(row) < 8:
+            continue
+
+        try:
+            # CSV columns: Date, Action, Symbol, Description, Quantity, Price, Fees & Comm, Amount
+            date_str = row[0].strip().strip('"')
+            action = row[1].strip().strip('"')
+            symbol_raw = row[2].strip().strip('"')
+            description = row[3].strip().strip('"')
+            quantity_str = row[4].strip().strip('"')
+            price_str = row[5].strip().strip('"')
+            fees_str = row[6].strip().strip('"')
+            amount_str = row[7].strip().strip('"')
+
+            # Skip empty rows
+            if not date_str or not action:
+                continue
+
+            # Parse date (format: MM/DD/YYYY)
+            parsed_date = None
+            try:
+                parsed_date = datetime.strptime(date_str, "%m/%d/%Y").date()
+            except ValueError:
+                logger.warning(f"Could not parse date: {date_str}")
+                continue
+
+            # Normalize transaction type
+            transaction_type = _normalize_transaction_type(action)
+
+            # Extract symbol (underlying ticker only)
+            symbol = _extract_symbol(symbol_raw, action) if symbol_raw else None
+
+            # Parse numerical values
+            quantity = None
+            if quantity_str:
+                try:
+                    quantity = Decimal(quantity_str.replace(',', ''))
+                except (ValueError, InvalidOperation):
+                    pass
+
+            price = None
+            if price_str:
+                try:
+                    price = Decimal(price_str.replace('$', '').replace(',', ''))
+                except (ValueError, InvalidOperation):
+                    pass
+
+            amount = Decimal(0)
+            if amount_str:
+                try:
+                    # Remove $ and commas, handle negative amounts
+                    amount_clean = amount_str.replace('$', '').replace(',', '')
+                    amount = Decimal(amount_clean)
+                except (ValueError, InvalidOperation):
+                    logger.warning(f"Could not parse amount: {amount_str}")
+
+            # Determine security type (for BUY/SELL/EXPIRATION)
+            security_type = None
+            if transaction_type in ["BUY", "SELL", "EXPIRATION"]:
+                # Check if it's an option based on the Symbol column format or description
+                # Options in Symbol column: "JPM 08/16/2024 200.00 C" (contains date and strike)
+                # Options in Description: starts with "CALL" or "PUT" and contains "EXP"
+                desc_upper = description.upper()
+                has_option_symbol = symbol_raw and (
+                    re.search(r'\d{2}/\d{2}/\d{4}', symbol_raw) or  # Date pattern in symbol
+                    re.search(r'\d+\.\d{2}\s+[CP]$', symbol_raw)     # Strike and C/P at end
+                )
+                has_option_desc = (desc_upper.startswith("CALL") or desc_upper.startswith("PUT")) and "EXP" in desc_upper
+
+                if has_option_symbol or has_option_desc:
+                    security_type = SecurityType.OPTION
+                elif symbol:
+                    security_type = classify_security_type(symbol)
+
+            # Format API symbol
+            api_symbol = _format_api_symbol(symbol, description, security_type) if symbol else None
+
+            # Fallback: build OCC from structured symbol column (e.g. "AAPL 01/19/2024 180.00 C")
+            if not api_symbol and security_type == SecurityType.OPTION and symbol_raw:
+                sym_match = re.match(
+                    r'([A-Z]{1,5})\s+(\d{2}/\d{2}/\d{4})\s+([\d.]+)\s+([CP])',
+                    symbol_raw
+                )
+                if sym_match:
+                    try:
+                        expiry_date = datetime.strptime(sym_match.group(2), "%m/%d/%Y")
+                        strike_int = int(float(sym_match.group(3)) * 1000)
+                        api_symbol = f"{sym_match.group(1)}{expiry_date.strftime('%y%m%d')}{sym_match.group(4)}{strike_int:08d}"
+                    except (ValueError, IndexError):
+                        pass
+
+            investment_transactions.append(
+                ParsedInvestmentTransaction(
+                    transaction_date=parsed_date,
+                    transaction_type=transaction_type,
+                    symbol=symbol,
+                    description=description,
+                    quantity=quantity,
+                    price_per_share=price,
+                    total_amount=amount,
+                    security_type=security_type,
+                    api_symbol=api_symbol
+                )
+            )
+        except (ValueError, InvalidOperation, IndexError) as e:
+            logger.warning(f"Skipping row in Schwab CSV due to parsing error: {row} -> {e}")
+            continue
+
+    logger.info(f"Successfully parsed {len(investment_transactions)} investment transactions from Schwab CSV")
+
+    return ParsedData(account_info=account_info, investment_transactions=investment_transactions)
+
+def parse(file_source: Union[Path, IO[bytes]], is_csv: bool = False) -> ParsedData:
+    """
+    Main entry point for parsing Schwab statements.
+    Supports both PDF and CSV formats.
+    """
+    if is_csv:
+        return parse_csv(file_source)
+    return parse_statement(file_source)

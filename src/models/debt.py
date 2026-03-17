@@ -1,8 +1,9 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, List
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
+from uuid import UUID
 
 # ===== ENUMS =====
 
@@ -25,8 +26,7 @@ class DebtRepaymentPlanUpdate(BaseModel):
     status: Optional[str] = Field(None, max_length=50)
 
 class DebtRepaymentPlanResponse(BaseModel):
-    plan_id: int
-    user_id: int
+    id: UUID
     plan_name: str
     strategy: DebtStrategyEnum
     target_payoff_date: Optional[date]
@@ -40,9 +40,15 @@ class DebtRepaymentPlanResponse(BaseModel):
 # ===== PLAN-ACCOUNT LINK MODELS =====
 
 class DebtPlanAccountLinkCreate(BaseModel):
-    plan_id: int
-    account_id: int
+    plan_uuid: UUID
+    account_uuid: UUID
     priority: int = 0
+
+class DebtPlanAccountLinkResponse(BaseModel):
+    account_uuid: UUID
+
+    class Config:
+        from_attributes = True
 
 # ===== DEBT REPAYMENT SCHEDULE MODELS =====
 
@@ -51,24 +57,32 @@ class MonthlyPaymentSchedule(BaseModel):
     scheduled_payment_amount: Decimal
 
 class DebtRepaymentScheduleBulkCreate(BaseModel):
-    account_id: int
+    account_uuid: UUID
     schedules: List[MonthlyPaymentSchedule]
 
 class DebtRepaymentScheduleResponse(BaseModel):
-    schedule_id: int
-    account_id: int
+    id: UUID
+    account_uuid: UUID
     payment_month: date
     scheduled_payment_amount: Decimal
 
     class Config:
         from_attributes = True
 
+    @model_validator(mode='before')
+    @classmethod
+    def resolve_uuids(cls, data):
+        if hasattr(data, '__dict__'):
+            if hasattr(data, 'account') and data.account:
+                data.__dict__['account_uuid'] = data.account.uuid
+        return data
+
 # ===== DEBT PAYMENT MODELS =====
 
 class DebtPaymentCreate(BaseModel):
-    loan_account_id: int
-    payment_source_account_id: Optional[int] = None
-    transaction_id: Optional[int] = None
+    loan_account_uuid: UUID
+    payment_source_account_uuid: Optional[UUID] = None
+    transaction_uuid: Optional[UUID] = None
     payment_amount: Decimal
     principal_amount: Optional[Decimal] = None
     interest_amount: Optional[Decimal] = None
@@ -80,8 +94,8 @@ class DebtPaymentBulkCreate(BaseModel):
     payments: List[DebtPaymentCreate]
 
 class DebtPaymentUpdate(BaseModel):
-    payment_source_account_id: Optional[int] = None
-    transaction_id: Optional[int] = None
+    payment_source_account_uuid: Optional[UUID] = None
+    transaction_uuid: Optional[UUID] = None
     payment_amount: Optional[Decimal] = None
     principal_amount: Optional[Decimal] = None
     interest_amount: Optional[Decimal] = None
@@ -90,10 +104,10 @@ class DebtPaymentUpdate(BaseModel):
     description: Optional[str] = Field(None, max_length=500)
 
 class DebtPaymentResponse(BaseModel):
-    payment_id: int
-    loan_account_id: int
-    payment_source_account_id: Optional[int]
-    transaction_id: Optional[int]
+    id: UUID
+    loan_account_uuid: UUID
+    payment_source_account_uuid: Optional[UUID] = None
+    transaction_uuid: Optional[UUID] = None
     payment_amount: Decimal
     principal_amount: Optional[Decimal]
     interest_amount: Optional[Decimal]
@@ -104,3 +118,15 @@ class DebtPaymentResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @model_validator(mode='before')
+    @classmethod
+    def resolve_uuids(cls, data):
+        if hasattr(data, '__dict__'):
+            if hasattr(data, 'loan_account') and data.loan_account:
+                data.__dict__['loan_account_uuid'] = data.loan_account.uuid
+            if hasattr(data, 'payment_source_account') and data.payment_source_account:
+                data.__dict__['payment_source_account_uuid'] = data.payment_source_account.uuid
+            if hasattr(data, 'transaction') and data.transaction:
+                data.__dict__['transaction_uuid'] = data.transaction.id
+        return data

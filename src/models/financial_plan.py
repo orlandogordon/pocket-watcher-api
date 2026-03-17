@@ -2,11 +2,12 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 from decimal import Decimal
 from datetime import datetime, date
+from uuid import UUID
 
 # Financial Plan Expense Models
 
 class FinancialPlanExpenseBase(BaseModel):
-    category_id: int
+    category_uuid: UUID
     description: str = Field(..., min_length=1, max_length=255)
     amount: Decimal
     expense_type: Literal["recurring", "one_time"]
@@ -14,15 +15,17 @@ class FinancialPlanExpenseBase(BaseModel):
 class FinancialPlanExpenseCreate(FinancialPlanExpenseBase):
     pass
 
+class FinancialPlanExpenseBulkCreate(BaseModel):
+    expenses: List[FinancialPlanExpenseCreate] = Field(..., min_length=1, description="List of expenses to create")
+
 class FinancialPlanExpenseUpdate(BaseModel):
-    category_id: Optional[int] = None
+    category_uuid: Optional[UUID] = None
     description: Optional[str] = Field(None, min_length=1, max_length=255)
     amount: Optional[Decimal] = None
     expense_type: Optional[Literal["recurring", "one_time"]] = None
 
 class FinancialPlanExpense(FinancialPlanExpenseBase):
-    expense_id: int
-    month_id: int
+    id: UUID
     created_at: datetime
 
     class Config:
@@ -38,12 +41,14 @@ class FinancialPlanMonthBase(BaseModel):
 class FinancialPlanMonthCreate(FinancialPlanMonthBase):
     expenses: List[FinancialPlanExpenseCreate] = []
 
+class FinancialPlanMonthBulkCreate(BaseModel):
+    months: List[FinancialPlanMonthCreate] = Field(..., min_length=1, description="List of months to create")
+
 class FinancialPlanMonthUpdate(BaseModel):
     planned_income: Optional[Decimal] = None
 
 class FinancialPlanMonth(FinancialPlanMonthBase):
-    month_id: int
-    plan_id: int
+    id: UUID
     created_at: datetime
     expenses: List[FinancialPlanExpense] = []
 
@@ -66,8 +71,7 @@ class FinancialPlanUpdate(BaseModel):
     end_date: Optional[date] = None
 
 class FinancialPlan(FinancialPlanBase):
-    plan_id: int
-    user_id: int
+    id: UUID
     created_at: datetime
     updated_at: datetime
     monthly_periods: List[FinancialPlanMonth] = []
@@ -85,7 +89,7 @@ class MonthlyPlanSummary(BaseModel):
     net_surplus: Decimal
 
 class FinancialPlanSummary(BaseModel):
-    plan_id: int
+    id: UUID
     plan_name: str
     start_date: date
     end_date: date

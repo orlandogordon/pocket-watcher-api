@@ -7,8 +7,12 @@ Supports fallback strategies and error handling for production use.
 import yfinance as yf
 from typing import Dict, List, Optional, Tuple
 from decimal import Decimal
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import time
+
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class PriceFetchError(Exception):
@@ -76,20 +80,20 @@ def fetch_stock_price(symbol: str, retries: int = 3) -> Optional[Decimal]:
             hist = ticker.history(period="5d")  # Get last 5 days to ensure we have data
 
             if hist.empty:
-                print(f"No price data available for {symbol}")
+                logger.warning(f"No price data available for {symbol}")
                 return None
 
             # Use most recent closing price
             latest_close = hist['Close'].iloc[-1]
 
             if latest_close <= 0:
-                print(f"Invalid price for {symbol}: {latest_close}")
+                logger.warning(f"Invalid price for {symbol}: {latest_close}")
                 return None
 
             return Decimal(str(round(latest_close, 4)))
 
         except Exception as e:
-            print(f"Error fetching price for {symbol} (attempt {attempt + 1}/{retries}): {str(e)}")
+            logger.warning(f"Error fetching price for {symbol} (attempt {attempt + 1}/{retries}): {str(e)}")
             if attempt < retries - 1:
                 time.sleep(1)  # Wait before retry
             continue
@@ -130,7 +134,7 @@ def fetch_option_price(
             option = options[options['strike'] == strike]
 
             if option.empty:
-                print(f"Option not found: {underlying} {expiration} {strike} {option_type}")
+                logger.warning(f"Option not found: {underlying} {expiration} {strike} {option_type}")
                 return None
 
             # Get pricing data
@@ -151,11 +155,11 @@ def fetch_option_price(
             if last > 0:
                 return Decimal(str(round(last, 4)))
 
-            print(f"No valid price for option: {underlying} {expiration} {strike} {option_type}")
+            logger.warning(f"No valid price for option: {underlying} {expiration} {strike} {option_type}")
             return None
 
         except Exception as e:
-            print(f"Error fetching option price (attempt {attempt + 1}/{retries}): {str(e)}")
+            logger.warning(f"Error fetching option price (attempt {attempt + 1}/{retries}): {str(e)}")
             if attempt < retries - 1:
                 time.sleep(1)
             continue
@@ -177,7 +181,7 @@ def fetch_price(symbol: str) -> Optional[Decimal]:
     if is_option_symbol(symbol):
         parsed = parse_option_symbol(symbol)
         if not parsed:
-            print(f"Failed to parse option symbol: {symbol}")
+            logger.error(f"Failed to parse option symbol: {symbol}")
             return None
 
         return fetch_option_price(
@@ -189,6 +193,209 @@ def fetch_price(symbol: str) -> Optional[Decimal]:
     else:
         # It's a stock
         return fetch_stock_price(symbol)
+
+
+def fetch_stock_price_historical(
+    symbol: str,
+    target_date: date,
+    retries: int = 3
+) -> Optional[Decimal]:
+    """
+    Fetch historical stock price for a specific date.
+
+    Args:
+        symbol: Stock ticker (e.g., 'AAPL')
+        target_date: Date to fetch price for
+
+    Returns:
+        Closing price as Decimal, or None if not available
+
+    Handles:
+        - Weekends/holidays: Falls back to previous trading day
+        - Delisted stocks: Returns None
+        - Network errors: Retries with exponential backoff
+    """
+    for attempt in range(retries):
+        try:
+            ticker = yf.Ticker(symbol)
+
+            # Try fetching data for target_date
+            hist = ticker.history(start=target_date, end=target_date + timedelta(days=1))
+
+            if hist.empty:
+                # Market closed - find previous trading day (search back up to 7 days)
+                logger.debug(f"No data for {symbol} on {target_date}, finding previous trading day")
+
+                for days_back in range(1, 8):
+                    fallback_date = target_date - timedelta(days=days_back)
+                    hist = ticker.history(start=fallback_date, end=fallback_date + timedelta(days=1))
+
+                    if not hist.empty:
+                        logger.debug(f"Using {fallback_date} price for {target_date}")
+                        return Decimal(str(round(hist['Close'].iloc[-1], 4)))
+
+                logger.warning(f"Could not find historical price for {symbol} near {target_date}")
+                return None
+
+            return Decimal(str(round(hist['Close'].iloc[-1], 4)))
+
+        except Exception as e:
+            logger.warning(f"Error fetching historical price for {symbol} on {target_date} (attempt {attempt + 1}/{retries}): {str(e)}")
+            if attempt < retries - 1:
+                time.sleep(1)
+            continue
+
+    return None
+
+
+def fetch_option_price_historical(
+    underlying: str,
+    expiration: str,
+    strike: float,
+    option_type: str,
+    target_date: date,
+    retries: int = 3
+) -> Optional[Decimal]:
+    """
+    Fetch historical option price for a specific date.
+
+    Args:
+        underlying: Stock symbol (e.g., 'AAPL')
+        expiration: ISO date string (e.g., '2025-01-17')
+        strike: Strike price (e.g., 150.00)
+        option_type: 'CALL' or 'PUT'
+        target_date: Date to fetch price for
+
+    Returns:
+        Historical option price as Decimal
+        None if option didn't exist on target_date or no data available
+        Decimal('0.00') if option expired before target_date
+
+    Note: Option historical data is less reliable than stock data.
+    May need to fall back to intrinsic value calculation or cost basis.
+    """
+    expiration_date = datetime.strptime(expiration, '%Y-%m-%d').date()
+
+    # Check if option expired before target_date
+    if expiration_date < target_date:
+        logger.debug(f"Option {underlying} {expiration} expired before {target_date}")
+        return Decimal('0.00')  # Expired options have no value
+
+    # Check if option existed yet (rough heuristic: listed ~45 days before expiration)
+    listing_date = expiration_date - timedelta(days=45)
+    if target_date < listing_date:
+        logger.debug(f"Option {underlying} {expiration} not yet listed on {target_date}")
+        return None  # Use cost basis as fallback
+
+    # Try fetching historical option price
+    # Note: yfinance option historical data is very limited
+    # For now, return None and use cost basis as fallback
+    # TODO: Implement option historical price fetching if data source becomes available
+    logger.debug(f"Historical option pricing not implemented, using cost basis for {underlying} {expiration}")
+    return None
+
+
+def fetch_price_historical(
+    symbol: str,
+    target_date: date
+) -> Optional[Decimal]:
+    """
+    Universal historical price fetcher.
+    Auto-detects stock vs option symbol and routes to appropriate function.
+
+    Args:
+        symbol: Stock ticker (e.g., 'AAPL') or option OCC format (e.g., 'AAPL250117C00150000')
+        target_date: Date to fetch price for
+
+    Returns:
+        Historical price as Decimal, or None if unavailable
+    """
+    # Check if option (OCC format)
+    if is_option_symbol(symbol):
+        parsed = parse_option_symbol(symbol)
+        if not parsed:
+            logger.error(f"Failed to parse option symbol: {symbol}")
+            return None
+
+        return fetch_option_price_historical(
+            underlying=parsed['underlying'],
+            expiration=parsed['expiration'],
+            strike=parsed['strike'],
+            option_type=parsed['option_type'],
+            target_date=target_date
+        )
+    else:
+        # Stock symbol
+        return fetch_stock_price_historical(symbol, target_date)
+
+
+def fetch_bulk_historical_prices(
+    symbols: List[str],
+    start_date: date,
+    end_date: date
+) -> Dict[str, Dict[date, Decimal]]:
+    """
+    Fetch historical prices for multiple symbols across date range.
+
+    Performance optimization: Instead of fetching each symbol for each day
+    (days × symbols API calls), fetch all days for each symbol at once
+    (symbols API calls).
+
+    Args:
+        symbols: List of stock tickers or option OCC symbols
+        start_date: First date to fetch
+        end_date: Last date to fetch
+
+    Returns:
+        {
+            'AAPL': {
+                date(2024, 10, 1): Decimal('150.25'),
+                date(2024, 10, 2): Decimal('151.00'),
+                ...
+            },
+            'TSLA': { ... }
+        }
+
+    Performance:
+        - 180 days × 20 symbols = 3,600 API calls (without bulk)
+        - 20 symbols = 20 API calls (with bulk)
+        - 180x reduction!
+    """
+    results = {}
+
+    for symbol in symbols:
+        # Separate stock vs option handling
+        if is_option_symbol(symbol):
+            # Options: Historical data limited, may need to fetch daily
+            # For now, return empty dict (falls back to cost basis)
+            results[symbol] = {}
+        else:
+            # Stocks: Fetch all dates at once
+            try:
+                ticker = yf.Ticker(symbol)
+                hist = ticker.history(start=start_date, end=end_date + timedelta(days=1))
+
+                if hist.empty:
+                    logger.warning(f"No historical data for {symbol} in range {start_date} to {end_date}")
+                    results[symbol] = {}
+                    continue
+
+                # Convert to dict[date -> price]
+                symbol_prices = {}
+                for idx, row in hist.iterrows():
+                    price_date = idx.date()
+                    symbol_prices[price_date] = Decimal(str(round(row['Close'], 4)))
+
+                results[symbol] = symbol_prices
+
+            except Exception as e:
+                logger.error(f"Error fetching bulk historical prices for {symbol}: {str(e)}")
+                results[symbol] = {}
+
+        # Rate limiting between symbols
+        time.sleep(0.5)
+
+    return results
 
 
 def fetch_bulk_prices(symbols: List[str], delay: float = 0.5) -> Dict[str, Optional[Decimal]]:
@@ -205,7 +412,7 @@ def fetch_bulk_prices(symbols: List[str], delay: float = 0.5) -> Dict[str, Optio
     results = {}
 
     for i, symbol in enumerate(symbols):
-        print(f"Fetching price {i+1}/{len(symbols)}: {symbol}")
+        logger.debug(f"Fetching price {i+1}/{len(symbols)}: {symbol}")
 
         price = fetch_price(symbol)
         results[symbol] = price

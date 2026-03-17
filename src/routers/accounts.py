@@ -1,10 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+from datetime import date
+from uuid import UUID
 
 from src.crud import crud_account
 from src.models import account as account_models
-from src.db.core import get_db, NotFoundError
+from src.models.account_history import SnapshotBackfillJobResponse, AccountSnapshotResponse
+from src.db.core import (
+    get_db,
+    NotFoundError,
+    SnapshotBackfillJobDB,
+    AccountValueHistoryDB,
+)
+from src.services.job_runner import get_job_runner
 
 router = APIRouter(
     prefix="/accounts",
@@ -15,6 +24,15 @@ router = APIRouter(
 # In a real app, this would decode a JWT token to get the current user.
 def get_current_user_id() -> int:
     return 1
+
+
+def _parse_account_uuid(account_uuid: str) -> UUID:
+    """Validate and parse a UUID string, raising 400 on invalid format."""
+    try:
+        return UUID(account_uuid)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
 
 @router.post("/", response_model=account_models.AccountResponse, status_code=status.HTTP_201_CREATED)
 def create_account(
@@ -65,23 +83,24 @@ def get_account_statistics(
     """
     return crud_account.get_account_stats(db=db, user_id=user_id)
 
-@router.get("/{account_id}", response_model=account_models.AccountResponse)
+@router.get("/{account_uuid}", response_model=account_models.AccountResponse)
 def read_account(
-    account_id: int,
+    account_uuid: str,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
     """
-    Retrieve a specific account by its ID.
+    Retrieve a specific account by its UUID.
     """
-    db_account = crud_account.read_db_account(db=db, account_id=account_id, user_id=user_id)
+    uuid_obj = _parse_account_uuid(account_uuid)
+    db_account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
     if db_account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     return db_account
 
-@router.put("/{account_id}", response_model=account_models.AccountResponse)
+@router.put("/{account_uuid}", response_model=account_models.AccountResponse)
 def update_account(
-    account_id: int,
+    account_uuid: str,
     account: account_models.AccountUpdate,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
@@ -89,31 +108,170 @@ def update_account(
     """
     Update an account.
     """
+    uuid_obj = _parse_account_uuid(account_uuid)
     try:
-        return crud_account.update_db_account(
-            db=db, account_id=account_id, user_id=user_id, account_updates=account
+        return crud_account.update_db_account_by_uuid(
+            db=db, account_uuid=uuid_obj, user_id=user_id, account_updates=account
         )
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-@router.delete("/{account_id}", response_model=account_models.AccountResponse)
+@router.delete("/{account_uuid}", response_model=account_models.AccountResponse)
 def delete_account(
-    account_id: int,
+    account_uuid: str,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
     """
     Delete an account. It can only be deleted if it has no associated transactions or holdings.
     """
-    db_account = crud_account.read_db_account(db, account_id=account_id, user_id=user_id)
+    uuid_obj = _parse_account_uuid(account_uuid)
+    db_account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
     if db_account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
-    
+
     try:
-        crud_account.delete_db_account(db=db, account_id=account_id, user_id=user_id)
+        crud_account.delete_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
-    
+
     return db_account
+
+
+# ===== SNAPSHOT BACKFILL ENDPOINTS =====
+
+@router.get("/{account_uuid}/snapshot-jobs", response_model=List[SnapshotBackfillJobResponse])
+def list_backfill_jobs(
+    account_uuid: str,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    List all backfill jobs for an account.
+
+    Returns jobs ordered by created_at DESC (newest first).
+    """
+    uuid_obj = _parse_account_uuid(account_uuid)
+    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    jobs = db.query(SnapshotBackfillJobDB).filter(
+        SnapshotBackfillJobDB.account_id == account.id
+    ).order_by(SnapshotBackfillJobDB.created_at.desc()).offset(skip).limit(limit).all()
+
+    return jobs
+
+
+@router.get("/{account_uuid}/snapshot-jobs/{job_id}", response_model=SnapshotBackfillJobResponse)
+def get_backfill_job(
+    account_uuid: str,
+    job_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Get detailed status of a specific backfill job.
+    """
+    uuid_obj = _parse_account_uuid(account_uuid)
+    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    job = db.query(SnapshotBackfillJobDB).filter(
+        SnapshotBackfillJobDB.id == job_id,
+        SnapshotBackfillJobDB.account_id == account.id
+    ).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return job
+
+
+@router.post("/{account_uuid}/snapshots/recalculate")
+def manually_recalculate_snapshots(
+    account_uuid: str,
+    start_date: date,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+) -> Dict[str, Any]:
+    """
+    Manually trigger snapshot recalculation for an account.
+
+    Use Cases:
+        - Fix incorrect historical snapshots
+        - Backfill after manual transaction edits
+        - Re-fetch prices if historical data was incorrect
+    """
+    uuid_obj = _parse_account_uuid(account_uuid)
+    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    if not end_date:
+        end_date = date.today()
+
+    # Check for existing running job
+    existing_job = db.query(SnapshotBackfillJobDB).filter(
+        SnapshotBackfillJobDB.account_id == account.id,
+        SnapshotBackfillJobDB.status.in_(['PENDING', 'IN_PROGRESS'])
+    ).first()
+
+    if existing_job:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Backfill job {existing_job.id} already running for this account"
+        )
+
+    # Create job
+    job = SnapshotBackfillJobDB(
+        user_id=user_id,
+        account_id=account.id,
+        start_date=start_date,
+        end_date=end_date,
+        status='PENDING'
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    # Submit to runner
+    job_runner = get_job_runner()
+    job_runner.submit_job(job.id, account.id, start_date, end_date)
+
+    return {
+        "message": "Snapshot recalculation started",
+        "job_id": job.id,
+        "account_uuid": str(account.uuid),
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "status": "PENDING"
+    }
+
+
+@router.get("/{account_uuid}/snapshots/needs-review", response_model=List[AccountSnapshotResponse])
+def get_snapshots_needing_review(
+    account_uuid: str,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Get all snapshots that need review (missing price data, etc.)
+    """
+    uuid_obj = _parse_account_uuid(account_uuid)
+    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    snapshots = db.query(AccountValueHistoryDB).filter(
+        AccountValueHistoryDB.account_id == account.id,
+        AccountValueHistoryDB.needs_review == True
+    ).order_by(AccountValueHistoryDB.value_date.desc()).all()
+
+    return snapshots

@@ -3,6 +3,7 @@ from typing import Optional, List
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
+from uuid import UUID
 
 
 # ===== ACCOUNT PYDANTIC MODELS =====
@@ -31,7 +32,9 @@ class AccountCreate(BaseModel):
     # Loan-specific fields
     interest_rate: Optional[Decimal] = Field(None, ge=0, le=1, description="Interest rate (0.0525 for 5.25%)")
     interest_rate_type: Optional[InterestRateTypeEnum] = Field(None, description="Fixed or variable interest rate")
-    
+    original_principal: Optional[Decimal] = Field(None, ge=0, description="Original loan principal amount")
+    minimum_payment: Optional[Decimal] = Field(None, ge=0, description="Minimum monthly payment")
+
     comments: Optional[str] = Field(None, max_length=1000, description="Optional comments about the account")
 
     @field_validator('account_name')
@@ -69,6 +72,8 @@ class AccountUpdate(BaseModel):
     balance: Optional[Decimal] = Field(None, description="Updated account balance")
     interest_rate: Optional[Decimal] = Field(None, ge=0, le=1)
     interest_rate_type: Optional[InterestRateTypeEnum] = None
+    original_principal: Optional[Decimal] = Field(None, ge=0)
+    minimum_payment: Optional[Decimal] = Field(None, ge=0)
     comments: Optional[str] = Field(None, max_length=1000)
 
     @field_validator('account_name')
@@ -98,8 +103,7 @@ class AccountUpdate(BaseModel):
 
 class AccountResponse(BaseModel):
     """Account data returned to client"""
-    id: int
-    user_id: int
+    uuid: UUID
     account_name: str
     account_type: AccountTypeEnum
     institution_name: str
@@ -108,6 +112,8 @@ class AccountResponse(BaseModel):
     balance_last_updated: Optional[datetime]
     interest_rate: Optional[Decimal]
     interest_rate_type: Optional[str]
+    original_principal: Optional[Decimal]
+    minimum_payment: Optional[Decimal]
     comments: Optional[str]
     created_at: datetime
     updated_at: datetime
@@ -118,7 +124,7 @@ class AccountResponse(BaseModel):
 
 class AccountSummary(BaseModel):
     """Lightweight account summary for dropdowns/lists"""
-    id: int
+    uuid: UUID
     account_name: str
     account_type: AccountTypeEnum
     institution_name: str
@@ -131,7 +137,7 @@ class AccountSummary(BaseModel):
 
 class AccountBalance(BaseModel):
     """Account balance information"""
-    account_id: int
+    account_uuid: UUID
     balance: Decimal
     balance_last_updated: Optional[datetime]
 

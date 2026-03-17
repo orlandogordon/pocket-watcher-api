@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import desc
 from typing import Optional, List
 from datetime import datetime
+from uuid import UUID, uuid4
 
 # Import your database models
 from src.db.core import TagDB, UserDB, TransactionTagDB, TransactionDB, NotFoundError
@@ -29,6 +30,7 @@ def create_db_tag(db: Session, user_id: int, tag_data: TagCreate) -> TagDB:
     
     # Create new tag
     db_tag = TagDB(
+        id=uuid4(),
         user_id=user_id,
         tag_name=tag_data.tag_name.strip(),
         color=tag_data.color,
@@ -269,7 +271,7 @@ def get_tag_stats(db: Session, tag_id: int, user_id: int) -> TagStats:
     
     if not transactions:
         return TagStats(
-            tag_id=tag.tag_id,
+            id=tag.id,
             tag_name=tag.tag_name,
             color=tag.color,
             transaction_count=0,
@@ -283,7 +285,7 @@ def get_tag_stats(db: Session, tag_id: int, user_id: int) -> TagStats:
     most_recent_use = max(t.transaction_date for t in transactions)
     
     return TagStats(
-        tag_id=tag.tag_id,
+        id=tag.id,
         tag_name=tag.tag_name,
         color=tag.color,
         transaction_count=len(transactions),
@@ -306,7 +308,7 @@ def get_all_tag_stats(db: Session, user_id: int) -> List[TagStats]:
         except Exception:
             # If we can't get stats for a tag, include it with zero stats
             stats.append(TagStats(
-                tag_id=tag.tag_id,
+                id=tag.id,
                 tag_name=tag.tag_name,
                 color=tag.color,
                 transaction_count=0,
@@ -325,6 +327,75 @@ def search_tags(db: Session, user_id: int, search_term: str) -> List[TagDB]:
         TagDB.user_id == user_id,
         TagDB.tag_name.ilike(f"%{search_term}%")
     ).order_by(TagDB.tag_name).all()
+
+
+def read_db_tag_by_uuid(db: Session, tag_uuid: UUID, user_id: int) -> Optional[TagDB]:
+    """Read a tag by UUID"""
+    return db.query(TagDB).filter(
+        TagDB.id == tag_uuid,
+        TagDB.user_id == user_id
+    ).first()
+
+def read_db_tags_by_uuids(db: Session, uuids: List[UUID], user_id: int) -> List[TagDB]:
+    """Read multiple tags by their UUIDs in a single query"""
+    return db.query(TagDB).filter(
+        TagDB.id.in_(uuids),
+        TagDB.user_id == user_id,
+    ).all()
+
+def update_db_tag_by_uuid(db: Session, tag_uuid: UUID, user_id: int, tag_updates: TagUpdate) -> TagDB:
+    """Update a tag by UUID"""
+    db_tag = read_db_tag_by_uuid(db, tag_uuid, user_id)
+    if not db_tag:
+        raise NotFoundError(f"Tag not found")
+    return update_db_tag(db, db_tag.tag_id, user_id, tag_updates)
+
+def delete_db_tag_by_uuid(db: Session, tag_uuid: UUID, user_id: int) -> bool:
+    """Delete a tag by UUID"""
+    db_tag = read_db_tag_by_uuid(db, tag_uuid, user_id)
+    if not db_tag:
+        raise NotFoundError(f"Tag not found")
+    return delete_db_tag(db, db_tag.tag_id, user_id)
+
+def get_tag_stats_by_uuid(db: Session, tag_uuid: UUID, user_id: int) -> TagStats:
+    """Get tag stats by UUID"""
+    db_tag = read_db_tag_by_uuid(db, tag_uuid, user_id)
+    if not db_tag:
+        raise NotFoundError(f"Tag not found")
+    return get_tag_stats(db, db_tag.tag_id, user_id)
+
+def get_transactions_for_tag_by_uuid(db: Session, tag_uuid: UUID, user_id: int, skip: int = 0, limit: int = 100) -> List[TransactionDB]:
+    """Get transactions for a tag identified by UUID"""
+    db_tag = read_db_tag_by_uuid(db, tag_uuid, user_id)
+    if not db_tag:
+        raise NotFoundError(f"Tag not found")
+    return get_transactions_for_tag(db, db_tag.tag_id, user_id, skip, limit)
+
+def add_tag_to_transaction_by_uuids(db: Session, user_id: int, transaction_uuid: UUID, tag_uuid: UUID) -> TransactionTagDB:
+    """Add a tag to a transaction using UUIDs"""
+    transaction = db.query(TransactionDB).filter(
+        TransactionDB.id == transaction_uuid,
+        TransactionDB.user_id == user_id
+    ).first()
+    if not transaction:
+        raise NotFoundError(f"Transaction not found")
+    tag = read_db_tag_by_uuid(db, tag_uuid, user_id)
+    if not tag:
+        raise NotFoundError(f"Tag not found")
+    return add_tag_to_transaction(db, user_id, transaction.db_id, tag.tag_id)
+
+def remove_tag_from_transaction_by_uuids(db: Session, user_id: int, transaction_uuid: UUID, tag_uuid: UUID) -> bool:
+    """Remove a tag from a transaction using UUIDs"""
+    transaction = db.query(TransactionDB).filter(
+        TransactionDB.id == transaction_uuid,
+        TransactionDB.user_id == user_id
+    ).first()
+    if not transaction:
+        raise NotFoundError(f"Transaction not found")
+    tag = read_db_tag_by_uuid(db, tag_uuid, user_id)
+    if not tag:
+        raise NotFoundError(f"Tag not found")
+    return remove_tag_from_transaction(db, user_id, transaction.db_id, tag.tag_id)
 
 
 def bulk_tag_transactions(db: Session, user_id: int, transaction_ids: List[int], tag_id: int) -> List[TransactionTagDB]:
