@@ -46,6 +46,7 @@ class TagResponse(BaseModel):
     id: UUID
     tag_name: str
     color: Optional[str]
+    is_system: bool = False
     created_at: datetime
     transaction_count: Optional[int] = None
 

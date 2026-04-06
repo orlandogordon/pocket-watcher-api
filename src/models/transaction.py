@@ -13,6 +13,7 @@ class EmbeddedTagResponse(BaseModel):
     id: UUID
     tag_name: str
     color: Optional[str] = None
+    is_system: bool = False
     model_config = ConfigDict(from_attributes=True)
 
 # ===== TRANSACTION PYDANTIC MODELS =====
@@ -20,7 +21,8 @@ class EmbeddedTagResponse(BaseModel):
 class TransactionTypeEnum(str, Enum):
     PURCHASE = "PURCHASE"
     CREDIT = "CREDIT"
-    TRANSFER = "TRANSFER"
+    TRANSFER_IN = "TRANSFER_IN"
+    TRANSFER_OUT = "TRANSFER_OUT"
     DEPOSIT = "DEPOSIT"
     WITHDRAWAL = "WITHDRAWAL"
     FEE = "FEE"
@@ -164,9 +166,7 @@ class TransactionResponse(BaseModel):
     parsed_description: Optional[str]
     merchant_name: Optional[str]
     comments: Optional[str]
-    account_number_last4: Optional[str]
     source_type: SourceTypeEnum
-    needs_review: bool = False
     tags: List[EmbeddedTagResponse] = []
     split_allocations: List[SplitAllocationResponse] = []
     created_at: datetime
@@ -194,7 +194,6 @@ class TransactionSummary(BaseModel):
     transaction_type: TransactionTypeEnum
     description: Optional[str]
     merchant_name: Optional[str]
-    needs_review: bool = False
     category: Optional[CategoryResponse] = None
     subcategory: Optional[CategoryResponse] = None
 

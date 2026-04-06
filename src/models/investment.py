@@ -23,7 +23,8 @@ class InvestmentTransactionTypeEnum(str, Enum):
     DIVIDEND = "DIVIDEND"
     INTEREST = "INTEREST"
     FEE = "FEE"
-    TRANSFER = "TRANSFER"
+    TRANSFER_IN = "TRANSFER_IN"
+    TRANSFER_OUT = "TRANSFER_OUT"
     SPLIT = "SPLIT"
     MERGER = "MERGER"
     SPINOFF = "SPINOFF"
@@ -78,6 +79,14 @@ class InvestmentHoldingResponse(InvestmentHoldingBase):
         return data
 
 
+# ===== INVESTMENT ACCOUNT SUMMARY =====
+
+class InvestmentAccountSummary(BaseModel):
+    cash_balance: Decimal
+    securities_value: Decimal
+    total_value: Decimal
+
+
 # ===== INVESTMENT TRANSACTION PYDANTIC MODELS =====
 
 class InvestmentTransactionBase(BaseModel):
@@ -107,18 +116,6 @@ class InvestmentTransactionUpdate(BaseModel):
     transaction_date: Optional[date] = None
     description: Optional[str] = Field(None, max_length=500)
 
-class InvestmentTransactionBulkUpdate(BaseModel):
-    """Model for bulk updating investment transactions."""
-    transaction_uuids: List[UUID] = Field(..., description="A list of investment transaction UUIDs to update.")
-    account_uuid: Optional[UUID] = Field(None, description="Set a new account for all specified transactions.")
-    description: Optional[str] = Field(None, max_length=500, description="Set a new description for all specified transactions.")
-
-    @field_validator('transaction_uuids')
-    @classmethod
-    def validate_transaction_uuids(cls, v: List[UUID]) -> List[UUID]:
-        if not v:
-            raise ValueError("transaction_uuids list cannot be empty.")
-        return v
 
 class InvestmentTransactionResponse(InvestmentTransactionBase):
     id: UUID

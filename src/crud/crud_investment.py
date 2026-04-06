@@ -1,9 +1,9 @@
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import desc
+from sqlalchemy import case, desc
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, date, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from uuid import uuid4
 import hashlib
 
@@ -126,10 +126,26 @@ def rebuild_holdings_from_transactions(db: Session, account_id: int) -> List[Inv
     ).delete(synchronize_session='fetch')
 
     # 4. Replay transactions in chronological order
+    # Within the same date, process BUY/REINVESTMENT before SELL/EXPIRATION
+    # so that holdings exist before being reduced.
+    type_priority = case(
+        (InvestmentTransactionDB.transaction_type.in_([
+            InvestmentTransactionType.BUY,
+            InvestmentTransactionType.REINVESTMENT,
+            InvestmentTransactionType.TRANSFER_IN,
+            InvestmentTransactionType.TRANSFER_OUT,
+        ]), 0),
+        (InvestmentTransactionDB.transaction_type.in_([
+            InvestmentTransactionType.SELL,
+            InvestmentTransactionType.EXPIRATION,
+        ]), 2),
+        else_=1,
+    )
     transactions = db.query(InvestmentTransactionDB).filter(
         InvestmentTransactionDB.account_id == account_id
     ).order_by(
         InvestmentTransactionDB.transaction_date.asc(),
+        type_priority,
         InvestmentTransactionDB.investment_transaction_id.asc()
     ).all()
 
@@ -280,7 +296,7 @@ def _create_investment_transaction_no_rebuild(db: Session, user_id: int, transac
         symbol=transaction_data.symbol,
         quantity=abs(transaction_data.quantity) if transaction_data.quantity is not None else None,
         price_per_share=transaction_data.price_per_share,
-        total_amount=transaction_data.total_amount,
+        total_amount=abs(transaction_data.total_amount),
         fees=transaction_data.fees,
         transaction_date=transaction_data.transaction_date,
         description=transaction_data.description,
@@ -294,6 +310,21 @@ def _create_investment_transaction_no_rebuild(db: Session, user_id: int, transac
     return db_transaction
 
 
+def _update_investment_account_balance(db: Session, account_id: int) -> None:
+    """Recalculate and update the balance for an investment account after transaction changes.
+
+    Balance = holdings market value + cash balance.
+    Cash balance is derived from initial_cash_balance + replaying all investment transactions.
+    initial_cash_balance must be set correctly on the account (via account creation or update).
+    """
+    from src.services.account_snapshot import get_account_state_on_date
+    account = db.query(AccountDB).filter(AccountDB.id == account_id).first()
+    if account and account.account_type == AccountType.INVESTMENT:
+        holdings_value = calculate_account_total_value(db, account_id)
+        state = get_account_state_on_date(db, account_id, date.today())
+        account.balance = holdings_value + state['cash_balance']
+
+
 def create_db_investment_transaction(db: Session, user_id: int, transaction_data: InvestmentTransactionCreate, *,
                                       account_id: int) -> InvestmentTransactionDB:
     db_transaction = _create_investment_transaction_no_rebuild(db, user_id, transaction_data, account_id=account_id)
@@ -302,6 +333,7 @@ def create_db_investment_transaction(db: Session, user_id: int, transaction_data
         db.commit()
         db.refresh(db_transaction)
         rebuild_holdings_from_transactions(db, account_id)
+        _update_investment_account_balance(db, account_id)
         db.commit()
         return db_transaction
     except IntegrityError as e:
@@ -347,12 +379,13 @@ def map_transaction_type_to_enum(transaction_type_str: str) -> Optional[Investme
 
         # Fee and transfer mappings
         "FEE": InvestmentTransactionType.FEE,
-        "TRANSFER": InvestmentTransactionType.TRANSFER,
-        "DEPOSIT": InvestmentTransactionType.TRANSFER,
-        "WITHDRAWAL": InvestmentTransactionType.TRANSFER,
-        "WIRE": InvestmentTransactionType.TRANSFER,
-        "ACH": InvestmentTransactionType.TRANSFER,
-        "JOURNAL": InvestmentTransactionType.TRANSFER,
+        "TRANSFER_IN": InvestmentTransactionType.TRANSFER_IN,
+        "TRANSFER_OUT": InvestmentTransactionType.TRANSFER_OUT,
+        "DEPOSIT": InvestmentTransactionType.TRANSFER_IN,
+        "WITHDRAWAL": InvestmentTransactionType.TRANSFER_OUT,
+        "WIRE": InvestmentTransactionType.TRANSFER_IN,
+        "ACH": InvestmentTransactionType.TRANSFER_IN,
+        "JOURNAL": InvestmentTransactionType.TRANSFER_IN,
     }
 
     # Try direct lookup
@@ -372,8 +405,10 @@ def map_transaction_type_to_enum(transaction_type_str: str) -> Optional[Investme
         return InvestmentTransactionType.REINVESTMENT
     if "FEE" in normalized or "COMMISSION" in normalized:
         return InvestmentTransactionType.FEE
-    if any(w in normalized for w in ["TRANSFER", "DEPOSIT", "WITHDRAWAL", "WIRE", "ACH", "JOURNAL"]):
-        return InvestmentTransactionType.TRANSFER
+    if "WITHDRAWAL" in normalized:
+        return InvestmentTransactionType.TRANSFER_OUT
+    if any(w in normalized for w in ["TRANSFER_IN", "TRANSFER_OUT", "TRANSFER", "DEPOSIT", "WIRE", "ACH", "JOURNAL"]):
+        return InvestmentTransactionType.TRANSFER_IN
 
     # No mapping found
     return None
@@ -393,7 +428,8 @@ def generate_investment_transaction_hash(transaction_data: ParsedInvestmentTrans
         f"{transaction_data.symbol}|"
         f"{transaction_data.quantity}|"
         f"{transaction_data.price_per_share}|"
-        f"{transaction_data.total_amount}"
+        f"{transaction_data.total_amount}|"
+        f"{transaction_data.description}"
     )
     if make_unique:
         from uuid import uuid4
@@ -495,7 +531,7 @@ def bulk_create_investment_transactions_from_parsed_data(
 
         # Guard: strip share-based fields from non-share transaction types
         NON_SHARE_TYPES = {InvestmentTransactionType.INTEREST, InvestmentTransactionType.FEE,
-                           InvestmentTransactionType.TRANSFER}
+                           InvestmentTransactionType.TRANSFER_IN, InvestmentTransactionType.TRANSFER_OUT}
         if transaction_type_enum in NON_SHARE_TYPES:
             t_data_quantity = None
             t_data_price = None
@@ -517,7 +553,7 @@ def bulk_create_investment_transactions_from_parsed_data(
             symbol=t_data_symbol,
             quantity=abs(t_data_quantity) if t_data_quantity is not None else None,
             price_per_share=t_data_price,
-            total_amount=t_data.total_amount,
+            total_amount=abs(t_data.total_amount),
             fees=None,  # Not currently parsed
             description=t_data.description,
             api_symbol=t_data_api_symbol,
@@ -540,6 +576,7 @@ def bulk_create_investment_transactions_from_parsed_data(
         db.commit()
         if account_id:
             rebuild_holdings_from_transactions(db, account_id)
+            _update_investment_account_balance(db, account_id)
             db.commit()
     except Exception as e:
         db.rollback()
@@ -633,6 +670,7 @@ def bulk_create_investment_transactions(db: Session, user_id: int, bulk_data: In
             db.refresh(t)
         for acct_id in affected_account_ids:
             rebuild_holdings_from_transactions(db, acct_id)
+            _update_investment_account_balance(db, acct_id)
         db.commit()
     except IntegrityError as e:
         db.rollback()
@@ -678,46 +716,13 @@ def update_db_investment_transaction(db: Session, transaction_id: int, user_id: 
         db.refresh(db_transaction)
         if account_id:
             rebuild_holdings_from_transactions(db, account_id)
+            _update_investment_account_balance(db, account_id)
             db.commit()
         return db_transaction
     except IntegrityError:
         db.rollback()
         raise ValueError("Transaction update failed.")
 
-def bulk_update_db_investment_transactions(db: Session, user_id: int, transaction_ids: List[int], updates: Dict[str, Any]) -> int:
-    """
-    Bulk update multiple investment transactions for a user.
-    """
-    if not transaction_ids:
-        return 0
-
-    # First, get the account_ids for the given transaction_ids to verify ownership
-    transactions_query = db.query(InvestmentTransactionDB.investment_transaction_id, AccountDB.user_id).join(AccountDB).filter(
-        InvestmentTransactionDB.investment_transaction_id.in_(transaction_ids)
-    ).all()
-
-    if len(transactions_query) != len(set(transaction_ids)):
-        found_ids = {t[0] for t in transactions_query}
-        missing_ids = set(transaction_ids) - found_ids
-        raise NotFoundError(f"Investment transactions with the following IDs not found: {missing_ids}")
-
-    for t in transactions_query:
-        if t.user_id != user_id:
-            raise NotFoundError(f"Transaction with ID {t.investment_transaction_id} does not belong to the user.")
-
-    # Perform the bulk update
-    update_data = {**updates, "updated_at": datetime.utcnow()}
-    
-    try:
-        updated_rows = db.query(InvestmentTransactionDB).filter(
-            InvestmentTransactionDB.investment_transaction_id.in_(transaction_ids)
-        ).update(update_data, synchronize_session=False)
-        
-        db.commit()
-        return updated_rows
-    except Exception as e:
-        db.rollback()
-        raise ValueError(f"Failed to bulk update investment transactions: {str(e)}")
 
 def delete_db_investment_transaction(db: Session, transaction_id: int, user_id: int) -> bool:
     db_transaction = read_db_investment_transaction(db, transaction_id, user_id)
@@ -732,6 +737,7 @@ def delete_db_investment_transaction(db: Session, transaction_id: int, user_id: 
         db.commit()
         if account_id:
             rebuild_holdings_from_transactions(db, account_id)
+            _update_investment_account_balance(db, account_id)
             db.commit()
 
         # Trigger snapshot recalculation from deleted transaction's date
@@ -774,6 +780,7 @@ def delete_db_investment_transaction_by_uuid(db: Session, transaction_uuid: 'UUI
 
 def calculate_account_total_value(db: Session, account_id: int) -> Decimal:
     """Calculate the total market value of all holdings in an investment account."""
+    TWO_PLACES = Decimal('0.01')
     holdings = db.query(InvestmentHoldingDB).filter(
         InvestmentHoldingDB.account_id == account_id
     ).all()
@@ -781,10 +788,10 @@ def calculate_account_total_value(db: Session, account_id: int) -> Decimal:
     total_value = Decimal('0.00')
     for holding in holdings:
         if holding.quantity and holding.current_price:
-            total_value += holding.quantity * holding.current_price
+            total_value += (holding.quantity * holding.current_price).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
         elif holding.quantity and holding.average_cost_basis:
             # Fallback to cost basis if current price not available
-            total_value += holding.quantity * holding.average_cost_basis
+            total_value += (holding.quantity * holding.average_cost_basis).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
 
     return total_value
 

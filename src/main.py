@@ -12,6 +12,8 @@ from .routers.debts import router as debts_router
 from .routers.uploads import router as uploads_router
 from .routers.account_history import router as account_history_router
 from .services.job_runner import recover_interrupted_jobs
+from .services.system_tags import ensure_system_tags
+from .db.core import get_db, UserDB
 
 # Initialize logging
 setup_logging()
@@ -34,6 +36,17 @@ def startup_event():
     """
     logger.info("Running startup tasks...")
     recover_interrupted_jobs()
+
+    # Ensure system tags exist for all users.
+    # When real auth is added, also call this in the user creation flow.
+    db = next(get_db())
+    try:
+        user_ids = [u.db_id for u in db.query(UserDB.db_id).all()]
+        for uid in user_ids:
+            ensure_system_tags(user_id=uid, db=db)
+    finally:
+        db.close()
+
     logger.info("Startup complete")
 
 app.include_router(users_router)

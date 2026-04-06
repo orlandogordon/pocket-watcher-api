@@ -7,7 +7,7 @@ and net worth calculations across all account types.
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional, Dict
 from uuid import uuid4
 
@@ -23,7 +23,7 @@ from src.db.core import (
     DebtPaymentDB
 )
 from src.services import price_fetcher
-from src.services.price_fetcher import fetch_bulk_historical_prices
+from src.services.price_fetcher import fetch_bulk_historical_prices, is_option_symbol
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -162,6 +162,7 @@ def get_account_state_on_date(
            - FEE: Decrease cash
            - TRANSFER: Increase/decrease cash (based on amount sign)
            - SPLIT: Adjust quantity and cost basis
+           - EXPIRATION: Zero out expired option holdings
         6. Filter out holdings with quantity <= 0
         7. Return holdings snapshot and cash balance
     """
@@ -171,10 +172,29 @@ def get_account_state_on_date(
         raise ValueError(f"Account {account_id} not found")
 
     # Query transactions up to target_date
+    # Within the same date, process BUY/REINVESTMENT/TRANSFER before SELL/EXPIRATION
+    # so that holdings exist before being reduced (matches rebuild_holdings_from_transactions).
+    type_priority = case(
+        (InvestmentTransactionDB.transaction_type.in_([
+            InvestmentTransactionType.BUY,
+            InvestmentTransactionType.REINVESTMENT,
+            InvestmentTransactionType.TRANSFER_IN,
+            InvestmentTransactionType.TRANSFER_OUT,
+        ]), 0),
+        (InvestmentTransactionDB.transaction_type.in_([
+            InvestmentTransactionType.SELL,
+            InvestmentTransactionType.EXPIRATION,
+        ]), 2),
+        else_=1,
+    )
     transactions = db.query(InvestmentTransactionDB).filter(
         InvestmentTransactionDB.account_id == account_id,
         InvestmentTransactionDB.transaction_date <= target_date,
-    ).order_by(InvestmentTransactionDB.transaction_date.asc()).all()
+    ).order_by(
+        InvestmentTransactionDB.transaction_date.asc(),
+        type_priority,
+        InvestmentTransactionDB.investment_transaction_id.asc(),
+    ).all()
 
     # Initialize state
     holdings = {}  # {symbol: {'quantity': Decimal, 'average_cost_basis': Decimal, 'api_symbol': str}}
@@ -182,7 +202,12 @@ def get_account_state_on_date(
 
     # Replay transactions
     for txn in transactions:
-        symbol = txn.symbol
+        # Use OCC api_symbol for options so they don't merge with stock holdings
+        # sharing the same underlying ticker (matches _holding_key in crud_investment).
+        if txn.api_symbol and is_option_symbol(txn.api_symbol):
+            symbol = txn.api_symbol
+        else:
+            symbol = txn.symbol
 
         if txn.transaction_type == InvestmentTransactionType.BUY:
             # Update holdings
@@ -204,7 +229,8 @@ def get_account_state_on_date(
             holdings[symbol]['quantity'] = new_qty
 
             # Decrease cash (total cost of purchase)
-            cash_balance -= txn.total_amount
+            # total_amount may be negative (e.g. -1714.65 for a buy) — use abs
+            cash_balance -= abs(txn.total_amount)
 
         elif txn.transaction_type == InvestmentTransactionType.SELL:
             if symbol in holdings:
@@ -212,15 +238,25 @@ def get_account_state_on_date(
                 # Cost basis stays same (weighted average)
 
             # Increase cash (proceeds from sale)
-            cash_balance += txn.total_amount
+            cash_balance += abs(txn.total_amount)
 
         elif txn.transaction_type == InvestmentTransactionType.DIVIDEND:
             # Increase cash (dividends paid in cash)
-            cash_balance += txn.total_amount
+            cash_balance += abs(txn.total_amount)
 
         elif txn.transaction_type == InvestmentTransactionType.INTEREST:
             # Increase cash
-            cash_balance += txn.total_amount
+            cash_balance += abs(txn.total_amount)
+
+        elif txn.transaction_type == InvestmentTransactionType.FEE:
+            # Decrease cash
+            cash_balance -= abs(txn.total_amount)
+
+        elif txn.transaction_type == InvestmentTransactionType.TRANSFER_IN:
+            cash_balance += abs(txn.total_amount)
+
+        elif txn.transaction_type == InvestmentTransactionType.TRANSFER_OUT:
+            cash_balance -= abs(txn.total_amount)
 
         elif txn.transaction_type == InvestmentTransactionType.REINVESTMENT:
             # REINVESTMENT: Dividend automatically used to buy more shares
@@ -249,6 +285,11 @@ def get_account_state_on_date(
                 ratio = parse_split_ratio(txn.description)  # e.g., "2:1" → 2.0
                 holdings[symbol]['quantity'] *= ratio
                 holdings[symbol]['average_cost_basis'] /= ratio
+
+        elif txn.transaction_type == InvestmentTransactionType.EXPIRATION:
+            # Option expired worthless — zero out the holding
+            if symbol in holdings:
+                holdings[symbol]['quantity'] = Decimal('0')
 
     # Filter out zero/negative holdings
     active_holdings = {s: h for s, h in holdings.items() if h['quantity'] > 0}
@@ -347,23 +388,25 @@ def _reverse_balance_for_type(
     """
     abs_amount = abs(amount)
     if account_type == AccountType.CREDIT_CARD:
-        if transaction_type in [TransactionType.PURCHASE, TransactionType.FEE]:
-            return current_balance - abs_amount
-        elif transaction_type in [TransactionType.CREDIT, TransactionType.DEPOSIT]:
-            return current_balance + abs_amount
-        elif transaction_type == TransactionType.INTEREST:
-            return current_balance - abs_amount
+        if transaction_type in [TransactionType.PURCHASE, TransactionType.FEE, TransactionType.INTEREST]:
+            return current_balance - abs_amount  # undo debt increase
+        elif transaction_type in [TransactionType.CREDIT, TransactionType.DEPOSIT, TransactionType.TRANSFER_IN]:
+            return current_balance + abs_amount  # undo debt reduction
+        elif transaction_type == TransactionType.WITHDRAWAL:
+            return current_balance + abs_amount  # undo debt reduction
+        elif transaction_type == TransactionType.TRANSFER_OUT:
+            return current_balance - abs_amount  # undo debt increase
         else:
-            return current_balance - abs_amount
+            raise ValueError(f"Unhandled transaction type: {transaction_type}")
     else:
-        if transaction_type in [TransactionType.CREDIT, TransactionType.DEPOSIT]:
-            return current_balance - abs_amount
-        elif transaction_type in [TransactionType.WITHDRAWAL, TransactionType.FEE, TransactionType.PURCHASE]:
-            return current_balance + abs_amount
+        if transaction_type in [TransactionType.CREDIT, TransactionType.DEPOSIT, TransactionType.TRANSFER_IN]:
+            return current_balance - abs_amount  # undo incoming
+        elif transaction_type in [TransactionType.WITHDRAWAL, TransactionType.FEE, TransactionType.PURCHASE, TransactionType.TRANSFER_OUT]:
+            return current_balance + abs_amount  # undo outgoing
         elif transaction_type == TransactionType.INTEREST:
-            return current_balance - abs_amount
+            return current_balance - abs_amount  # undo interest earned
         else:
-            return current_balance - abs_amount
+            raise ValueError(f"Unhandled transaction type: {transaction_type}")
 
 
 def get_non_investment_balance_on_date(
@@ -579,6 +622,7 @@ def recalculate_account_snapshots(
             securities_value = Decimal('0')
             total_cost_basis = Decimal('0')
             missing_prices = []
+            TWO_PLACES = Decimal('0.01')
 
             for symbol, holding_data in holdings.items():
                 quantity = holding_data['quantity']
@@ -598,13 +642,13 @@ def recalculate_account_snapshots(
                         logger.debug(f"Using {nearest_date} price for {symbol} on {current_date}")
 
                 if historical_price:
-                    securities_value += quantity * historical_price
-                    total_cost_basis += quantity * cost_basis
+                    securities_value += (quantity * historical_price).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+                    total_cost_basis += (quantity * cost_basis).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
                 else:
                     # Fallback to cost basis
                     logger.warning(f"No historical price for {symbol} on {current_date}, using cost basis")
-                    securities_value += quantity * cost_basis
-                    total_cost_basis += quantity * cost_basis
+                    securities_value += (quantity * cost_basis).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+                    total_cost_basis += (quantity * cost_basis).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
                     missing_prices.append(symbol)
 
             # 3. Calculate totals
@@ -843,6 +887,13 @@ def update_investment_prices(
             failed += 1
 
     db.commit()
+
+    # Recalculate account balances now that prices are updated
+    if updated > 0:
+        from src.crud.crud_investment import _update_investment_account_balance
+        for acc in investment_accounts:
+            _update_investment_account_balance(db, acc.id)
+        db.commit()
 
     logger.info(f"Updated {updated} holdings, {failed} failed")
 

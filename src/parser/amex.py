@@ -112,7 +112,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             description = " ".join(line_split[1:-1])
 
             transaction_type = ""
-            if tracking_payments: transaction_type = "Credit"
+            if tracking_payments: transaction_type = "TRANSFER_IN"
             elif tracking_credits: transaction_type = "Credit"
             elif tracking_purchases: transaction_type = "Purchase"
             elif tracking_fees: transaction_type = "Fee"

@@ -3,12 +3,15 @@ from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 from uuid import UUID
 
+from datetime import date
+
 from src.crud import crud_investment, crud_account
 from src.db.core import get_db, NotFoundError
+from src.services import account_snapshot
 from src.models.investment import (
     InvestmentHoldingResponse, InvestmentHoldingUpdate,
     InvestmentTransactionCreate, InvestmentTransactionResponse, InvestmentTransactionUpdate, InvestmentTransactionBulkCreate,
-    InvestmentTransactionBulkUpdate
+    InvestmentAccountSummary
 )
 
 router = APIRouter(
@@ -25,6 +28,35 @@ def _parse_uuid(value: str) -> UUID:
         return UUID(value)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+# --- Price Refresh ---
+
+@router.post("/refresh-prices")
+def refresh_prices(db: Session = Depends(get_db)):
+    user_id = get_current_user_id()
+    try:
+        result = account_snapshot.update_investment_prices(db=db, user_id=user_id)
+        return result
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to refresh prices: {str(e)}")
+
+# --- Account Summary ---
+
+@router.get("/accounts/{account_uuid}/summary", response_model=InvestmentAccountSummary)
+def read_account_summary(account_uuid: str, db: Session = Depends(get_db)):
+    user_id = get_current_user_id()
+    parsed_uuid = _parse_uuid(account_uuid)
+    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=parsed_uuid, user_id=user_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    state = account_snapshot.get_account_state_on_date(db, account.id, date.today())
+    securities_value = crud_investment.calculate_account_total_value(db, account.id)
+    return InvestmentAccountSummary(
+        cash_balance=state['cash_balance'],
+        securities_value=securities_value,
+        total_value=state['cash_balance'] + securities_value,
+    )
 
 # --- Investment Holdings (read-only, derived from transactions) ---
 
@@ -94,42 +126,6 @@ def create_bulk_transactions(bulk_data: InvestmentTransactionBulkCreate, db: Ses
         return crud_investment.bulk_create_investment_transactions(db=db, user_id=user_id, bulk_data=bulk_data)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
-
-@router.patch("/transactions/bulk-update")
-def bulk_update_transactions(bulk_update_data: InvestmentTransactionBulkUpdate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)) -> Dict[str, Any]:
-    # Resolve transaction UUIDs to int IDs
-    transaction_ids = []
-    for t_uuid in bulk_update_data.transaction_uuids:
-        txn = crud_investment.read_db_investment_transaction_by_uuid(db, t_uuid, user_id)
-        if not txn:
-            raise HTTPException(status_code=404, detail=f"Investment transaction {t_uuid} not found")
-        transaction_ids.append(txn.investment_transaction_id)
-
-    # Build update payload
-    update_payload = {}
-    if bulk_update_data.description is not None:
-        update_payload["description"] = bulk_update_data.description
-    if bulk_update_data.account_uuid is not None:
-        account = crud_account.read_db_account_by_uuid(db, bulk_update_data.account_uuid, user_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Account not found")
-        update_payload["account_id"] = account.id
-
-    if not update_payload:
-        raise HTTPException(status_code=400, detail="No update fields provided.")
-
-    try:
-        updated_count = crud_investment.bulk_update_db_investment_transactions(
-            db=db,
-            user_id=user_id,
-            transaction_ids=transaction_ids,
-            updates=update_payload
-        )
-        return {"message": f"Successfully updated {updated_count} transactions."}
-    except NotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/accounts/{account_uuid}/transactions/", response_model=List[InvestmentTransactionResponse])
 def read_transactions_for_account(account_uuid: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):

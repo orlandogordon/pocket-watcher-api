@@ -69,7 +69,7 @@ class AccountUpdate(BaseModel):
     account_type: Optional[AccountTypeEnum] = None
     institution_name: Optional[str] = Field(None, min_length=1, max_length=255)
     account_number_last4: Optional[str] = Field(None, min_length=4, max_length=4)
-    balance: Optional[Decimal] = Field(None, description="Updated account balance")
+    initial_cash_balance: Optional[Decimal] = Field(None, ge=0, description="Starting cash balance for investment accounts")
     interest_rate: Optional[Decimal] = Field(None, ge=0, le=1)
     interest_rate_type: Optional[InterestRateTypeEnum] = None
     original_principal: Optional[Decimal] = Field(None, ge=0)
@@ -95,11 +95,6 @@ class AccountUpdate(BaseModel):
             raise ValueError('Account number last 4 digits must be numeric')
         return v
 
-    @field_validator('balance')
-    @classmethod
-    def validate_balance(cls, v: Optional[Decimal]) -> Optional[Decimal]:
-        return round(v, 2) if v is not None else v
-
 
 class AccountResponse(BaseModel):
     """Account data returned to client"""
@@ -109,6 +104,7 @@ class AccountResponse(BaseModel):
     institution_name: str
     account_number_last4: Optional[str]
     balance: Decimal
+    initial_cash_balance: Optional[Decimal] = None
     balance_last_updated: Optional[datetime]
     interest_rate: Optional[Decimal]
     interest_rate_type: Optional[str]

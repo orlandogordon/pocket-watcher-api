@@ -119,20 +119,29 @@ def validate_refund_allocation(
 
 # ===== UTILITY FUNCTIONS =====
 
-def generate_transaction_hash(transaction_data: TransactionCreate, user_id: int, institution_name: str, make_unique: bool = False) -> str:
+def generate_transaction_hash(
+    user_id: int,
+    institution_name: str,
+    transaction_date,
+    transaction_type_value: str,
+    amount,
+    description: str | None = None,
+    make_unique: bool = False,
+) -> str:
     """Generate a hash for transaction deduplication based on stable data.
 
     Args:
+        transaction_type_value: The string value of the transaction type enum (e.g. "PURCHASE").
         make_unique: If True, append a UUID to guarantee a unique hash.
                      Used for approved duplicates in the preview flow.
     """
     hash_string = (
         f"{user_id}|"
         f"{institution_name.lower()}|"
-        f"{transaction_data.transaction_date}|"
-        f"{transaction_data.transaction_type.value}|"
-        f"{transaction_data.amount}|"
-        f"{transaction_data.description or ''}"
+        f"{transaction_date}|"
+        f"{transaction_type_value}|"
+        f"{amount}|"
+        f"{description or ''}"
     )
     if make_unique:
         hash_string += f"|{uuid4()}"
@@ -208,7 +217,14 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
 
     # Generate transaction hash for deduplication
     institution_name = account.institution_name if account else ""
-    transaction_hash = generate_transaction_hash(transaction_data, user_id, institution_name)
+    transaction_hash = generate_transaction_hash(
+        user_id=user_id,
+        institution_name=institution_name,
+        transaction_date=transaction_data.transaction_date,
+        transaction_type_value=transaction_data.transaction_type.value,
+        amount=transaction_data.amount,
+        description=transaction_data.description,
+    )
 
     # Check for duplicate transaction
     existing_transaction = db.query(TransactionDB).filter(
@@ -234,7 +250,6 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
         parsed_description=parse_transaction_description(transaction_data.description or ""),
         merchant_name=transaction_data.merchant_name,
         comments=transaction_data.comments,
-        account_number_last4=account.account_number_last4 if account else None,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow()
     )
@@ -243,7 +258,7 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
         db.add(db_transaction)
         db.commit()
         db.refresh(db_transaction)
-        
+
         if account:
             # Update account balance (you might want to do this in a separate service)
             update_account_balance_from_transaction(db, account, db_transaction)
@@ -577,10 +592,7 @@ def update_db_transaction(db: Session, transaction_id: int, user_id: int,
         db_transaction.subcategory_id = subcategory_id
     update_data.pop('subcategory_uuid', None)
 
-    # Flag negative amounts for review — transaction_type encodes direction
     if 'amount' in update_data and update_data['amount'] is not None:
-        if update_data['amount'] < 0:
-            db_transaction.needs_review = True
         update_data['amount'] = abs(update_data['amount'])
 
     for field, value in update_data.items():
@@ -696,7 +708,14 @@ def bulk_create_transactions(db: Session, user_id: int, transaction_import: Tran
             transaction_data.source_type = transaction_import.source_type
 
             # Generate hash for deduplication
-            transaction_hash = generate_transaction_hash(transaction_data, user_id, account.institution_name)
+            transaction_hash = generate_transaction_hash(
+                user_id=user_id,
+                institution_name=account.institution_name,
+                transaction_date=transaction_data.transaction_date,
+                transaction_type_value=transaction_data.transaction_type.value,
+                amount=transaction_data.amount,
+                description=transaction_data.description,
+            )
 
             # Check for duplicate
             existing = db.query(TransactionDB).filter(
@@ -712,8 +731,6 @@ def bulk_create_transactions(db: Session, user_id: int, transaction_import: Tran
                 })
                 continue
 
-            # Create transaction — flag negative amounts for review
-            flag_review = transaction_data.amount < 0
             db_transaction = TransactionDB(
                 id=uuid4(),
                 user_id=user_id,
@@ -729,8 +746,6 @@ def bulk_create_transactions(db: Session, user_id: int, transaction_import: Tran
                 parsed_description=parse_transaction_description(transaction_data.description or ""),
                 merchant_name=transaction_data.merchant_name,
                 comments=transaction_data.comments,
-                account_number_last4=account.account_number_last4,
-                needs_review=flag_review,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow()
             )
@@ -813,26 +828,26 @@ def update_account_balance_from_transaction(db: Session, account: AccountDB, tra
     abs_amount = abs(transaction.amount)
     if account.account_type == AccountType.CREDIT_CARD:
         # Credit card: positive balance = debt owed
-        if transaction.transaction_type in [TransactionType.PURCHASE, TransactionType.FEE]:
+        if transaction.transaction_type in [TransactionType.PURCHASE, TransactionType.FEE, TransactionType.INTEREST]:
             new_balance = account.balance + abs_amount  # increases debt
-        elif transaction.transaction_type in [TransactionType.CREDIT, TransactionType.DEPOSIT]:
+        elif transaction.transaction_type in [TransactionType.CREDIT, TransactionType.DEPOSIT, TransactionType.TRANSFER_IN]:
+            new_balance = account.balance - abs_amount  # reduces debt (payment received)
+        elif transaction.transaction_type == TransactionType.WITHDRAWAL:
             new_balance = account.balance - abs_amount  # reduces debt
-        elif transaction.transaction_type == TransactionType.INTEREST:
-            new_balance = account.balance + abs_amount  # interest increases debt
+        elif transaction.transaction_type == TransactionType.TRANSFER_OUT:
+            new_balance = account.balance + abs_amount  # increases debt (refund sent back — rare)
         else:
-            # TRANSFER, WITHDRAWAL — apply as-is
-            new_balance = account.balance + abs_amount
+            raise ValueError(f"Unhandled transaction type: {transaction.transaction_type}")
     else:
         # All other account types (checking, savings, loan, investment)
-        if transaction.transaction_type in [TransactionType.CREDIT, TransactionType.DEPOSIT]:
-            new_balance = account.balance + abs_amount
-        elif transaction.transaction_type in [TransactionType.WITHDRAWAL, TransactionType.FEE, TransactionType.PURCHASE]:
-            new_balance = account.balance - abs_amount
+        if transaction.transaction_type in [TransactionType.CREDIT, TransactionType.DEPOSIT, TransactionType.TRANSFER_IN]:
+            new_balance = account.balance + abs_amount  # money received
+        elif transaction.transaction_type in [TransactionType.WITHDRAWAL, TransactionType.FEE, TransactionType.PURCHASE, TransactionType.TRANSFER_OUT]:
+            new_balance = account.balance - abs_amount  # money sent
         elif transaction.transaction_type == TransactionType.INTEREST:
             new_balance = account.balance + abs_amount
         else:
-            # TRANSFER — apply as-is
-            new_balance = account.balance + abs_amount
+            raise ValueError(f"Unhandled transaction type: {transaction.transaction_type}")
 
     update_account_balance(db, account.id, new_balance)
 
@@ -866,7 +881,7 @@ def get_transaction_stats(db: Session, user_id: int, filters: Optional[Transacti
             total_income += effective
         elif transaction.transaction_type in (TransactionType.PURCHASE, TransactionType.WITHDRAWAL, TransactionType.FEE):
             total_expenses += effective
-        # TRANSFER: not counted as income or expense
+        # TRANSFER_IN, TRANSFER_OUT: not counted as income or expense
 
     # If category filter is active, adjust split transaction amounts
     if filters and filters.category_ids:
@@ -1281,7 +1296,6 @@ def bulk_create_transactions_from_parsed_data(
 
     created_transactions = []
     skipped_duplicates = []
-    duplicate_tag = None
     duplicate_count = 0
 
     # Pre-fetch all existing transaction hashes for this user to avoid flagging within-statement duplicates
@@ -1331,9 +1345,6 @@ def bulk_create_transactions_from_parsed_data(
             duplicate_count += 1
             logger.debug(f"Found duplicate transaction in database (will create anyway): {t_data.transaction_date} - {t_data.description}")
 
-        # Flag negative amounts for review — may indicate a parser issue
-        flag_review = t_data.amount < 0
-
         db_transaction = TransactionDB(
             id=uuid4(),
             user_id=user_id,
@@ -1344,19 +1355,8 @@ def bulk_create_transactions_from_parsed_data(
             transaction_type=transaction_type_enum,
             description=t_data.description,
             parsed_description=parse_transaction_description(t_data.description or ""),
-            account_number_last4=account.account_number_last4 if account else None,
             source_type=SourceType.PDF,
-            needs_review=flag_review,
         )
-
-        # Apply duplicate tag if duplicate found in database (and not skipping)
-        if is_duplicate and not skip_duplicates:
-            if duplicate_tag is None:
-                duplicate_tag = db.query(TagDB).filter(TagDB.user_id == user_id, TagDB.tag_name == "duplicate").first()
-                if duplicate_tag is None:
-                    duplicate_tag = TagDB(user_id=user_id, tag_name="duplicate", created_at=datetime.utcnow())
-                    db.add(duplicate_tag)
-            db_transaction.transaction_tags.append(TransactionTagDB(tag=duplicate_tag))
 
         db.add(db_transaction)
         created_transactions.append(db_transaction)

@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, BackgroundTasks, Form, Query
 from sqlalchemy.orm import Session
-import hashlib
 import uuid
 import io
 import time
@@ -33,7 +32,9 @@ from src.services.duplicate_analyzer import (
     analyze_regular_transactions,
     analyze_investment_transactions,
 )
+from src.services.system_tags import get_system_tag
 from src.crud.crud_transaction import (
+    generate_transaction_hash,
     parse_transaction_description,
     update_account_balance_from_transaction,
 )
@@ -41,6 +42,7 @@ from src.crud.crud_investment import (
     generate_investment_transaction_hash,
     map_transaction_type_to_enum,
     rebuild_holdings_from_transactions,
+    _update_investment_account_balance,
 )
 from src.crud.crud_account import get_db_account_by_last_four
 from src.models.preview import (
@@ -778,6 +780,9 @@ async def confirm_statement_import(
     # Collect tag associations to create after flush
     pending_tag_associations: list[tuple[TransactionDB, list[int]]] = []
 
+    # Look up "Approved Duplicate" system tag for auto-tagging
+    approved_dup_tag = get_system_tag(user_id, db, "Approved Duplicate")
+
     # --- Create regular transactions ---
     for item in session["ready_to_import"]["transactions"]:
         parsed_data = item["parsed_data"]
@@ -797,14 +802,15 @@ async def confirm_statement_import(
         # Build hash from ORIGINAL parsed data so duplicate detection matches
         # on re-upload of the same statement, regardless of user edits
         parsed_type_value = TransactionType[parsed_data["transaction_type"].upper()].value
-        hash_string = (
-            f"{user_id}|{institution.lower()}|{parsed_data['transaction_date']}|"
-            f"{parsed_type_value}|{parsed_data['amount']}|"
-            f"{parsed_data.get('description') or ''}"
+        txn_hash = generate_transaction_hash(
+            user_id=user_id,
+            institution_name=institution,
+            transaction_date=parsed_data['transaction_date'],
+            transaction_type_value=parsed_type_value,
+            amount=parsed_data['amount'],
+            description=parsed_data.get('description'),
+            make_unique=is_approved_dup,
         )
-        if is_approved_dup:
-            hash_string += f"|{uuid4()}"
-        txn_hash = hashlib.sha256(hash_string.encode()).hexdigest()
         if is_approved_dup:
             duplicates_imported += 1
 
@@ -831,13 +837,14 @@ async def confirm_statement_import(
             parsed_description=parse_transaction_description(final_data.get("description", "")),
             merchant_name=final_data.get("merchant_name"),
             comments=final_data.get("comments"),
-            account_number_last4=account.account_number_last4 if account else None,
         )
         db.add(db_txn)
         created_txns.append(db_txn)
 
         # Queue tag associations (need db_txn.db_id after flush)
         tag_ids = [tag_uuid_map[t] for t in final_data.get("tag_uuids", []) if t in tag_uuid_map]
+        if is_approved_dup and approved_dup_tag:
+            tag_ids.append(approved_dup_tag.tag_id)
         if tag_ids:
             pending_tag_associations.append((db_txn, tag_ids))
 
@@ -875,7 +882,7 @@ async def confirm_statement_import(
 
         # Guard: strip share-based fields from non-share transaction types
         NON_SHARE_TYPES = {InvestmentTransactionType.INTEREST, InvestmentTransactionType.FEE,
-                           InvestmentTransactionType.TRANSFER}
+                           InvestmentTransactionType.TRANSFER_IN, InvestmentTransactionType.TRANSFER_OUT}
         if txn_type_enum in NON_SHARE_TYPES:
             inv_symbol = None
             inv_quantity = None
@@ -883,7 +890,7 @@ async def confirm_statement_import(
             inv_api_symbol = None
         else:
             inv_symbol = final_data.get("symbol")
-            inv_quantity = Decimal(str(final_data["quantity"])) if final_data.get("quantity") else None
+            inv_quantity = abs(Decimal(str(final_data["quantity"]))) if final_data.get("quantity") else None
             inv_price = Decimal(str(final_data["price_per_share"])) if final_data.get("price_per_share") else None
             inv_api_symbol = final_data.get("api_symbol")
 
@@ -937,7 +944,9 @@ async def confirm_statement_import(
         db.commit()
 
         # Post-commit: update account balances for regular transactions
-        if account:
+        # Skip for investment accounts — _update_investment_account_balance
+        # handles the full balance via transaction replay.
+        if account and account.account_type != AccountType.INVESTMENT:
             for t in created_txns:
                 db.refresh(t)
                 update_account_balance_from_transaction(db, account, t)
@@ -948,6 +957,7 @@ async def confirm_statement_import(
             inv_account_ids = {inv_txn.account_id for inv_txn in created_inv if inv_txn.account_id}
             for inv_acct_id in inv_account_ids:
                 rebuild_holdings_from_transactions(db, inv_acct_id)
+                _update_investment_account_balance(db, inv_acct_id)
             db.commit()
 
         # Trigger backfill for any historical transactions (investment or regular)

@@ -58,12 +58,13 @@ def _parse_date_pdf(date_str: str, statement_year: Optional[int] = None) -> Opti
     return None
 
 
-def _normalize_transaction_type(raw_type: str) -> str:
+def _normalize_transaction_type(raw_type: str, description: str = "") -> str:
     """
     Map Ameriprise transaction types to standard types:
-    BUY, SELL, DIVIDEND, INTEREST, FEE, TRANSFER, OTHER
+    BUY, SELL, DIVIDEND, INTEREST, FEE, TRANSFER_IN, TRANSFER_OUT, OTHER
     """
     raw_type_upper = raw_type.upper().strip()
+    desc_upper = description.upper() if description else ""
 
     # BUY transactions
     if any(word in raw_type_upper for word in ['PURCHASE', 'BUY']):
@@ -86,8 +87,10 @@ def _normalize_transaction_type(raw_type: str) -> str:
         return 'FEE'
 
     # TRANSFER transactions (ACH, deposits, withdrawals)
-    if any(word in raw_type_upper for word in ['ACH', 'DEPOSIT', 'WITHDRAWAL', 'TRANSFER']):
-        return 'TRANSFER'
+    if 'WITHDRAWAL' in raw_type_upper or 'WITHDRAWAL' in desc_upper:
+        return 'TRANSFER_OUT'
+    if any(word in raw_type_upper for word in ['ACH', 'DEPOSIT', 'TRANSFER']):
+        return 'TRANSFER_IN'
 
     # Everything else
     return 'OTHER'
@@ -233,8 +236,14 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             raw_type = parts[0].strip()
             description = parts[1].strip() if len(parts) > 1 else raw_type
 
+            # Skip money market interest reinvestments (internal sweeps that
+            # net to zero against INTEREST income entries)
+            if 'REINVEST' in raw_type.upper() and 'MONEY MARKET' in raw_description.upper():
+                logger.debug(f"Skipping money market interest reinvestment: {raw_description}")
+                continue
+
             # Normalize transaction type
-            transaction_type = _normalize_transaction_type(raw_type)
+            transaction_type = _normalize_transaction_type(raw_type, raw_description)
 
             # Parse date
             parsed_date = _parse_date_csv(date_str)
@@ -332,7 +341,12 @@ def parse_pdf(file_source: Union[Path, IO[bytes]]) -> ParsedData:
 
             # Only process pages with transaction activity
             # Must have BOTH a section header AND the table headers
-            has_activity_section = ("Your account activity" in text or "Trade activity" in text)
+            has_activity_section = ("Your account activity" in text or
+                                    "Trade activity" in text or
+                                    "Deposits" in text or
+                                    "Income" in text or
+                                    "Fees" in text or
+                                    "Other activity" in text)
             has_table_headers = ("Date Transaction Description" in text or
                                 "Date\nTransaction\nDescription" in text.replace(" ", "\n"))
 
@@ -344,23 +358,27 @@ def parse_pdf(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             # Extract words with positions
             words = page.extract_words()
 
-            # Find section boundaries to limit parsing to "Trade activity" section only
-            # Look for keywords that mark the end of Trade activity section
+            # Find section boundary: exclude the money market sweep section at
+            # the bottom of the page (has its own reduced header:
+            # "Date Transaction Description Amount" without CUSIP/Quantity/Price)
             section_end_y = page.height  # Default to end of page
 
-            for i, word in enumerate(words):
-                word_text = word['text'].upper()
+            # Look for a second "Date" header that starts the money market table
+            date_header_count = 0
+            for word in words:
+                if word['text'] == 'Date':
+                    # Check if this "Date" word is followed by "Transaction" on the same line
+                    same_line = [w for w in words if abs(w['top'] - word['top']) < 3]
+                    line_text = ' '.join([w['text'] for w in sorted(same_line, key=lambda x: x['x0'])])
+                    if 'Transaction' in line_text and 'Description' in line_text:
+                        date_header_count += 1
+                        if date_header_count == 2:
+                            # Second table header = money market section, exclude it
+                            section_end_y = word['top']
+                            logger.debug(f"  Found money market section header at y={section_end_y:.1f}, excluding")
+                            break
 
-                # Check for "Total Securities purchased" (marks end of securities section)
-                if word_text == 'TOTAL':
-                    next_words = words[i+1:i+5] if i+1 < len(words) else []
-                    next_text = ' '.join([w['text'].upper() for w in next_words])
-                    if 'SECURITIES' in next_text and 'PURCHASED' in next_text:
-                        section_end_y = word['top']
-                        logger.debug(f"  Found Trade activity section end at y={section_end_y:.1f}")
-                        break
-
-            # Find transaction rows by looking for date pattern (only in Trade activity section)
+            # Find transaction rows by looking for date pattern
             date_pattern = re.compile(r'^\d{2}/\d{2}/\d{4}$')
             transaction_rows = []
 
@@ -428,8 +446,16 @@ def parse_pdf(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                     except (InvalidOperation, ValueError):
                         pass
 
+                # Skip money market interest reinvestments — these are internal
+                # sweeps that offset the corresponding INTEREST income entry and
+                # net to zero (e.g. "INTEREST REINVEST AMERIPRISE INSURED MONEY
+                # MARKET ACCOUNT")
+                if 'REINVEST' in transaction.upper() and 'MONEY MARKET' in description.upper():
+                    logger.debug(f"  Skipping money market interest reinvestment: {transaction} - {description} ({amount})")
+                    continue
+
                 # Normalize transaction type
-                transaction_type = _normalize_transaction_type(transaction)
+                transaction_type = _normalize_transaction_type(transaction, description)
 
                 # Classify security type
                 security_type = _classify_security_type(description, symbol, transaction_type)

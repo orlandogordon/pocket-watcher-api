@@ -1,13 +1,24 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
 # Import your database models
-from src.db.core import AccountDB, UserDB, NotFoundError, AccountType
+from src.db.core import (
+    AccountDB, UserDB, NotFoundError, AccountType,
+    TransactionDB, TransactionRelationshipDB, TransactionAmortizationScheduleDB,
+    TransactionSplitAllocationDB, TransactionTagDB,
+    InvestmentTransactionDB, InvestmentHoldingDB,
+    DebtPaymentDB, DebtPlanAccountLinkDB, DebtRepaymentScheduleDB,
+    AccountValueHistoryDB, SnapshotBackfillJobDB,
+    UploadJobDB, SkippedTransactionDB,
+)
 from src.models.account import AccountCreate, AccountUpdate, AccountStats, AccountTypeEnum
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 # ===== DATABASE OPERATIONS =====
@@ -29,14 +40,20 @@ def create_db_account(db: Session, user_id: int, account_data: AccountCreate) ->
         raise ValueError(f"Account name '{account_data.account_name}' already exists")
     
     # Create new account
+    # For investment accounts, seed initial_cash_balance from the starting balance
+    # so that transaction replay correctly includes it.
+    account_type_enum = AccountType(account_data.account_type.value)
+    initial_cash = account_data.balance if account_type_enum == AccountType.INVESTMENT else Decimal('0')
+
     db_account = AccountDB(
         uuid=uuid4(),
         user_id=user_id,
         account_name=account_data.account_name,
-        account_type=AccountType(account_data.account_type.value),
+        account_type=account_type_enum,
         institution_name=account_data.institution_name,
         account_number_last4=account_data.account_number_last4,
         balance=account_data.balance,
+        initial_cash_balance=initial_cash,
         balance_last_updated=datetime.utcnow() if account_data.balance != 0 else None,
         interest_rate=account_data.interest_rate,
         interest_rate_type=account_data.interest_rate_type.value if account_data.interest_rate_type else None,
@@ -293,26 +310,148 @@ def update_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int, acc
         raise ValueError("Account update failed due to database constraint")
 
 
-def delete_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int) -> bool:
-    """Delete an account by UUID (only if it has no transactions)."""
+def delete_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int, force: bool = False) -> Dict:
+    """Delete an account by UUID.
+
+    If force=False (default), raises ValueError if the account has associated data.
+    If force=True, cascade-deletes all associated records and returns deletion counts.
+    """
     db_account = db.query(AccountDB).filter(
         AccountDB.uuid == account_uuid,
         AccountDB.user_id == user_id
     ).first()
 
     if not db_account:
-        raise NotFoundError(f"Account not found")
+        raise NotFoundError("Account not found")
 
-    if db_account.transactions:
-        raise ValueError("Cannot delete account with existing transactions")
+    if not force:
+        # Check all possible related records, not just transactions
+        conflicts = []
+        if db_account.transactions:
+            conflicts.append("transactions")
+        if db_account.investment_transactions:
+            conflicts.append("investment transactions")
+        if db_account.investment_holdings:
+            conflicts.append("investment holdings")
+        if db_account.debt_payments:
+            conflicts.append("debt payments")
+        if db_account.debt_payments_from:
+            conflicts.append("debt payment sources")
+        if db_account.debt_repayment_plans_link:
+            conflicts.append("debt repayment plans")
+        if db_account.debt_repayment_schedules:
+            conflicts.append("debt repayment schedules")
+        if db_account.value_history:
+            conflicts.append("account history snapshots")
 
-    if hasattr(db_account, 'investment_transactions') and db_account.investment_transactions:
-        raise ValueError("Cannot delete account with existing investment transactions")
+        if conflicts:
+            raise ValueError(
+                f"Cannot delete account with existing {', '.join(conflicts)}. "
+                f"Use ?force=true to cascade-delete all associated data."
+            )
+
+        try:
+            db.delete(db_account)
+            db.commit()
+            return {}
+        except Exception as e:
+            db.rollback()
+            raise ValueError(f"Failed to delete account: {str(e)}")
+
+    # Force delete: cascade-delete all associated records
+    account_id = db_account.id
+    deleted = {}
 
     try:
+        # 1. Get transaction IDs for this account (needed for child record cleanup)
+        transaction_ids = [
+            t.db_id for t in
+            db.query(TransactionDB.db_id).filter(TransactionDB.account_id == account_id).all()
+        ]
+
+        if transaction_ids:
+            # 2. Transaction relationships (either side references this account's transactions)
+            deleted["transaction_relationships"] = db.query(TransactionRelationshipDB).filter(
+                (TransactionRelationshipDB.from_transaction_id.in_(transaction_ids)) |
+                (TransactionRelationshipDB.to_transaction_id.in_(transaction_ids))
+            ).delete(synchronize_session="fetch")
+
+            # 3. Amortization schedules
+            deleted["amortization_schedules"] = db.query(TransactionAmortizationScheduleDB).filter(
+                TransactionAmortizationScheduleDB.transaction_id.in_(transaction_ids)
+            ).delete(synchronize_session="fetch")
+
+            # 4. Split allocations
+            deleted["split_allocations"] = db.query(TransactionSplitAllocationDB).filter(
+                TransactionSplitAllocationDB.transaction_id.in_(transaction_ids)
+            ).delete(synchronize_session="fetch")
+
+            # 5. Transaction tags
+            deleted["transaction_tags"] = db.query(TransactionTagDB).filter(
+                TransactionTagDB.transaction_id.in_(transaction_ids)
+            ).delete(synchronize_session="fetch")
+
+            # 6. Transactions
+            deleted["transactions"] = db.query(TransactionDB).filter(
+                TransactionDB.account_id == account_id
+            ).delete(synchronize_session="fetch")
+
+        # 7. Investment transactions
+        deleted["investment_transactions"] = db.query(InvestmentTransactionDB).filter(
+            InvestmentTransactionDB.account_id == account_id
+        ).delete(synchronize_session="fetch")
+
+        # 8. Investment holdings
+        deleted["investment_holdings"] = db.query(InvestmentHoldingDB).filter(
+            InvestmentHoldingDB.account_id == account_id
+        ).delete(synchronize_session="fetch")
+
+        # 9. Debt plan account links
+        deleted["debt_plan_links"] = db.query(DebtPlanAccountLinkDB).filter(
+            DebtPlanAccountLinkDB.account_id == account_id
+        ).delete(synchronize_session="fetch")
+
+        # 10. Debt payments — delete where this is the loan account, null out where it's the payment source
+        deleted["debt_payments"] = db.query(DebtPaymentDB).filter(
+            DebtPaymentDB.loan_account_id == account_id
+        ).delete(synchronize_session="fetch")
+
+        nulled_source_payments = db.query(DebtPaymentDB).filter(
+            DebtPaymentDB.payment_source_account_id == account_id
+        ).update({"payment_source_account_id": None}, synchronize_session="fetch")
+        deleted["debt_payments_source_nulled"] = nulled_source_payments
+
+        # 11. Debt repayment schedules
+        deleted["debt_repayment_schedules"] = db.query(DebtRepaymentScheduleDB).filter(
+            DebtRepaymentScheduleDB.account_id == account_id
+        ).delete(synchronize_session="fetch")
+
+        # 12. Account value history
+        deleted["account_snapshots"] = db.query(AccountValueHistoryDB).filter(
+            AccountValueHistoryDB.account_id == account_id
+        ).delete(synchronize_session="fetch")
+
+        # 13. Snapshot backfill jobs
+        deleted["backfill_jobs"] = db.query(SnapshotBackfillJobDB).filter(
+            SnapshotBackfillJobDB.account_id == account_id
+        ).delete(synchronize_session="fetch")
+
+        # 14. Upload jobs — null out account_id (preserves audit trail)
+        nulled_upload_jobs = db.query(UploadJobDB).filter(
+            UploadJobDB.account_id == account_id
+        ).update({"account_id": None}, synchronize_session="fetch")
+        deleted["upload_jobs_nulled"] = nulled_upload_jobs
+
+        # 15. Delete the account
         db.delete(db_account)
         db.commit()
-        return True
+
+        # Strip zero counts
+        deleted = {k: v for k, v in deleted.items() if v > 0}
+
+        logger.info(f"Force-deleted account {account_uuid}: {deleted}")
+        return deleted
+
     except Exception as e:
         db.rollback()
-        raise ValueError(f"Failed to delete account: {str(e)}")
+        raise ValueError(f"Failed to force-delete account: {str(e)}")

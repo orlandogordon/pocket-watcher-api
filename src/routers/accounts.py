@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 from datetime import date
@@ -118,14 +118,18 @@ def update_account(
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-@router.delete("/{account_uuid}", response_model=account_models.AccountResponse)
+@router.delete("/{account_uuid}")
 def delete_account(
     account_uuid: str,
+    force: bool = Query(False),
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
     """
-    Delete an account. It can only be deleted if it has no associated transactions or holdings.
+    Delete an account.
+
+    Without ?force=true, returns 409 if the account has associated data.
+    With ?force=true, cascade-deletes all associated records and returns deletion counts.
     """
     uuid_obj = _parse_account_uuid(account_uuid)
     db_account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
@@ -133,9 +137,14 @@ def delete_account(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
     try:
-        crud_account.delete_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
+        deleted = crud_account.delete_db_account_by_uuid(
+            db=db, account_uuid=uuid_obj, user_id=user_id, force=force
+        )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    if force:
+        return {"deleted": deleted}
 
     return db_account
 

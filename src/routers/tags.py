@@ -93,9 +93,14 @@ def update_tag(
     user_id: int = Depends(get_current_user_id)
 ):
     """
-    Update a tag's name or color.
+    Update a tag's name or color. System tags cannot be modified.
     """
     parsed_uuid = _parse_uuid(tag_uuid)
+    db_tag = crud_tag.read_db_tag_by_uuid(db, parsed_uuid, user_id)
+    if not db_tag:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
+    if db_tag.is_system:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System tags cannot be modified")
     try:
         return crud_tag.update_db_tag_by_uuid(db=db, tag_uuid=parsed_uuid, user_id=user_id, tag_updates=tag)
     except NotFoundError as e:
@@ -116,6 +121,8 @@ def delete_tag(
     db_tag = crud_tag.read_db_tag_by_uuid(db, tag_uuid=parsed_uuid, user_id=user_id)
     if db_tag is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
+    if db_tag.is_system:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System tags cannot be deleted")
     try:
         crud_tag.delete_db_tag(db=db, tag_id=db_tag.tag_id, user_id=user_id)
     except ValueError as e:

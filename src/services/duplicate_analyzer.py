@@ -1,8 +1,8 @@
-import hashlib
 from typing import Dict, List, Tuple, Optional, Any
 from sqlalchemy.orm import Session, joinedload
 
 from src.db.core import TransactionDB, InvestmentTransactionDB, TransactionType
+from src.crud.crud_transaction import generate_transaction_hash
 from src.crud.crud_investment import generate_investment_transaction_hash, map_transaction_type_to_enum
 from src.parser.models import ParsedTransaction, ParsedInvestmentTransaction
 from src.logging_config import get_logger
@@ -17,19 +17,17 @@ def _hash_regular_transaction(
 ) -> str:
     """
     Build a SHA-256 hash for a parsed regular transaction.
-    Mirrors the format in generate_transaction_hash() but avoids
-    constructing a full TransactionCreate (which requires account_id).
+    Delegates to the consolidated generate_transaction_hash().
     """
     txn_type_value = TransactionType[parsed_txn.transaction_type.upper()].value
-    hash_string = (
-        f"{user_id}|"
-        f"{institution_name.lower()}|"
-        f"{parsed_txn.transaction_date}|"
-        f"{txn_type_value}|"
-        f"{parsed_txn.amount}|"
-        f"{parsed_txn.description or ''}"
+    return generate_transaction_hash(
+        user_id=user_id,
+        institution_name=institution_name,
+        transaction_date=parsed_txn.transaction_date,
+        transaction_type_value=txn_type_value,
+        amount=parsed_txn.amount,
+        description=parsed_txn.description,
     )
-    return hashlib.sha256(hash_string.encode()).hexdigest()
 
 
 def _serialize_existing_transaction(txn: TransactionDB) -> Dict:

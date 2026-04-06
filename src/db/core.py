@@ -90,7 +90,8 @@ class CategoryDB(Base):
 class TransactionType(enum.Enum):
     PURCHASE = "PURCHASE"
     CREDIT = "CREDIT"
-    TRANSFER = "TRANSFER"
+    TRANSFER_IN = "TRANSFER_IN"
+    TRANSFER_OUT = "TRANSFER_OUT"
     DEPOSIT = "DEPOSIT"
     WITHDRAWAL = "WITHDRAWAL"
     FEE = "FEE"
@@ -103,7 +104,8 @@ class InvestmentTransactionType(enum.Enum):
     DIVIDEND = "DIVIDEND"
     INTEREST = "INTEREST"
     FEE = "FEE"
-    TRANSFER = "TRANSFER"
+    TRANSFER_IN = "TRANSFER_IN"
+    TRANSFER_OUT = "TRANSFER_OUT"
     SPLIT = "SPLIT"
     MERGER = "MERGER"
     SPINOFF = "SPINOFF"
@@ -450,9 +452,6 @@ class TransactionDB(Base):
     merchant_name: Mapped[Optional[str]] = mapped_column(String(255))
     comments: Mapped[Optional[str]] = mapped_column(Text)
 
-    # Financial Institution Data
-    account_number_last4: Mapped[Optional[str]] = mapped_column(String(4))
-
     # Audit Trail
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -577,7 +576,8 @@ class TagDB(Base):
     # Tag Data
     tag_name: Mapped[str] = mapped_column(String(100), nullable=False)
     color: Mapped[Optional[str]] = mapped_column(String(7))  # Hex color code
-    
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # Audit Trail
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

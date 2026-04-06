@@ -2,16 +2,10 @@ _tmp/
 __temp/
 # temp/
 # Project specific
-/input/statements/*
-!/input/statements/tdbank/sample.pdf
-
-/input/transaction_csv/*
-!/input/transaction_csv/tdbank/sample.pdf
-
+/input/*
 /output/*
-!/output/transactions_sample.csv
-
 /processed/*
+/scripts/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

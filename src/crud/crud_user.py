@@ -8,6 +8,7 @@ import bcrypt
 # Import your database models and Pydantic models
 from src.db.core import UserDB, NotFoundError
 from src.models.user import UserCreate, UserUpdate, PasswordChange
+from src.services.system_tags import ensure_system_tags
 
 
 # ===== PASSWORD HASHING UTILITIES =====
@@ -56,6 +57,7 @@ def create_db_user(db: Session, user_data: UserCreate) -> UserDB:
         db.add(db_user)
         db.commit()
         db.refresh(db_user)
+        ensure_system_tags(user_id=db_user.db_id, db=db)
         return db_user
     except IntegrityError as e:
         db.rollback()

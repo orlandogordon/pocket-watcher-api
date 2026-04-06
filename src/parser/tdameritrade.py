@@ -50,11 +50,11 @@ def _normalize_transaction_type(transaction_type: str, description: str) -> str:
     if "int" in txn_lower or re.search(r'\binterest\b', desc_lower):
         return "INTEREST"
 
-    # Deposits/Withdrawals = Transfer
+    # Deposits/Withdrawals
     if "funds deposited" in txn_lower or "ach in" in desc_lower:
-        return "TRANSFER"
+        return "TRANSFER_IN"
     if "funds disbursed" in txn_lower or "ach out" in desc_lower:
-        return "TRANSFER"
+        return "TRANSFER_OUT"
 
     # Expirations
     if "expir" in txn_lower or "expi" in desc_lower:
@@ -234,6 +234,29 @@ def _format_api_symbol(symbol: str, description: str, security_type: Optional[Se
     # If no option pattern found, return None
     logger.warning(f"Option transaction but could not format API symbol from: {description[:100]}")
     return None
+
+def _extract_fee_from_description(description: str) -> Decimal:
+    """Extract total fee amount from description text (Commission/Fee + Regulatory Fee)."""
+    total = Decimal('0')
+    for match in re.finditer(r'(?:Commission/Fee|Regulatory Fee)\s+([\d.]+)', description):
+        try:
+            total += Decimal(match.group(1))
+        except InvalidOperation:
+            pass
+    return total
+
+def _build_fee_description(description: str, parent_type: str, parent_amount: Decimal) -> str:
+    """Extract fee details from description text for the split fee transaction.
+
+    Includes parent transaction context (type + gross amount) so that fees from
+    different trades on the same day/symbol produce distinct hashes even when
+    the fee amounts are identical.
+    """
+    parts = []
+    for match in re.finditer(r'(Commission/Fee|Regulatory Fee)\s+([\d.]+)', description):
+        parts.append(f"{match.group(1)} ${match.group(2)}")
+    detail = "; ".join(parts) if parts else "Trading fees"
+    return f"{detail} ({parent_type} {parent_amount})"
 
 def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses a TD Ameritrade PDF statement using table-based extraction."""
@@ -489,20 +512,54 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                         amount_str = '-' + amount_str.replace('(', '').replace(')', '')
                     clean_amount = Decimal(amount_str)
 
-                investment_transactions.append(
-                    ParsedInvestmentTransaction(
-                        transaction_date=parsed_date,
-                        transaction_type=transaction_type,
-                        symbol=symbol,
-                        api_symbol=api_symbol,
-                        description=description,
-                        quantity=clean_quantity,
-                        price_per_share=clean_price,
-                        total_amount=clean_amount,
-                        security_type=security_type
+                # Extract fees from description and split if present on BUY/SELL
+                fee = _extract_fee_from_description(description)
+
+                if fee > 0 and transaction_type in ("BUY", "SELL"):
+                    security_amount = clean_amount + fee
+                    fee_desc = _build_fee_description(description, transaction_type, security_amount)
+                    investment_transactions.append(
+                        ParsedInvestmentTransaction(
+                            transaction_date=parsed_date,
+                            transaction_type=transaction_type,
+                            symbol=symbol,
+                            api_symbol=api_symbol,
+                            description=description,
+                            quantity=clean_quantity,
+                            price_per_share=clean_price,
+                            total_amount=security_amount,
+                            security_type=security_type
+                        )
                     )
-                )
-                logger.debug(f"Parsed: {parsed_date} | {transaction_type} | {symbol or 'N/A'} | ${clean_amount}")
+                    investment_transactions.append(
+                        ParsedInvestmentTransaction(
+                            transaction_date=parsed_date,
+                            transaction_type="FEE",
+                            symbol=symbol,
+                            api_symbol=None,
+                            description=fee_desc,
+                            quantity=None,
+                            price_per_share=None,
+                            total_amount=-fee,
+                            security_type=None
+                        )
+                    )
+                    logger.debug(f"Parsed (split): {parsed_date} | {transaction_type} | {symbol or 'N/A'} | security=${security_amount} | fee=${-fee}")
+                else:
+                    investment_transactions.append(
+                        ParsedInvestmentTransaction(
+                            transaction_date=parsed_date,
+                            transaction_type=transaction_type,
+                            symbol=symbol,
+                            api_symbol=api_symbol,
+                            description=description,
+                            quantity=clean_quantity,
+                            price_per_share=clean_price,
+                            total_amount=clean_amount,
+                            security_type=security_type
+                        )
+                    )
+                    logger.debug(f"Parsed: {parsed_date} | {transaction_type} | {symbol or 'N/A'} | ${clean_amount}")
 
             except (ValueError, InvalidOperation, IndexError) as e:
                 skip_reasons["parse_error"] += 1

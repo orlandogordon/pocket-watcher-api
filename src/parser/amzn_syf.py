@@ -158,7 +158,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 i += 1
 
             transaction_type = ""
-            if tracking_payments: transaction_type = "Credit"
+            if tracking_payments: transaction_type = "TRANSFER_IN"
             elif tracking_credits: transaction_type = "Credit"
             elif tracking_purchases: transaction_type = "Purchase"
             elif tracking_fees: transaction_type = "Fee"
@@ -196,7 +196,7 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             description = row[4]
             amount = Decimal(row[3])
 
-            transaction_type = 'Credit/Payment' if amount < 0 else 'Purchase'
+            transaction_type = 'Credit' if amount < 0 else 'Purchase'
             amount = abs(amount)
 
             parsed_transactions.append(
