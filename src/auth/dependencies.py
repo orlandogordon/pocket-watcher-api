@@ -5,7 +5,7 @@ Bearer token and populates a contextvar for the request. These
 dependencies read from that contextvar, so all auth paths agree on the
 current user.
 """
-from fastapi import Depends
+from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.auth.context import current_user_id
@@ -30,10 +30,40 @@ def get_current_user(
     if user is None:
         # Middleware already validated + revocation-checked, so this is
         # very unlikely, but keep the defensive check.
-        from fastapi import HTTPException, status
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
     return user
+
+
+def require_self_or_admin(target_user_id: int, current_user: UserDB) -> None:
+    """Authorize a request as either the target user themselves or an admin.
+
+    Raises 403 otherwise. Not a FastAPI dependency — call from inside the
+    route after resolving the target user id (the target may come from
+    a path int, or be resolved from a UUID first).
+    """
+    if current_user.db_id != target_user_id and not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized",
+        )
+
+
+def get_current_admin_user_id(
+    user: UserDB = Depends(get_current_user),
+) -> int:
+    """FastAPI dependency — requires the authenticated user to be an admin.
+
+    Returns the user's db_id. Raises 403 if the user is authenticated
+    but not an admin. (401 is raised upstream by `get_current_user_id`
+    if there is no authenticated user.)
+    """
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+    return user.db_id

@@ -141,26 +141,26 @@ def get_financial_plan_months(plan_uuid: str, db: Session = Depends(get_db), use
     return crud_financial_plan.get_financial_plan_months(db=db, plan_id=db_plan.plan_id)
 
 @router.put("/months/{month_uuid}", response_model=financial_plan_models.FinancialPlanMonth)
-def update_financial_plan_month(month_uuid: str, month_data: financial_plan_models.FinancialPlanMonthUpdate, db: Session = Depends(get_db)):
+def update_financial_plan_month(month_uuid: str, month_data: financial_plan_models.FinancialPlanMonthUpdate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
     parsed_uuid = _parse_uuid(month_uuid)
-    db_month = crud_financial_plan.get_financial_plan_month_by_uuid(db, month_uuid=parsed_uuid)
+    db_month = crud_financial_plan.get_financial_plan_month_by_uuid(db, month_uuid=parsed_uuid, user_id=user_id)
     if db_month is None:
         raise HTTPException(status_code=404, detail="Financial plan month not found")
     return crud_financial_plan.update_financial_plan_month(db=db, db_month=db_month, month_in=month_data)
 
 @router.delete("/months/{month_uuid}", status_code=204)
-def delete_financial_plan_month(month_uuid: str, db: Session = Depends(get_db)):
+def delete_financial_plan_month(month_uuid: str, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
     parsed_uuid = _parse_uuid(month_uuid)
-    db_month = crud_financial_plan.get_financial_plan_month_by_uuid(db, month_uuid=parsed_uuid)
+    db_month = crud_financial_plan.get_financial_plan_month_by_uuid(db, month_uuid=parsed_uuid, user_id=user_id)
     if db_month is None:
         raise HTTPException(status_code=404, detail="Financial plan month not found")
     crud_financial_plan.delete_financial_plan_month(db=db, db_month=db_month)
     return
 
 @router.post("/months/{month_uuid}/expenses", response_model=financial_plan_models.FinancialPlanExpense, status_code=201)
-def create_financial_plan_expense(month_uuid: str, expense: financial_plan_models.FinancialPlanExpenseCreate, db: Session = Depends(get_db)):
+def create_financial_plan_expense(month_uuid: str, expense: financial_plan_models.FinancialPlanExpenseCreate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
     parsed_uuid = _parse_uuid(month_uuid)
-    db_month = crud_financial_plan.get_financial_plan_month_by_uuid(db, month_uuid=parsed_uuid)
+    db_month = crud_financial_plan.get_financial_plan_month_by_uuid(db, month_uuid=parsed_uuid, user_id=user_id)
     if db_month is None:
         raise HTTPException(status_code=404, detail="Financial plan month not found")
 
@@ -172,13 +172,13 @@ def create_financial_plan_expense(month_uuid: str, expense: financial_plan_model
     return crud_financial_plan.create_financial_plan_expense(db=db, month_id=db_month.month_id, expense=expense, category_id=cat.id)
 
 @router.post("/months/{month_uuid}/expenses/bulk", response_model=List[financial_plan_models.FinancialPlanExpense], status_code=201)
-def bulk_create_financial_plan_expenses(month_uuid: str, bulk_data: financial_plan_models.FinancialPlanExpenseBulkCreate, db: Session = Depends(get_db)):
+def bulk_create_financial_plan_expenses(month_uuid: str, bulk_data: financial_plan_models.FinancialPlanExpenseBulkCreate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
     """
     Bulk create multiple expenses for a financial plan month in a single request.
     All expenses are created in a single database transaction.
     """
     parsed_uuid = _parse_uuid(month_uuid)
-    db_month = crud_financial_plan.get_financial_plan_month_by_uuid(db, month_uuid=parsed_uuid)
+    db_month = crud_financial_plan.get_financial_plan_month_by_uuid(db, month_uuid=parsed_uuid, user_id=user_id)
     if db_month is None:
         raise HTTPException(status_code=404, detail="Financial plan month not found")
 
@@ -199,17 +199,17 @@ def bulk_create_financial_plan_expenses(month_uuid: str, bulk_data: financial_pl
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/months/{month_uuid}/expenses", response_model=List[financial_plan_models.FinancialPlanExpense])
-def get_financial_plan_expenses(month_uuid: str, db: Session = Depends(get_db)):
+def get_financial_plan_expenses(month_uuid: str, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
     parsed_uuid = _parse_uuid(month_uuid)
-    db_month = crud_financial_plan.get_financial_plan_month_by_uuid(db, month_uuid=parsed_uuid)
+    db_month = crud_financial_plan.get_financial_plan_month_by_uuid(db, month_uuid=parsed_uuid, user_id=user_id)
     if db_month is None:
         raise HTTPException(status_code=404, detail="Financial plan month not found")
     return crud_financial_plan.get_financial_plan_expenses(db=db, month_id=db_month.month_id)
 
 @router.put("/expenses/{expense_uuid}", response_model=financial_plan_models.FinancialPlanExpense)
-def update_financial_plan_expense(expense_uuid: str, expense: financial_plan_models.FinancialPlanExpenseUpdate, db: Session = Depends(get_db)):
+def update_financial_plan_expense(expense_uuid: str, expense: financial_plan_models.FinancialPlanExpenseUpdate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
     parsed_uuid = _parse_uuid(expense_uuid)
-    db_expense = crud_financial_plan.get_financial_plan_expense_by_uuid(db, expense_uuid=parsed_uuid)
+    db_expense = crud_financial_plan.get_financial_plan_expense_by_uuid(db, expense_uuid=parsed_uuid, user_id=user_id)
     if db_expense is None:
         raise HTTPException(status_code=404, detail="Financial plan expense not found")
 
@@ -225,9 +225,9 @@ def update_financial_plan_expense(expense_uuid: str, expense: financial_plan_mod
     return crud_financial_plan.update_financial_plan_expense(db=db, db_expense=db_expense, expense_in=expense, category_id=category_id)
 
 @router.delete("/expenses/{expense_uuid}", status_code=204)
-def delete_financial_plan_expense(expense_uuid: str, db: Session = Depends(get_db)):
+def delete_financial_plan_expense(expense_uuid: str, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
     parsed_uuid = _parse_uuid(expense_uuid)
-    db_expense = crud_financial_plan.get_financial_plan_expense_by_uuid(db, expense_uuid=parsed_uuid)
+    db_expense = crud_financial_plan.get_financial_plan_expense_by_uuid(db, expense_uuid=parsed_uuid, user_id=user_id)
     if db_expense is None:
         raise HTTPException(status_code=404, detail="Financial plan expense not found")
     crud_financial_plan.delete_financial_plan_expense(db=db, db_expense=db_expense)

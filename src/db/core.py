@@ -52,18 +52,26 @@ class UserDB(Base):
     # Auth — reject JWTs whose `iat` is earlier than this timestamp.
     # Bumping this value (to now()) is the "log out everywhere" mechanism for a single user.
     jwt_valid_after: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # Authorization
+    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     
     # Audit Trail
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    accounts = relationship("AccountDB", back_populates="user")
-    transactions = relationship("TransactionDB", back_populates="user")
-    tags = relationship("TagDB", back_populates="user")
-    budget_templates = relationship("BudgetTemplateDB", back_populates="user")
-    debt_repayment_plans = relationship("DebtRepaymentPlanDB", back_populates="user")
-    financial_plans = relationship("FinancialPlanDB", back_populates="user")
+    accounts = relationship("AccountDB", back_populates="user", cascade="all, delete-orphan")
+    transactions = relationship("TransactionDB", back_populates="user", cascade="all, delete-orphan")
+    tags = relationship("TagDB", back_populates="user", cascade="all, delete-orphan")
+    budget_templates = relationship("BudgetTemplateDB", back_populates="user", cascade="all, delete-orphan")
+    debt_repayment_plans = relationship("DebtRepaymentPlanDB", back_populates="user", cascade="all, delete-orphan")
+    financial_plans = relationship("FinancialPlanDB", back_populates="user", cascade="all, delete-orphan")
+    investment_transactions = relationship("InvestmentTransactionDB", back_populates="user", cascade="all, delete-orphan")
+    budget_months = relationship("BudgetMonthDB", back_populates="user", cascade="all, delete-orphan")
+    debt_repayment_schedules = relationship("DebtRepaymentScheduleDB", back_populates="user", cascade="all, delete-orphan")
+    snapshot_backfill_jobs = relationship("SnapshotBackfillJobDB", back_populates="user", cascade="all, delete-orphan")
+    upload_jobs = relationship("UploadJobDB", back_populates="user", cascade="all, delete-orphan")
 
 
 class CategoryDB(Base):
@@ -223,7 +231,7 @@ class BudgetMonthDB(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    user = relationship("UserDB")
+    user = relationship("UserDB", back_populates="budget_months")
     template = relationship("BudgetTemplateDB", back_populates="month_assignments")
 
 
@@ -321,7 +329,7 @@ class InvestmentTransactionDB(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    user = relationship("UserDB")
+    user = relationship("UserDB", back_populates="investment_transactions")
     account = relationship("AccountDB", back_populates="investment_transactions")
     holding = relationship("InvestmentHoldingDB", back_populates="investment_transactions")
 
@@ -419,7 +427,7 @@ class DebtRepaymentScheduleDB(Base):
     payment_month: Mapped[date] = mapped_column(Date, nullable=False)
     scheduled_payment_amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
     
-    user = relationship("UserDB")
+    user = relationship("UserDB", back_populates="debt_repayment_schedules")
     account = relationship("AccountDB", back_populates="debt_repayment_schedules")
 
 
@@ -646,11 +654,11 @@ class AccountDB(Base):
 
     # Relationships
     user = relationship("UserDB", back_populates="accounts")
-    transactions = relationship("TransactionDB", back_populates="account")
-    investment_holdings = relationship("InvestmentHoldingDB", back_populates="account")
-    investment_transactions = relationship("InvestmentTransactionDB", back_populates="account")
-    debt_payments = relationship("DebtPaymentDB", foreign_keys="DebtPaymentDB.loan_account_id", back_populates="loan_account")
-    debt_payments_from = relationship("DebtPaymentDB", foreign_keys="DebtPaymentDB.payment_source_account_id", back_populates="payment_source_account")
+    transactions = relationship("TransactionDB", back_populates="account", cascade="all, delete-orphan")
+    investment_holdings = relationship("InvestmentHoldingDB", back_populates="account", cascade="all, delete-orphan")
+    investment_transactions = relationship("InvestmentTransactionDB", back_populates="account", cascade="all, delete-orphan")
+    debt_payments = relationship("DebtPaymentDB", foreign_keys="DebtPaymentDB.loan_account_id", back_populates="loan_account", cascade="all, delete-orphan")
+    debt_payments_from = relationship("DebtPaymentDB", foreign_keys="DebtPaymentDB.payment_source_account_id", back_populates="payment_source_account", cascade="all, delete-orphan")
     debt_repayment_plans_link = relationship("DebtPlanAccountLinkDB", back_populates="account", cascade="all, delete-orphan")
     debt_repayment_schedules = relationship("DebtRepaymentScheduleDB", back_populates="account", cascade="all, delete-orphan")
     value_history = relationship("AccountValueHistoryDB", back_populates="account", cascade="all, delete-orphan")
@@ -810,7 +818,7 @@ class SnapshotBackfillJobDB(Base):
     snapshots_skipped: Mapped[int] = mapped_column(Integer, default=0)
 
     # Relationships
-    user = relationship("UserDB")
+    user = relationship("UserDB", back_populates="snapshot_backfill_jobs")
     account = relationship("AccountDB")
 
 
@@ -856,9 +864,9 @@ class UploadJobDB(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
     # Relationships
-    user = relationship("UserDB")
+    user = relationship("UserDB", back_populates="upload_jobs")
     account = relationship("AccountDB")
-    skipped_transactions = relationship("SkippedTransactionDB", back_populates="upload_job")
+    skipped_transactions = relationship("SkippedTransactionDB", back_populates="upload_job", cascade="all, delete-orphan")
 
 
 class SkippedTransactionDB(Base):

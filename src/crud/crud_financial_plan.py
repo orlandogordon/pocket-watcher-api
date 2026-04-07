@@ -255,12 +255,20 @@ def get_financial_plan_by_uuid(db: Session, user_id: int, plan_uuid: UUID) -> Op
         FinancialPlanDB.user_id == user_id
     ).first()
 
-def get_financial_plan_month_by_uuid(db: Session, month_uuid: UUID) -> Optional[FinancialPlanMonthDB]:
-    return db.query(FinancialPlanMonthDB).filter(
-        FinancialPlanMonthDB.id == month_uuid
+def get_financial_plan_month_by_uuid(db: Session, month_uuid: UUID, user_id: int) -> Optional[FinancialPlanMonthDB]:
+    return db.query(FinancialPlanMonthDB).join(
+        FinancialPlanDB, FinancialPlanMonthDB.plan_id == FinancialPlanDB.plan_id
+    ).filter(
+        FinancialPlanMonthDB.id == month_uuid,
+        FinancialPlanDB.user_id == user_id,
     ).first()
 
-def get_financial_plan_expense_by_uuid(db: Session, expense_uuid: UUID) -> Optional[FinancialPlanExpenseDB]:
-    return db.query(FinancialPlanExpenseDB).filter(
-        FinancialPlanExpenseDB.id == expense_uuid
+def get_financial_plan_expense_by_uuid(db: Session, expense_uuid: UUID, user_id: int) -> Optional[FinancialPlanExpenseDB]:
+    return db.query(FinancialPlanExpenseDB).join(
+        FinancialPlanMonthDB, FinancialPlanExpenseDB.month_id == FinancialPlanMonthDB.month_id
+    ).join(
+        FinancialPlanDB, FinancialPlanMonthDB.plan_id == FinancialPlanDB.plan_id
+    ).filter(
+        FinancialPlanExpenseDB.id == expense_uuid,
+        FinancialPlanDB.user_id == user_id,
     ).first()

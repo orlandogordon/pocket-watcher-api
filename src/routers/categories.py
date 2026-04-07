@@ -6,22 +6,18 @@ from uuid import UUID
 from src.crud import crud_category
 from src.models import category as category_models
 from src.db.core import get_db, NotFoundError
+from src.auth.dependencies import get_current_user_id, get_current_admin_user_id
 
 router = APIRouter(
     prefix="/categories",
     tags=["categories"],
 )
 
-# In a real app, you would add a dependency here to check for admin privileges.
-def get_admin_user():
-    # Placeholder for admin user check
-    return {"username": "admin"}
-
 @router.post("/", response_model=category_models.CategoryResponse, status_code=status.HTTP_201_CREATED)
 def create_category(
     category: category_models.CategoryCreate,
     db: Session = Depends(get_db),
-    admin: dict = Depends(get_admin_user) # Protect this endpoint
+    admin_id: int = Depends(get_current_admin_user_id),
 ):
     """
     Create a new global category. (Admin only)
@@ -42,7 +38,8 @@ def create_category(
 def read_categories(
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
 ):
     """
     Retrieve all global categories.
@@ -52,7 +49,8 @@ def read_categories(
 @router.get("/{category_uuid}", response_model=category_models.CategoryResponse)
 def read_category(
     category_uuid: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
 ):
     """
     Retrieve a specific category by its UUID.
@@ -71,7 +69,7 @@ def update_category(
     category_uuid: str,
     category: category_models.CategoryUpdate,
     db: Session = Depends(get_db),
-    admin: dict = Depends(get_admin_user) # Protect this endpoint
+    admin_id: int = Depends(get_current_admin_user_id),
 ):
     """
     Update a category's name or parent. (Admin only)
@@ -106,7 +104,7 @@ def delete_category(
     category_uuid: str,
     force: bool = False,
     db: Session = Depends(get_db),
-    admin: dict = Depends(get_admin_user) # Protect this endpoint
+    admin_id: int = Depends(get_current_admin_user_id),
 ):
     """
     Delete a global category. (Admin only)

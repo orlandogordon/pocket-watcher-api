@@ -22,6 +22,7 @@ from src.db.core import session_local, UserDB
 PUBLIC_PATHS: set[str] = {
     "/",
     "/auth/login",
+    "/users/login",
     "/openapi.json",
     "/docs",
     "/docs/oauth2-redirect",
@@ -29,12 +30,8 @@ PUBLIC_PATHS: set[str] = {
     "/favicon.ico",
 }
 
-# Path prefixes that are reachable without a token. The users router is
-# currently fully unauthenticated — revisit once registration moves behind
-# an admin gate.
-PUBLIC_PREFIXES: tuple[str, ...] = (
-    "/users",
-)
+# Path prefixes that are reachable without a token.
+PUBLIC_PREFIXES: tuple[str, ...] = ()
 
 
 def _is_public(path: str) -> bool:
