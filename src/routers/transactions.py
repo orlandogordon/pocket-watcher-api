@@ -40,6 +40,7 @@ from src.crud.crud_account import read_db_account_by_uuid
 from src.crud.crud_category import read_db_category_by_uuid, read_db_categories_by_uuids
 from src.crud.crud_tag import read_db_tag_by_uuid, read_db_tags_by_uuids
 from src.auth.dependencies import get_current_user_id
+from src.auth.context import current_user_id
 
 router = APIRouter(
     prefix="/transactions",
@@ -142,7 +143,7 @@ def list_transactions(
     db: Session = Depends(get_db),
 ) -> List[TransactionResponse]:
     """List and filter transactions with pagination."""
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     filters = _build_filters(
         db, user_id, account_uuid, category_uuid, subcategory_uuid, tag_uuid,
         transaction_type, merchant_name, date_from, date_to, amount_min, amount_max,
@@ -172,7 +173,7 @@ def transaction_stats(
     db: Session = Depends(get_db),
 ) -> TransactionStats:
     """Get aggregate transaction statistics with optional filters."""
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     filters = _build_filters(
         db, user_id, account_uuid, category_uuid, subcategory_uuid, tag_uuid,
         transaction_type, merchant_name, date_from, date_to, amount_min, amount_max,
@@ -189,7 +190,7 @@ def monthly_averages(
     db: Session = Depends(get_db),
 ) -> MonthlyAverageResponse:
     """Get monthly average income/expenses/net with category breakdown for a calendar year."""
-    user_id = get_current_user_id()
+    user_id = current_user_id()
 
     account_ids = None
     if account_uuid:
@@ -210,7 +211,7 @@ def monthly_averages(
 
 @router.post("/", status_code=201)
 def create_transaction(request: Request, transaction: TransactionCreate, db: Session = Depends(get_db)) -> TransactionResponse:
-    user_id = get_current_user_id()
+    user_id = current_user_id()
 
     # Resolve UUIDs to int IDs
     account_id = None
@@ -244,7 +245,7 @@ def create_transaction(request: Request, transaction: TransactionCreate, db: Ses
 
 @router.patch("/bulk-update")
 def bulk_update_transactions(request: Request, bulk_update_data: TransactionBulkUpdate, db: Session = Depends(get_db)) -> Dict[str, Any]:
-    user_id = get_current_user_id()
+    user_id = current_user_id()
 
     # Resolve transaction UUIDs - bulk_update_db_transactions filters by TransactionDB.id (UUID)
     transaction_ids = list(bulk_update_data.transaction_uuids)
@@ -287,7 +288,7 @@ def bulk_update_transactions(request: Request, bulk_update_data: TransactionBulk
 
 @router.post("/bulk-upload/", status_code=201)
 def create_transactions(request: Request, transaction_import: TransactionImport, db: Session = Depends(get_db)) -> List[TransactionResponse]:
-    user_id = get_current_user_id()
+    user_id = current_user_id()
 
     # Resolve account UUID
     account = read_db_account_by_uuid(db, transaction_import.account_uuid, user_id)
@@ -304,7 +305,7 @@ def create_transactions(request: Request, transaction_import: TransactionImport,
 
 @router.get("/{transaction_uuid}")
 def read_transaction(request: Request, transaction_uuid: str, db: Session = Depends(get_db)) -> TransactionResponse:
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(transaction_uuid)
 
     db_transaction = read_db_transaction_by_uuid(db, transaction_uuid=parsed_uuid, user_id=user_id)
@@ -314,7 +315,7 @@ def read_transaction(request: Request, transaction_uuid: str, db: Session = Depe
 
 @router.put("/{transaction_uuid}")
 def update_transaction(request: Request, transaction_uuid: str, transaction: TransactionUpdate, db: Session = Depends(get_db)) -> TransactionResponse:
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(transaction_uuid)
 
     # Resolve optional account UUID, distinguishing "not sent" from "sent as null"
@@ -367,7 +368,7 @@ def update_transaction(request: Request, transaction_uuid: str, transaction: Tra
 
 @router.delete("/{transaction_uuid}", status_code=204)
 def delete_transaction(request: Request, transaction_uuid: str, db: Session = Depends(get_db)):
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(transaction_uuid)
 
     db_transaction = read_db_transaction_by_uuid(db, transaction_uuid=parsed_uuid, user_id=user_id)
@@ -382,7 +383,7 @@ def delete_transaction(request: Request, transaction_uuid: str, db: Session = De
 @router.put("/{transaction_uuid}/splits", status_code=200)
 def set_splits(transaction_uuid: str, split_request: TransactionSplitRequest,
                db: Session = Depends(get_db)) -> TransactionResponse:
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(transaction_uuid)
     try:
         txn = set_transaction_splits(db, user_id, parsed_uuid, split_request)
@@ -396,7 +397,7 @@ def set_splits(transaction_uuid: str, split_request: TransactionSplitRequest,
 @router.get("/{transaction_uuid}/splits", status_code=200)
 def get_splits(transaction_uuid: str,
                db: Session = Depends(get_db)) -> List[SplitAllocationResponse]:
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(transaction_uuid)
     try:
         allocations = get_transaction_splits(db, user_id, parsed_uuid)
@@ -407,7 +408,7 @@ def get_splits(transaction_uuid: str,
 
 @router.delete("/{transaction_uuid}/splits", status_code=204)
 def remove_splits(transaction_uuid: str, db: Session = Depends(get_db)):
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(transaction_uuid)
     try:
         delete_transaction_splits(db, user_id, parsed_uuid)
@@ -419,7 +420,7 @@ def remove_splits(transaction_uuid: str, db: Session = Depends(get_db)):
 @router.put("/{transaction_uuid}/amortization", response_model=AmortizationScheduleResponse)
 def set_amortization(transaction_uuid: str, schedule: AmortizationScheduleCreate,
                      db: Session = Depends(get_db)) -> AmortizationScheduleResponse:
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(transaction_uuid)
     try:
         return create_or_replace_amortization_schedule(db, user_id, parsed_uuid, schedule)
@@ -432,7 +433,7 @@ def set_amortization(transaction_uuid: str, schedule: AmortizationScheduleCreate
 @router.get("/{transaction_uuid}/amortization", response_model=AmortizationScheduleResponse)
 def get_amortization(transaction_uuid: str,
                      db: Session = Depends(get_db)) -> AmortizationScheduleResponse:
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(transaction_uuid)
     try:
         result = read_amortization_schedule(db, user_id, parsed_uuid)
@@ -445,7 +446,7 @@ def get_amortization(transaction_uuid: str,
 
 @router.delete("/{transaction_uuid}/amortization", status_code=204)
 def remove_amortization(transaction_uuid: str, db: Session = Depends(get_db)):
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(transaction_uuid)
     try:
         delete_amortization_schedule(db, user_id, parsed_uuid)
@@ -457,7 +458,7 @@ def remove_amortization(transaction_uuid: str, db: Session = Depends(get_db)):
 @router.get("/{transaction_uuid}/relationships", response_model=List[TransactionRelationship])
 def get_relationships(transaction_uuid: str, db: Session = Depends(get_db)) -> List[TransactionRelationship]:
     """Get all relationships for a transaction."""
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(transaction_uuid)
     try:
         relationships = read_transaction_relationships_by_uuid(db, user_id, parsed_uuid)
@@ -477,7 +478,7 @@ def create_relationship(transaction_uuid: str, relationship: TransactionRelation
     - FEES_FOR: To transaction is a fee for from transaction
     - REVERSES: To transaction reverses from transaction
     """
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(transaction_uuid)
     try:
         db_relationship = create_transaction_relationship_by_uuid(db, user_id, from_transaction_uuid=parsed_uuid, relationship_data=relationship)
@@ -494,7 +495,7 @@ def update_relationship(relationship_uuid: str, relationship_update: Transaction
     Update an existing transaction relationship.
     All fields are optional - only provided fields will be updated.
     """
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(relationship_uuid)
 
     # Convert to dict and exclude unset values
@@ -524,7 +525,7 @@ def delete_relationship(relationship_uuid: str, db: Session = Depends(get_db)):
     """
     Delete a transaction relationship.
     """
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(relationship_uuid)
     try:
         delete_transaction_relationship_by_uuid(db, user_id, relationship_uuid=parsed_uuid)

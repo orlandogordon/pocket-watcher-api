@@ -48,6 +48,10 @@ class UserDB(Base):
     
     # Activity Tracking
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+    # Auth — reject JWTs whose `iat` is earlier than this timestamp.
+    # Bumping this value (to now()) is the "log out everywhere" mechanism for a single user.
+    jwt_valid_after: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
     # Audit Trail
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

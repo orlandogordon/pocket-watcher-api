@@ -1,5 +1,12 @@
 from fastapi import FastAPI
+
+# Import auth config early so the app fails loudly at startup if JWT_SECRET
+# is missing or too short. Do not remove — this is the startup validation.
+from .auth import config as _auth_config  # noqa: F401
+from .auth.middleware import AuthMiddleware
+
 from .logging_config import setup_logging, get_logger
+from .routers.auth import router as auth_router
 from .routers.users import router as users_router
 from .routers.transactions import router as transactions_router
 from .routers.investments import router as investments_router
@@ -24,6 +31,7 @@ logger = get_logger(__name__)
 #     yield
 
 app = FastAPI()  # FastAPI(lifespan=lifespan)
+app.add_middleware(AuthMiddleware)
 
 
 @app.on_event("startup")
@@ -49,6 +57,7 @@ def startup_event():
 
     logger.info("Startup complete")
 
+app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(transactions_router)
 app.include_router(investments_router)

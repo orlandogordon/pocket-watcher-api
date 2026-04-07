@@ -14,6 +14,7 @@ from src.models.investment import (
     InvestmentAccountSummary
 )
 from src.auth.dependencies import get_current_user_id
+from src.auth.context import current_user_id
 
 router = APIRouter(
     prefix="/investments",
@@ -30,7 +31,7 @@ def _parse_uuid(value: str) -> UUID:
 
 @router.post("/refresh-prices")
 def refresh_prices(db: Session = Depends(get_db)):
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     try:
         result = account_snapshot.update_investment_prices(db=db, user_id=user_id)
         return result
@@ -42,7 +43,7 @@ def refresh_prices(db: Session = Depends(get_db)):
 
 @router.get("/accounts/{account_uuid}/summary", response_model=InvestmentAccountSummary)
 def read_account_summary(account_uuid: str, db: Session = Depends(get_db)):
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(account_uuid)
     account = crud_account.read_db_account_by_uuid(db=db, account_uuid=parsed_uuid, user_id=user_id)
     if not account:
@@ -59,7 +60,7 @@ def read_account_summary(account_uuid: str, db: Session = Depends(get_db)):
 
 @router.get("/accounts/{account_uuid}/holdings/", response_model=List[InvestmentHoldingResponse])
 def read_holdings_for_account(account_uuid: str, db: Session = Depends(get_db)):
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(account_uuid)
     account = crud_account.read_db_account_by_uuid(db=db, account_uuid=parsed_uuid, user_id=user_id)
     if not account:
@@ -71,7 +72,7 @@ def read_holdings_for_account(account_uuid: str, db: Session = Depends(get_db)):
 
 @router.get("/holdings/{holding_uuid}", response_model=InvestmentHoldingResponse)
 def read_holding(holding_uuid: str, db: Session = Depends(get_db)):
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(holding_uuid)
     db_holding = crud_investment.read_db_investment_holding_by_uuid(db=db, holding_uuid=parsed_uuid, user_id=user_id)
     if db_holding is None:
@@ -80,7 +81,7 @@ def read_holding(holding_uuid: str, db: Session = Depends(get_db)):
 
 @router.put("/holdings/{holding_uuid}", response_model=InvestmentHoldingResponse)
 def update_holding(holding_uuid: str, updates: InvestmentHoldingUpdate, db: Session = Depends(get_db)):
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(holding_uuid)
     try:
         return crud_investment.update_db_investment_holding_by_uuid(db=db, holding_uuid=parsed_uuid, user_id=user_id, updates=updates)
@@ -90,7 +91,7 @@ def update_holding(holding_uuid: str, updates: InvestmentHoldingUpdate, db: Sess
 @router.post("/accounts/{account_uuid}/holdings/rebuild", response_model=List[InvestmentHoldingResponse])
 def rebuild_holdings(account_uuid: str, db: Session = Depends(get_db)):
     """Manual rebuild of holdings from transactions. For admin/debugging."""
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(account_uuid)
     account = crud_account.read_db_account_by_uuid(db=db, account_uuid=parsed_uuid, user_id=user_id)
     if not account:
@@ -107,7 +108,7 @@ def rebuild_holdings(account_uuid: str, db: Session = Depends(get_db)):
 
 @router.post("/transactions/", response_model=InvestmentTransactionResponse, status_code=201)
 def create_transaction(transaction: InvestmentTransactionCreate, db: Session = Depends(get_db)):
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     # Resolve account UUID
     account = crud_account.read_db_account_by_uuid(db, transaction.account_uuid, user_id)
     if not account:
@@ -126,7 +127,7 @@ def create_bulk_transactions(bulk_data: InvestmentTransactionBulkCreate, db: Ses
 
 @router.get("/accounts/{account_uuid}/transactions/", response_model=List[InvestmentTransactionResponse])
 def read_transactions_for_account(account_uuid: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(account_uuid)
     account = crud_account.read_db_account_by_uuid(db=db, account_uuid=parsed_uuid, user_id=user_id)
     if not account:
@@ -135,7 +136,7 @@ def read_transactions_for_account(account_uuid: str, skip: int = 0, limit: int =
 
 @router.get("/transactions/{transaction_uuid}", response_model=InvestmentTransactionResponse)
 def read_transaction(transaction_uuid: str, db: Session = Depends(get_db)):
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(transaction_uuid)
     db_transaction = crud_investment.read_db_investment_transaction_by_uuid(db=db, transaction_uuid=parsed_uuid, user_id=user_id)
     if db_transaction is None:
@@ -144,7 +145,7 @@ def read_transaction(transaction_uuid: str, db: Session = Depends(get_db)):
 
 @router.put("/transactions/{transaction_uuid}", response_model=InvestmentTransactionResponse)
 def update_transaction(transaction_uuid: str, transaction: InvestmentTransactionUpdate, db: Session = Depends(get_db)):
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(transaction_uuid)
     try:
         return crud_investment.update_db_investment_transaction_by_uuid(db=db, transaction_uuid=parsed_uuid, user_id=user_id, transaction_updates=transaction)
@@ -153,7 +154,7 @@ def update_transaction(transaction_uuid: str, transaction: InvestmentTransaction
 
 @router.delete("/transactions/{transaction_uuid}", status_code=204)
 def delete_transaction(transaction_uuid: str, db: Session = Depends(get_db)):
-    user_id = get_current_user_id()
+    user_id = current_user_id()
     parsed_uuid = _parse_uuid(transaction_uuid)
     db_transaction = crud_investment.read_db_investment_transaction_by_uuid(db, transaction_uuid=parsed_uuid, user_id=user_id)
     if db_transaction is None:

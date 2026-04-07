@@ -1,15 +1,39 @@
 """Auth dependencies for FastAPI routers.
 
-This module is the single source of truth for the `get_current_user_id`
-dependency used across all routers. Today it returns a hardcoded user id
-(the existing placeholder behavior); todo #26 will swap the body of this
-function for real JWT validation without touching any router code.
+The auth middleware (`src.auth.middleware.AuthMiddleware`) validates the
+Bearer token and populates a contextvar for the request. These
+dependencies read from that contextvar, so all auth paths agree on the
+current user.
 """
+from fastapi import Depends
+from sqlalchemy.orm import Session
+
+from src.auth.context import current_user_id
+from src.db.core import UserDB, get_db
 
 
 def get_current_user_id() -> int:
-    """Placeholder auth dependency. Returns the dev user id.
+    """FastAPI dependency — returns the authenticated user id.
 
-    Will be replaced with real JWT validation in todo #26.
+    Raises 401 via `current_user_id()` if the middleware did not
+    authenticate this request.
     """
-    return 1
+    return current_user_id()
+
+
+def get_current_user(
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+) -> UserDB:
+    """FastAPI dependency — returns the full `UserDB` row."""
+    user = db.query(UserDB).filter(UserDB.db_id == user_id).first()
+    if user is None:
+        # Middleware already validated + revocation-checked, so this is
+        # very unlikely, but keep the defensive check.
+        from fastapi import HTTPException, status
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user

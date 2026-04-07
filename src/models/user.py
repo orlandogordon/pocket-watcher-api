@@ -106,6 +106,12 @@ class UserLogin(BaseModel):
         return v.lower().strip()
 
 
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_at: datetime
+
+
 class PasswordChange(BaseModel):
     current_password: str = Field(..., description="Current password")
     new_password: str = Field(..., min_length=8, description="New password (minimum 8 characters)")
