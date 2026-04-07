@@ -13,15 +13,12 @@ from src.models.investment import (
     InvestmentTransactionCreate, InvestmentTransactionResponse, InvestmentTransactionUpdate, InvestmentTransactionBulkCreate,
     InvestmentAccountSummary
 )
+from src.auth.dependencies import get_current_user_id
 
 router = APIRouter(
     prefix="/investments",
     tags=["investments"],
 )
-
-# A placeholder for user authentication
-def get_current_user_id():
-    return 1
 
 def _parse_uuid(value: str) -> UUID:
     try:

@@ -14,16 +14,12 @@ from src.db.core import (
     AccountValueHistoryDB,
 )
 from src.services.job_runner import get_job_runner
+from src.auth.dependencies import get_current_user_id
 
 router = APIRouter(
     prefix="/accounts",
     tags=["accounts"],
 )
-
-# This is a placeholder for a proper authentication dependency.
-# In a real app, this would decode a JWT token to get the current user.
-def get_current_user_id() -> int:
-    return 1
 
 
 def _parse_account_uuid(account_uuid: str) -> UUID:

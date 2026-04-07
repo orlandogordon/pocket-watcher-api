@@ -39,15 +39,12 @@ from src.crud.crud_transaction import (
 from src.crud.crud_account import read_db_account_by_uuid
 from src.crud.crud_category import read_db_category_by_uuid, read_db_categories_by_uuids
 from src.crud.crud_tag import read_db_tag_by_uuid, read_db_tags_by_uuids
+from src.auth.dependencies import get_current_user_id
 
 router = APIRouter(
     prefix="/transactions",
     tags=["transactions"],
 )
-
-# A placeholder for user authentication
-def get_current_user_id():
-    return 1
 
 def _parse_uuid(value: str) -> UUID:
     try:

@@ -14,9 +14,7 @@ from src.db.core import (
     AccountDB, TransactionType, SourceType, InvestmentTransactionType, AccountType,
     CategoryDB, TagDB, TransactionTagDB,
 )
-# This is a placeholder for a proper authentication dependency.
-# In a real app, this would decode a JWT token to get the current user.
-from src.routers.accounts import get_current_user_id
+from src.auth.dependencies import get_current_user_id
 from src.services import s3, importer
 from src.services.importer import PARSER_MAPPING
 from src.services.redis_client import get_redis_dependency

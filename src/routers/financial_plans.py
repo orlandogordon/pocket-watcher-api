@@ -7,10 +7,7 @@ from uuid import UUID
 from src.db.core import get_db, NotFoundError
 from src.crud import crud_financial_plan, crud_category
 from src.models import financial_plan as financial_plan_models
-
-# This is a placeholder for your actual authentication logic
-def get_current_user_id():
-    return 1
+from src.auth.dependencies import get_current_user_id
 
 router = APIRouter(
     prefix="/financial_plans",

@@ -15,15 +15,12 @@ from src.models.account_history import (
     NetWorthDataPoint,
     AccountValueHistoryResponse
 )
+from src.auth.dependencies import get_current_user_id
 
 router = APIRouter(
     prefix="/account-history",
     tags=["account-history"],
 )
-
-# Placeholder for user authentication
-def get_current_user_id():
-    return 1
 
 
 @router.post("/snapshots/all", status_code=201)

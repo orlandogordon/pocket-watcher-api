@@ -7,15 +7,12 @@ from src.crud import crud_tag
 from src.models import tag as tag_models
 from src.models import transaction as transaction_models
 from src.db.core import get_db, NotFoundError
+from src.auth.dependencies import get_current_user_id
 
 router = APIRouter(
     prefix="/tags",
     tags=["tags"],
 )
-
-# This is a placeholder for a proper authentication dependency.
-def get_current_user_id() -> int:
-    return 1
 
 def _parse_uuid(value: str) -> UUID:
     try:

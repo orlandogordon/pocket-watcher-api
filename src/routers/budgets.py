@@ -6,15 +6,12 @@ from uuid import UUID
 from src.crud import crud_budget
 from src.models import budget as budget_models
 from src.db.core import get_db, NotFoundError
+from src.auth.dependencies import get_current_user_id
 
 router = APIRouter(
     prefix="/budgets",
     tags=["budgets"],
 )
-
-# Placeholder auth dependency
-def get_current_user_id() -> int:
-    return 1
 
 def _parse_uuid(value: str) -> UUID:
     try:
