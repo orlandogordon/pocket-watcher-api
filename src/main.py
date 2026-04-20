@@ -1,4 +1,7 @@
+import os
+
 from fastapi import FastAPI
+from starlette.middleware.cors import CORSMiddleware
 
 # Import auth config early so the app fails loudly at startup if JWT_SECRET
 # is missing or too short. Do not remove — this is the startup validation.
@@ -32,6 +35,16 @@ logger = get_logger(__name__)
 
 app = FastAPI()  # FastAPI(lifespan=lifespan)
 app.add_middleware(AuthMiddleware)
+
+# CORS — must be added after AuthMiddleware so it runs first in the stack.
+_cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in _cors_origins],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.on_event("startup")

@@ -81,7 +81,7 @@ def run_eod_snapshots(
                     db=db,
                     user_id=user.db_id,
                     snapshot_date=snapshot_date,
-                    snapshot_source="EOD_JOB",
+                    snapshot_source="SCHEDULED",
                     update_prices=True  # Fetch latest market prices
                 )
 

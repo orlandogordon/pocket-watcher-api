@@ -102,7 +102,7 @@ def seed_transaction_relationships(accounts, categories_map):
         # Debit from Checking
         from_transaction = run_api_request("POST", "/transactions/", {
             "account_id": checking_id, "transaction_date": transfer_date,
-            "amount": -amount, "transaction_type": "TRANSFER",
+            "amount": amount, "transaction_type": "TRANSFER_OUT",
             "description": "Transfer to Savings", "merchant_name": "Internal Transfer",
             "category_id": transfer_category_id
         })
@@ -110,7 +110,7 @@ def seed_transaction_relationships(accounts, categories_map):
         # Credit to Savings
         to_transaction = run_api_request("POST", "/transactions/", {
             "account_id": savings_id, "transaction_date": transfer_date,
-            "amount": amount, "transaction_type": "TRANSFER",
+            "amount": amount, "transaction_type": "TRANSFER_IN",
             "description": "Transfer from Checking", "merchant_name": "Internal Transfer",
             "category_id": transfer_category_id
         })
