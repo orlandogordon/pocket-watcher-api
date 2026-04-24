@@ -519,9 +519,27 @@ def upgrade() -> None:
     op.create_index('idx_parsed_imports_txn', 'parsed_imports', ['transaction_id'], unique=False)
     op.create_index('idx_parsed_imports_inv_txn', 'parsed_imports', ['investment_transaction_id'], unique=False)
 
+    op.create_table('description_cache',
+        sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column('user_id', sa.Integer(), nullable=False),
+        sa.Column('description_hash', sa.String(length=64), nullable=False),
+        sa.Column('raw_description', sa.String(length=500), nullable=False),
+        sa.Column('cleaned_description', sa.String(length=500), nullable=False),
+        sa.Column('source', sa.String(length=20), nullable=False),
+        sa.Column('llm_model', sa.String(length=100), nullable=True),
+        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.Column('updated_at', sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(['user_id'], ['users.db_id'], ondelete='CASCADE'),
+        sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('user_id', 'description_hash', name='uq_description_cache_user_hash'),
+    )
+    op.create_index('idx_description_cache_user_hash', 'description_cache', ['user_id', 'description_hash'], unique=False)
+
 
 def downgrade() -> None:
     """Downgrade schema."""
+    op.drop_index('idx_description_cache_user_hash', table_name='description_cache')
+    op.drop_table('description_cache')
     op.drop_index('idx_parsed_imports_inv_txn', table_name='parsed_imports')
     op.drop_index('idx_parsed_imports_txn', table_name='parsed_imports')
     op.drop_index('idx_parsed_imports_job', table_name='parsed_imports')

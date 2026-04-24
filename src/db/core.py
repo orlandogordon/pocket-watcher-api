@@ -978,6 +978,43 @@ class ParsedImportDB(Base):
     )
 
 
+class DescriptionCacheDB(Base):
+    """
+    Per-user cache of raw transaction descriptions → cleaned display values.
+    Populated from regex seeds and LLM output during imports. Scoped to user_id
+    so one user's raws (which routinely contain PII — Zelle memos, employer
+    names, payment references) never bleed into another user's lookups.
+    See backend todo #27 Phase 1.
+    """
+    __tablename__ = "description_cache"
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "description_hash", name="uq_description_cache_user_hash"),
+        Index("idx_description_cache_user_hash", "user_id", "description_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.db_id", ondelete="CASCADE"), nullable=False
+    )
+
+    # SHA-256 hex digest of the raw description (lowercased, whitespace-collapsed)
+    description_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    raw_description: Mapped[str] = mapped_column(String(500), nullable=False)
+    cleaned_description: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    # 'regex_seed' | 'llm' | 'manual'
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+    llm_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+
 engine = create_engine(DATABASE_URL, echo=os.getenv("SQL_ECHO", "false").lower() == "true")
 session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

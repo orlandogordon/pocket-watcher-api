@@ -22,6 +22,7 @@ def create_preview_session(
     ready_to_import: Dict[str, list],
     summary: Dict[str, Any],
     account_info: Optional[Dict] = None,
+    llm_summary: Optional[Dict[str, Any]] = None,
     expiry: int = DEFAULT_EXPIRY_SECONDS,
 ) -> Tuple[str, str]:
     """
@@ -43,6 +44,7 @@ def create_preview_session(
         "rejected": rejected,
         "ready_to_import": ready_to_import,
         "summary": summary,
+        "llm_summary": llm_summary,
         "created_at": datetime.utcnow().isoformat(),
         "expires_at": expires_at.isoformat(),
     }
