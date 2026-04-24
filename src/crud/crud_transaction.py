@@ -164,20 +164,6 @@ def get_original_transaction_for_duplicate(
     ).order_by(TransactionDB.created_at.asc()).first()
 
 
-def parse_transaction_description(description: str) -> str:
-    """Parse and clean transaction description"""
-    if not description:
-        return ""
-
-    # Basic cleanup - remove extra spaces, standardize format
-    cleaned = " ".join(description.split())
-
-    # You can add more sophisticated parsing logic here
-    # For example: extract merchant names, remove transaction codes, etc.
-
-    return cleaned
-
-
 # ===== DATABASE OPERATIONS =====
 
 def create_db_transaction(db: Session, user_id: int, transaction_data: TransactionCreate, *,
@@ -247,7 +233,6 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
         amount=abs(transaction_data.amount),
         transaction_type=TransactionType(transaction_data.transaction_type.value),
         description=transaction_data.description,
-        parsed_description=parse_transaction_description(transaction_data.description or ""),
         merchant_name=transaction_data.merchant_name,
         comments=transaction_data.comments,
         created_at=datetime.utcnow(),
@@ -462,10 +447,7 @@ def _apply_transaction_filters(query, filters: TransactionFilter):
         query = query.filter(TransactionDB.amount <= filters.amount_max)
     if filters.description_search:
         query = query.filter(
-            or_(
-                TransactionDB.description.ilike(f"%{filters.description_search}%"),
-                TransactionDB.parsed_description.ilike(f"%{filters.description_search}%")
-            )
+            TransactionDB.description.ilike(f"%{filters.description_search}%")
         )
     if filters.tag_ids:
         # Use EXISTS subquery to avoid duplicate rows from JOIN
@@ -598,9 +580,6 @@ def update_db_transaction(db: Session, transaction_id: int, user_id: int,
     for field, value in update_data.items():
         if field == 'transaction_type' and value:
             setattr(db_transaction, field, TransactionType(value.value))
-        elif field == 'parsed_description' and field == 'description' and value:
-            setattr(db_transaction, 'description', value)
-            setattr(db_transaction, 'parsed_description', parse_transaction_description(value))
         else:
             setattr(db_transaction, field, value)
     
@@ -743,7 +722,6 @@ def bulk_create_transactions(db: Session, user_id: int, transaction_import: Tran
                 amount=abs(transaction_data.amount),
                 transaction_type=TransactionType(transaction_data.transaction_type.value),
                 description=transaction_data.description,
-                parsed_description=parse_transaction_description(transaction_data.description or ""),
                 merchant_name=transaction_data.merchant_name,
                 comments=transaction_data.comments,
                 created_at=datetime.utcnow(),
@@ -1354,7 +1332,6 @@ def bulk_create_transactions_from_parsed_data(
             amount=abs(t_data.amount),
             transaction_type=transaction_type_enum,
             description=t_data.description,
-            parsed_description=parse_transaction_description(t_data.description or ""),
             source_type=SourceType.PDF,
         )
 

@@ -12,7 +12,7 @@ import redis
 from src.db.core import (
     get_db, UploadJobDB, SkippedTransactionDB, TransactionDB, InvestmentTransactionDB,
     AccountDB, TransactionType, SourceType, InvestmentTransactionType, AccountType,
-    CategoryDB, TagDB, TransactionTagDB,
+    CategoryDB, TagDB, TransactionTagDB, ParsedImportDB,
 )
 from src.auth.dependencies import get_current_user_id
 from src.services import s3, importer
@@ -33,7 +33,6 @@ from src.services.duplicate_analyzer import (
 from src.services.system_tags import get_system_tag
 from src.crud.crud_transaction import (
     generate_transaction_hash,
-    parse_transaction_description,
     update_account_balance_from_transaction,
 )
 from src.crud.crud_investment import (
@@ -781,6 +780,24 @@ async def confirm_statement_import(
     # Look up "Approved Duplicate" system tag for auto-tagging
     approved_dup_tag = get_system_tag(user_id, db, "Approved Duplicate")
 
+    # Create upload job up front so each ParsedImportDB can link to it via relationship.
+    # Counter fields are updated before commit once we know final totals.
+    upload_job = UploadJobDB(
+        user_id=user_id,
+        file_path=None,
+        institution=institution,
+        account_id=account_id,
+        skip_duplicates=False,
+        status="COMPLETED",
+        transactions_created=0,
+        transactions_skipped=len(session["rejected"]["transactions"]),
+        investment_transactions_created=0,
+        investment_transactions_skipped=len(session["rejected"]["investment_transactions"]),
+        started_at=datetime.utcnow(),
+        completed_at=datetime.utcnow(),
+    )
+    db.add(upload_job)
+
     # --- Create regular transactions ---
     for item in session["ready_to_import"]["transactions"]:
         parsed_data = item["parsed_data"]
@@ -832,12 +849,19 @@ async def confirm_statement_import(
             amount=abs(Decimal(str(final_data["amount"]))),
             transaction_type=txn_type_enum,
             description=final_data.get("description"),
-            parsed_description=parse_transaction_description(final_data.get("description", "")),
             merchant_name=final_data.get("merchant_name"),
             comments=final_data.get("comments"),
         )
         db.add(db_txn)
         created_txns.append(db_txn)
+
+        # Audit trail: frozen record of the raw parser output + preview-session edits
+        db.add(ParsedImportDB(
+            upload_job=upload_job,
+            transaction_id=db_txn.id,
+            raw_parsed_data=parsed_data,
+            user_edits=item.get("edited_data"),
+        ))
 
         # Queue tag associations (need db_txn.db_id after flush)
         tag_ids = [tag_uuid_map[t] for t in final_data.get("tag_uuids", []) if t in tag_uuid_map]
@@ -913,22 +937,17 @@ async def confirm_statement_import(
         db.add(db_inv)
         created_inv.append(db_inv)
 
-    # Create upload job record for audit trail
-    upload_job = UploadJobDB(
-        user_id=user_id,
-        file_path=None,
-        institution=institution,
-        account_id=account_id,
-        skip_duplicates=False,
-        status="COMPLETED",
-        transactions_created=len(created_txns),
-        transactions_skipped=len(session["rejected"]["transactions"]),
-        investment_transactions_created=len(created_inv),
-        investment_transactions_skipped=len(session["rejected"]["investment_transactions"]),
-        started_at=datetime.utcnow(),
-        completed_at=datetime.utcnow(),
-    )
-    db.add(upload_job)
+        # Audit trail: frozen record of the raw parser output + preview-session edits
+        db.add(ParsedImportDB(
+            upload_job=upload_job,
+            investment_transaction_id=db_inv.id,
+            raw_parsed_data=parsed_data,
+            user_edits=item.get("edited_data"),
+        ))
+
+    # Finalize upload job counters now that totals are known
+    upload_job.transactions_created = len(created_txns)
+    upload_job.investment_transactions_created = len(created_inv)
 
     # Flush to assign db_ids, then create tag associations
     if pending_tag_associations:

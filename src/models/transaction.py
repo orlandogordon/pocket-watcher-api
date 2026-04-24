@@ -163,7 +163,6 @@ class TransactionResponse(BaseModel):
     category: Optional[CategoryResponse] = None
     subcategory: Optional[CategoryResponse] = None
     description: Optional[str]
-    parsed_description: Optional[str]
     merchant_name: Optional[str]
     comments: Optional[str]
     source_type: SourceTypeEnum

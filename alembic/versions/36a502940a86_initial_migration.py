@@ -301,7 +301,6 @@ def upgrade() -> None:
         sa.Column('amount', sa.DECIMAL(precision=15, scale=2), nullable=False),
         sa.Column('transaction_type', sa.Enum('PURCHASE', 'CREDIT', 'TRANSFER_IN', 'TRANSFER_OUT', 'DEPOSIT', 'WITHDRAWAL', 'FEE', 'INTEREST', name='transactiontype'), nullable=False),
         sa.Column('description', sa.String(length=500), nullable=True),
-        sa.Column('parsed_description', sa.Text(), nullable=True),
         sa.Column('merchant_name', sa.String(length=255), nullable=True),
         sa.Column('comments', sa.Text(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=False),
@@ -501,9 +500,32 @@ def upgrade() -> None:
     op.create_index('idx_skipped_transactions_date', 'skipped_transactions', ['parsed_date'], unique=False)
     op.create_index('idx_skipped_transactions_job', 'skipped_transactions', ['upload_job_id'], unique=False)
 
+    op.create_table('parsed_imports',
+        sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column('upload_job_id', sa.Integer(), nullable=True),
+        sa.Column('transaction_id', sa.Uuid(), nullable=True),
+        sa.Column('investment_transaction_id', sa.Uuid(), nullable=True),
+        sa.Column('raw_parsed_data', sa.JSON(), nullable=False),
+        sa.Column('user_edits', sa.JSON(), nullable=True),
+        sa.Column('llm_model', sa.String(length=100), nullable=True),
+        sa.Column('llm_processed_at', sa.DateTime(), nullable=True),
+        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(['upload_job_id'], ['upload_jobs.id'], ondelete='SET NULL'),
+        sa.ForeignKeyConstraint(['transaction_id'], ['transactions.id'], ondelete='SET NULL'),
+        sa.ForeignKeyConstraint(['investment_transaction_id'], ['investment_transactions.id'], ondelete='SET NULL'),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index('idx_parsed_imports_job', 'parsed_imports', ['upload_job_id'], unique=False)
+    op.create_index('idx_parsed_imports_txn', 'parsed_imports', ['transaction_id'], unique=False)
+    op.create_index('idx_parsed_imports_inv_txn', 'parsed_imports', ['investment_transaction_id'], unique=False)
+
 
 def downgrade() -> None:
     """Downgrade schema."""
+    op.drop_index('idx_parsed_imports_inv_txn', table_name='parsed_imports')
+    op.drop_index('idx_parsed_imports_txn', table_name='parsed_imports')
+    op.drop_index('idx_parsed_imports_job', table_name='parsed_imports')
+    op.drop_table('parsed_imports')
     op.drop_index('idx_skipped_transactions_job', table_name='skipped_transactions')
     op.drop_index('idx_skipped_transactions_date', table_name='skipped_transactions')
     op.drop_table('skipped_transactions')

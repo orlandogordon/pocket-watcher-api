@@ -333,6 +333,13 @@ class InvestmentTransactionDB(Base):
     account = relationship("AccountDB", back_populates="investment_transactions")
     holding = relationship("InvestmentHoldingDB", back_populates="investment_transactions")
 
+    # Parsed import audit records (SET NULL on delete — audit rows survive)
+    parsed_imports = relationship(
+        "ParsedImportDB",
+        foreign_keys="ParsedImportDB.investment_transaction_id",
+        back_populates="investment_transaction",
+    )
+
 
 class DebtPaymentDB(Base):
     __tablename__ = "debt_payments"
@@ -460,7 +467,6 @@ class TransactionDB(Base):
 
     # Description & Details
     description: Mapped[Optional[str]] = mapped_column(String(500))
-    parsed_description: Mapped[Optional[str]] = mapped_column(Text)
     merchant_name: Mapped[Optional[str]] = mapped_column(String(255))
     comments: Mapped[Optional[str]] = mapped_column(Text)
 
@@ -488,6 +494,13 @@ class TransactionDB(Base):
     # Amortization schedule
     amortization_schedule = relationship("TransactionAmortizationScheduleDB", back_populates="transaction",
                                           cascade="all, delete-orphan")
+
+    # Parsed import audit records (SET NULL on delete — audit rows survive)
+    parsed_imports = relationship(
+        "ParsedImportDB",
+        foreign_keys="ParsedImportDB.transaction_id",
+        back_populates="transaction",
+    )
 
 
 class TransactionRelationshipDB(Base):
@@ -868,6 +881,9 @@ class UploadJobDB(Base):
     account = relationship("AccountDB")
     skipped_transactions = relationship("SkippedTransactionDB", back_populates="upload_job", cascade="all, delete-orphan")
 
+    # Parsed import audit records (SET NULL on delete — audit rows survive)
+    parsed_imports = relationship("ParsedImportDB", back_populates="upload_job")
+
 
 class SkippedTransactionDB(Base):
     """
@@ -914,6 +930,52 @@ class SkippedTransactionDB(Base):
     upload_job = relationship("UploadJobDB", back_populates="skipped_transactions")
     existing_transaction = relationship("TransactionDB", foreign_keys=[existing_transaction_id])
     existing_investment_transaction = relationship("InvestmentTransactionDB", foreign_keys=[existing_investment_transaction_id])
+
+
+class ParsedImportDB(Base):
+    """
+    Frozen record of raw parser output per imported transaction. Immutable
+    source-of-record for the original parsed data, independent of user edits
+    or downstream LLM cleanup. See backend todo #27 Phase 0.
+    """
+    __tablename__ = "parsed_imports"
+
+    __table_args__ = (
+        Index("idx_parsed_imports_job", "upload_job_id"),
+        Index("idx_parsed_imports_txn", "transaction_id"),
+        Index("idx_parsed_imports_inv_txn", "investment_transaction_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    # SET NULL on delete for all FKs — audit rows survive parent deletion
+    upload_job_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("upload_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    transaction_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("transactions.id", ondelete="SET NULL"), nullable=True
+    )
+    investment_transaction_id: Mapped[Optional[UUID]] = mapped_column(
+        ForeignKey("investment_transactions.id", ondelete="SET NULL"), nullable=True
+    )
+
+    raw_parsed_data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    user_edits: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    llm_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    llm_processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    upload_job = relationship("UploadJobDB", back_populates="parsed_imports")
+    transaction = relationship(
+        "TransactionDB", foreign_keys=[transaction_id], back_populates="parsed_imports"
+    )
+    investment_transaction = relationship(
+        "InvestmentTransactionDB",
+        foreign_keys=[investment_transaction_id],
+        back_populates="parsed_imports",
+    )
 
 
 engine = create_engine(DATABASE_URL, echo=os.getenv("SQL_ECHO", "false").lower() == "true")
