@@ -186,7 +186,7 @@ The API provides comprehensive endpoints for all financial management features:
 - **Investments** (`/investments/`): Holdings, investment transactions, portfolio tracking
 - **Debt Management** (`/debt/`): Repayment plans, payment tracking, schedules
 - **Financial Plans** (`/financial_plans/`): Long-term financial goal planning
-- **Uploads** (`/uploads/statement`): Async processing of bank statements (PDF/CSV)
+- **Uploads** (`/uploads/statement/preview` + `/confirm`): Two-step preview/confirm flow for bank statement imports (PDF/CSV) with LLM description cleanup and category/merchant suggestions
 
 ### Key API Operations
 

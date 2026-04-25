@@ -857,7 +857,7 @@ class UploadJobDB(Base):
     account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))
 
     # Upload Details
-    file_path: Mapped[Optional[str]] = mapped_column(String(500))  # S3 key, local path, or null if deleted
+    file_path: Mapped[Optional[str]] = mapped_column(String(500))  # original uploaded filename (audit/reference only — files are not archived)
     institution: Mapped[str] = mapped_column(String(100), nullable=False)
     skip_duplicates: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
@@ -961,6 +961,12 @@ class ParsedImportDB(Base):
 
     raw_parsed_data: Mapped[dict] = mapped_column(JSON, nullable=False)
     user_edits: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    # Raw LLM output for category/merchant suggestion (#29). Null until processed
+    # or when the LLM was unreachable. Shape:
+    #   {"merchant_name": str, "suggested_category_uuid": str,
+    #    "suggested_subcategory_uuid": str, "confidence": float}
+    llm_suggestions: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     llm_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     llm_processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

@@ -1,10 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, BackgroundTasks, Form, Query
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
-import uuid
 import io
 import time
 from uuid import uuid4, UUID
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 from decimal import Decimal
 from typing import Optional, List, Dict
 import redis
@@ -15,7 +14,6 @@ from src.db.core import (
     CategoryDB, TagDB, TransactionTagDB, ParsedImportDB,
 )
 from src.auth.dependencies import get_current_user_id
-from src.services import s3, importer
 from src.services.importer import PARSER_MAPPING
 from src.services.redis_client import get_redis_dependency
 from src.services.preview_session import (
@@ -30,7 +28,8 @@ from src.services.duplicate_analyzer import (
     analyze_regular_transactions,
     analyze_investment_transactions,
 )
-from src.services.description_cleanup import clean_descriptions
+from src.services.description_cleanup import process_preview_items
+from src.constants.categories import all_category_uuids
 from src.services.system_tags import get_system_tag
 from src.crud.crud_transaction import (
     generate_transaction_hash,
@@ -62,102 +61,6 @@ router = APIRouter(
     prefix="/uploads",
     tags=["uploads"],
 )
-
-
-# ===== EXISTING ENDPOINTS (unchanged) =====
-
-
-@router.post("/statement", status_code=status.HTTP_202_ACCEPTED)
-async def upload_statement(
-    background_tasks: BackgroundTasks,
-    institution: str = Form(...),
-    file: UploadFile = File(...),
-    account_uuid: Optional[str] = Form(None),
-    skip_duplicates: bool = Form(True),
-    user_id: int = Depends(get_current_user_id),
-    db: Session = Depends(get_db)
-):
-    """
-    Upload a financial statement file (PDF or CSV) for asynchronous processing.
-
-    This endpoint accepts a file, uploads it to a secure storage bucket,
-    and schedules a background task to parse the statement and import the data.
-
-    Args:
-        institution: The name of the financial institution (e.g., 'amex', 'tdbank').
-        file: The statement file to upload.
-        account_uuid: (Optional) The UUID of the account to associate with all transactions from this file.
-        skip_duplicates: (Optional) Whether to skip duplicate transactions. Default: True.
-            - True: Skip duplicates (don't create them in database)
-            - False: Create duplicates anyway
-
-    Returns:
-        JSON with upload_job_id for tracking progress and file_path (S3 key)
-    """
-    if file.content_type not in ["application/pdf", "text/csv"]:
-        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Only PDF or CSV files are supported.")
-
-    # Resolve account UUID to int ID
-    account_id = None
-    if account_uuid:
-        try:
-            parsed_account_uuid = UUID(account_uuid)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid account UUID format")
-        from src.crud.crud_account import read_db_account_by_uuid
-        account = read_db_account_by_uuid(db, parsed_account_uuid, user_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Account not found")
-        account_id = account.id
-
-    # Generate a unique, secure filename
-    file_extension = ".pdf" if file.content_type == "application/pdf" else ".csv"
-    unique_filename = f"{uuid.uuid4()}{file_extension}"
-    s3_key = f"statements/{user_id}/{unique_filename}"
-
-    # Create upload job record
-    upload_job = UploadJobDB(
-        user_id=user_id,
-        file_path=s3_key,
-        institution=institution,
-        account_id=account_id,
-        skip_duplicates=skip_duplicates,
-        status="PENDING"
-    )
-    db.add(upload_job)
-    db.commit()
-    db.refresh(upload_job)
-
-    try:
-        # Upload the file to S3
-        s3.upload_file_to_s3(file_obj=file.file, bucket=s3.get_s3_bucket(), object_name=s3_key)
-
-        # Add the processing job to the background
-        background_tasks.add_task(
-            importer.process_statement,
-            db=db,
-            user_id=user_id,
-            upload_job_id=upload_job.id,
-            s3_key=s3_key,
-            institution=institution,
-            file_content_type=file.content_type,
-            account_id=account_id,
-            skip_duplicates=skip_duplicates
-        )
-
-        return {
-            "message": "File upload accepted and is being processed.",
-            "upload_job_id": upload_job.id,
-            "file_path": s3_key,
-            "skip_duplicates": skip_duplicates
-        }
-
-    except Exception as e:
-        # Mark job as failed if upload fails
-        upload_job.status = "FAILED"
-        upload_job.error_message = f"File upload failed: {str(e)}"
-        db.commit()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"An error occurred during file upload: {e}")
 
 
 @router.get("/jobs")
@@ -314,6 +217,20 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
     return datetime.fromisoformat(value)
 
 
+def _to_raw_suggestion(suggestion: Optional[dict]) -> Optional[dict]:
+    """Reconstruct the DB-shape ``llm_suggestions`` payload from the preview-row
+    nested ``llm_suggestion`` (``category_uuid`` / ``subcategory_uuid`` keys).
+    Returns None when the row carried no suggestion."""
+    if not suggestion:
+        return None
+    return {
+        "merchant_name": suggestion.get("merchant_name"),
+        "suggested_category_uuid": suggestion.get("category_uuid"),
+        "suggested_subcategory_uuid": suggestion.get("subcategory_uuid"),
+        "confidence": suggestion.get("confidence"),
+    }
+
+
 def _recompute_summary(session: dict) -> None:
     """Recompute the summary counts from the current session state."""
     rejected = sum(
@@ -416,11 +333,12 @@ async def create_statement_preview(
         parsed_data.investment_transactions, user_id, institution, resolved_account_id, db
     )
 
-    # Run description cleanup across every preview item (both regular and investment,
+    # Run LLM processing across every preview item (both regular and investment,
     # both ready and rejected). Raw parser output stays untouched in parsed_data;
-    # the cleaned display value lands on a sibling field so confirm can prefer it.
+    # the cleaned display value + category/merchant suggestion land on sibling
+    # fields so confirm can prefer them.
     all_items = rejected_txns + ready_txns + rejected_inv + ready_inv
-    llm_summary = _apply_description_cleanup(db, user_id, all_items)
+    llm_summary = _apply_llm_processing(db, user_id, all_items)
 
     total_rejected = len(rejected_txns) + len(rejected_inv)
     total_ready = len(ready_txns) + len(ready_inv)
@@ -458,17 +376,20 @@ async def create_statement_preview(
     }
 
 
-def _apply_description_cleanup(db: Session, user_id: int, items: list[dict]) -> dict:
-    """Run description cleanup for every preview item. Mutates each item in place,
-    setting sibling fields: cleaned_description, llm_model, llm_processed_at, llm_status.
+def _apply_llm_processing(db: Session, user_id: int, items: list[dict]) -> dict:
+    """Run LLM processing for every preview item. Mutates each item in place,
+    setting sibling fields: cleaned_description, llm_model, llm_processed_at,
+    llm_status, and llm_suggestion (nested object with merchant + category
+    UUIDs; present only for rows the LLM actually processed).
 
     Returns a session-level summary: source counts + a `degraded` flag so the
     frontend can show a banner when the LLM fell through.
     """
-    raws = [(item.get("parsed_data") or {}).get("description") or "" for item in items]
-    results = clean_descriptions(db, raws, user_id=user_id)
+    parsed_list = [item.get("parsed_data") or {} for item in items]
+    results = process_preview_items(db, parsed_list, user_id=user_id)
 
     source_counts = {"cache": 0, "regex_seed": 0, "llm": 0, "raw_fallthrough": 0}
+    suggestions_made = 0
     for item, result in zip(items, results):
         item["cleaned_description"] = result.cleaned
         item["llm_status"] = result.source
@@ -476,11 +397,26 @@ def _apply_description_cleanup(db: Session, user_id: int, items: list[dict]) -> 
         item["llm_processed_at"] = (
             result.llm_processed_at.isoformat() if result.llm_processed_at else None
         )
+        if result.llm_suggestion is not None:
+            # Surface the suggestion to the preview UI under the #29-spec shape.
+            s = result.llm_suggestion
+            item["llm_suggestion"] = {
+                "merchant_name": s["merchant_name"],
+                "category_uuid": s["suggested_category_uuid"],
+                "subcategory_uuid": s["suggested_subcategory_uuid"],
+                "confidence": s["confidence"],
+            }
+            # Preserve the DB-shape copy for persistence at confirm time.
+            item["llm_suggestion_raw"] = s
+            suggestions_made += 1
+        else:
+            item["llm_suggestion"] = None
         source_counts[result.source] = source_counts.get(result.source, 0) + 1
 
     return {
         "source_counts": source_counts,
         "degraded": source_counts["raw_fallthrough"] > 0,
+        "suggestions_made": suggestions_made,
         "total": len(items),
     }
 
@@ -811,12 +747,14 @@ async def confirm_statement_import(
     duplicates_imported = 0
     skipped_unmapped = 0
 
-    # Pre-load category UUID→ID and tag UUID→ID maps for resolving edited_data
+    # Pre-load category UUID→ID and tag UUID→ID maps. Collect UUIDs from both
+    # user edits (overrides) and LLM suggestions (accepted pre-fills).
     category_uuid_map = {}
     tag_uuid_map = {}
     all_ready = session["ready_to_import"]["transactions"] + session["ready_to_import"]["investment_transactions"]
     cat_uuids = set()
     tag_uuids_needed = set()
+    predefined_uuid_set = set(all_category_uuids())
     for item in all_ready:
         ed = item.get("edited_data") or {}
         if ed.get("category_uuid"):
@@ -825,6 +763,11 @@ async def confirm_statement_import(
             cat_uuids.add(ed["subcategory_uuid"])
         for t in ed.get("tag_uuids", []):
             tag_uuids_needed.add(t)
+        sug = item.get("llm_suggestion") or {}
+        if sug.get("category_uuid"):
+            cat_uuids.add(sug["category_uuid"])
+        if sug.get("subcategory_uuid"):
+            cat_uuids.add(sug["subcategory_uuid"])
 
     if cat_uuids:
         cat_uuid_objs = [UUID(u) for u in cat_uuids]
@@ -845,7 +788,7 @@ async def confirm_statement_import(
     # Counter fields are updated before commit once we know final totals.
     upload_job = UploadJobDB(
         user_id=user_id,
-        file_path=None,
+        file_path=session.get("filename"),
         institution=institution,
         account_id=account_id,
         skip_duplicates=False,
@@ -860,11 +803,15 @@ async def confirm_statement_import(
     db.add(upload_job)
 
     # --- Create regular transactions ---
+    suggestion_accept_count = 0
+    suggestion_override_count = 0
     for item in session["ready_to_import"]["transactions"]:
         parsed_data = item["parsed_data"]
-        final_data = {**parsed_data, **(item.get("edited_data") or {})}
+        edited = item.get("edited_data") or {}
+        final_data = {**parsed_data, **edited}
         is_approved_dup = item.get("is_duplicate", False)
         display_description = _resolve_display_description(item, parsed_data)
+        suggestion = item.get("llm_suggestion") or None
 
         try:
             txn_type_enum = TransactionType[final_data["transaction_type"].upper()]
@@ -891,13 +838,57 @@ async def confirm_statement_import(
         if is_approved_dup:
             duplicates_imported += 1
 
-        # Resolve category/subcategory UUIDs to integer IDs
+        # Resolve category/subcategory UUIDs to integer IDs.
+        # Precedence: user edit > LLM suggestion > parser-supplied value.
+        # Defensive check: user's override UUIDs must be in the predefined set.
+        user_cat_uuid = edited.get("category_uuid")
+        user_sub_uuid = edited.get("subcategory_uuid")
+        if user_cat_uuid and user_cat_uuid not in predefined_uuid_set:
+            raise HTTPException(
+                400, f"Unknown category_uuid in user edit: {user_cat_uuid}"
+            )
+        if user_sub_uuid and user_sub_uuid not in predefined_uuid_set:
+            raise HTTPException(
+                400, f"Unknown subcategory_uuid in user edit: {user_sub_uuid}"
+            )
+
+        sug_cat_uuid = suggestion.get("category_uuid") if suggestion else None
+        sug_sub_uuid = suggestion.get("subcategory_uuid") if suggestion else None
+
+        chosen_cat_uuid = user_cat_uuid or sug_cat_uuid
+        chosen_sub_uuid = user_sub_uuid or sug_sub_uuid
+
         category_id_val = final_data.get("category_id")
         subcategory_id_val = final_data.get("subcategory_id")
-        if final_data.get("category_uuid"):
-            category_id_val = category_uuid_map.get(final_data["category_uuid"], category_id_val)
-        if final_data.get("subcategory_uuid"):
-            subcategory_id_val = category_uuid_map.get(final_data["subcategory_uuid"], subcategory_id_val)
+        if chosen_cat_uuid:
+            category_id_val = category_uuid_map.get(chosen_cat_uuid, category_id_val)
+        if chosen_sub_uuid:
+            subcategory_id_val = category_uuid_map.get(chosen_sub_uuid, subcategory_id_val)
+
+        # Merchant name: user edit > suggestion > raw parser value (usually None).
+        merchant_name_val = (
+            edited.get("merchant_name")
+            or (suggestion.get("merchant_name") if suggestion else None)
+            or final_data.get("merchant_name")
+        )
+
+        # Accept/override telemetry — only meaningful when a suggestion was made.
+        if suggestion:
+            was_override = bool(
+                user_sub_uuid and user_sub_uuid != sug_sub_uuid
+            ) or bool(
+                user_cat_uuid and user_cat_uuid != sug_cat_uuid
+            )
+            if was_override:
+                suggestion_override_count += 1
+            else:
+                suggestion_accept_count += 1
+            logger.info(
+                "llm_suggestion_decision "
+                f"user={user_id} suggestion_cat={sug_cat_uuid} suggestion_sub={sug_sub_uuid} "
+                f"chosen_cat={chosen_cat_uuid} chosen_sub={chosen_sub_uuid} "
+                f"override={was_override}"
+            )
 
         db_txn = TransactionDB(
             id=uuid4(),
@@ -911,18 +902,21 @@ async def confirm_statement_import(
             amount=abs(Decimal(str(final_data["amount"]))),
             transaction_type=txn_type_enum,
             description=display_description,
-            merchant_name=final_data.get("merchant_name"),
+            merchant_name=merchant_name_val,
             comments=final_data.get("comments"),
         )
         db.add(db_txn)
         created_txns.append(db_txn)
 
-        # Audit trail: frozen record of the raw parser output + preview-session edits
+        # Audit trail: frozen record of the raw parser output + preview-session
+        # edits + the raw LLM suggestion (pre-override). Downstream analysis
+        # diffs user_edits against llm_suggestions to measure accept/override.
         db.add(ParsedImportDB(
             upload_job=upload_job,
             transaction_id=db_txn.id,
             raw_parsed_data=parsed_data,
             user_edits=item.get("edited_data"),
+            llm_suggestions=item.get("llm_suggestion_raw") or _to_raw_suggestion(suggestion),
             llm_model=item.get("llm_model"),
             llm_processed_at=_parse_iso(item.get("llm_processed_at")),
         ))
@@ -1002,12 +996,16 @@ async def confirm_statement_import(
         db.add(db_inv)
         created_inv.append(db_inv)
 
-        # Audit trail: frozen record of the raw parser output + preview-session edits
+        # Audit trail: frozen record of the raw parser output + preview-session edits.
+        # Investment rows also carry an LLM suggestion when one was made; persist
+        # it alongside the regular-transaction audit shape.
+        inv_suggestion = item.get("llm_suggestion") or None
         db.add(ParsedImportDB(
             upload_job=upload_job,
             investment_transaction_id=db_inv.id,
             raw_parsed_data=parsed_data,
             user_edits=item.get("edited_data"),
+            llm_suggestions=item.get("llm_suggestion_raw") or _to_raw_suggestion(inv_suggestion),
             llm_model=item.get("llm_model"),
             llm_processed_at=_parse_iso(item.get("llm_processed_at")),
         ))
@@ -1062,6 +1060,14 @@ async def confirm_statement_import(
 
     elapsed_ms = int((time.time() - start_time) * 1000)
 
+    total_decisions = suggestion_accept_count + suggestion_override_count
+    if total_decisions:
+        logger.info(
+            f"llm_suggestion_summary user={user_id} accepted={suggestion_accept_count} "
+            f"overridden={suggestion_override_count} "
+            f"accept_rate={suggestion_accept_count / total_decisions:.2%}"
+        )
+
     return {
         "success": True,
         "transactions_created": len(created_txns),
@@ -1070,6 +1076,8 @@ async def confirm_statement_import(
         "skipped_unmapped_types": skipped_unmapped,
         "upload_job_id": upload_job.id,
         "processing_time_ms": elapsed_ms,
+        "suggestion_accepted": suggestion_accept_count,
+        "suggestion_overridden": suggestion_override_count,
     }
 
 

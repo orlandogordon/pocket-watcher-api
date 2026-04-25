@@ -2154,47 +2154,7 @@
         },
         {
             "name": "Uploads",
-            "item": [
-                {
-                    "name": "Upload Statement",
-                    "request": {
-                        "method": "POST",
-                        "header": [],
-                        "body": {
-                            "mode": "formdata",
-                            "formdata": [
-                                {
-                                    "key": "institution",
-                                    "value": "amex",
-                                    "type": "text"
-                                },
-                                {
-                                    "key": "file",
-                                    "type": "file",
-                                    "src": []
-                                },
-                                {
-                                    "key": "account_id",
-                                    "value": "1",
-                                    "type": "text"
-                                }
-                            ]
-                        },
-                        "url": {
-                            "raw": "{{baseUrl}}/uploads/statement",
-                            "host": [
-                                "{{baseUrl}}"
-                            ],
-                            "path": [
-                                "uploads",
-                                "statement"
-                            ]
-                        },
-                        "description": "Upload a financial statement file (PDF or CSV) for asynchronous processing."
-                    },
-                    "response": []
-                }
-            ]
+            "item": []
         }
     ]
 }

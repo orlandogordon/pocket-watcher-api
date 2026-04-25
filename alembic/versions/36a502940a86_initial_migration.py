@@ -507,6 +507,7 @@ def upgrade() -> None:
         sa.Column('investment_transaction_id', sa.Uuid(), nullable=True),
         sa.Column('raw_parsed_data', sa.JSON(), nullable=False),
         sa.Column('user_edits', sa.JSON(), nullable=True),
+        sa.Column('llm_suggestions', sa.JSON(), nullable=True),
         sa.Column('llm_model', sa.String(length=100), nullable=True),
         sa.Column('llm_processed_at', sa.DateTime(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=False),

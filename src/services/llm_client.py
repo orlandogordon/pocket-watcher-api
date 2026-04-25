@@ -5,8 +5,13 @@ Backends are selected via the LLM_BACKEND env var. Callers depend only on the
 abstract interface; swapping backends (local llama.cpp <-> Anthropic API) is an
 env-var change at factory level.
 
-Current use site is transaction description cleanup (#27 Phase 1); #29 and #30
-will extend this module with additional task-specific methods.
+The canonical entry point is ``process_transaction_batch`` — it cleans the raw
+description, normalizes the merchant, and suggests a (category, subcategory)
+UUID from the locked set in ``src.constants.categories`` in a single round
+trip. ``clean_descriptions_batch`` is retained as a thin projection over it for
+#27's existing call sites.
+
+See backend todos #27 (description cleanup) and #29 (category + merchant).
 """
 
 from __future__ import annotations
@@ -14,11 +19,18 @@ from __future__ import annotations
 import json
 import os
 from abc import ABC, abstractmethod
-from typing import Optional
+from decimal import Decimal
+from typing import Optional, TypedDict
 
 from openai import OpenAI
 from openai import APIConnectionError, APITimeoutError
 
+from src.constants.categories import (
+    all_parent_uuids,
+    all_subcategory_uuids,
+    render_for_prompt,
+    subcategory_to_parent,
+)
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -32,32 +44,211 @@ class LLMUnavailableError(Exception):
     """
 
 
-DESCRIPTION_CLEANUP_SYSTEM_PROMPT = """You normalize messy transaction descriptions from bank and credit-card statements into clean merchant names for display in a personal-finance app.
+class TransactionBatchResult(TypedDict):
+    """One row of output from ``process_transaction_batch``."""
+    cleaned_description: str
+    merchant_name: str
+    suggested_category_uuid: str
+    suggested_subcategory_uuid: str
+    confidence: float
 
-Rules:
+
+# ---------- prompt fragments ----------
+
+_DESCRIPTION_CLEANUP_RULES = """Description cleanup rules (applied to `cleaned_description`):
 - Strip authorization prefixes (PURCHASE AUTHORIZED ON, POS DEBIT, ACH DEBIT, DIRECT DEPOSIT, RECURRING PAYMENT), dates, store/location numbers, city/state, phone numbers, and card-suffix fragments (CARD 1234, XXXX1234).
 - Preserve natural brand capitalization (Starbucks, Amazon, CVS, ConEd).
 - Delivery and marketplace services are user-visible choices — KEEP them paired with the vendor using " - ". Examples: DoorDash, Uber Eats, Grubhub, Seamless, Instacart, Caviar, Postmates. So "DOORDASH*CHIPOTLE" -> "DoorDash - Chipotle". If no vendor is attached, return just the service name ("Uber Eats").
 - Payment processors are just rails — STRIP them and keep the vendor. Examples: PAYPAL *, SQ * (Square), TST* (Toast), PY *, GOOGLE * (Google Pay), APPLE PAY. So "PAYPAL *STEAM GAMES" -> "Steam", "SQ *BLUE BOTTLE" -> "Blue Bottle Coffee", "TST* JOE'S PIZZA" -> "Joe's Pizza".
 - Keep meaningful qualifiers that identify the income/expense type: "Acme Corp Payroll" (not "Acme Corp"), "Amazon Prime" (not "Amazon"), "Uber Trip" vs "Uber Eats".
 - If the raw string is already clean, return it unchanged.
-- If the raw string has no identifiable merchant (e.g. "INTEREST CHARGE", "ATM WITHDRAWAL"), return it in Title Case with noise stripped.
+- If the raw string has no identifiable merchant (e.g. "INTEREST CHARGE", "ATM WITHDRAWAL"), return it in Title Case with noise stripped."""
 
-Examples:
-"PURCHASE AUTHORIZED ON 03/14 STARBUCKS STORE 12345 SEATTLE WA CARD 1234" -> "Starbucks"
-"AMZN MKTP US*AB1CD2EF3" -> "Amazon"
-"TST* JOE'S PIZZA - NEW YORK NY" -> "Joe's Pizza"
-"UBER   EATS 8005928996 CA" -> "Uber Eats"
-"DOORDASH*CHIPOTLE 855-9731040 CA" -> "DoorDash - Chipotle"
-"UBER EATS *HALAL GUYS HELP.UBER.COM" -> "Uber Eats - Halal Guys"
-"GRUBHUB*SHAKE SHACK" -> "Grubhub - Shake Shack"
-"POS DEBIT CVS/PHARMACY 07623 BROOKLYN NY" -> "CVS"
-"SQ *BLUE BOTTLE COFFEE OAKLAND CA" -> "Blue Bottle Coffee"
-"PAYPAL *STEAM GAMES 4029357733" -> "Steam"
-"ACH DEBIT CONED 1-800-752-6633" -> "ConEd"
-"DIRECT DEPOSIT ACME CORP PAYROLL" -> "Acme Corp Payroll"
-"INTEREST CHARGE ON PURCHASES" -> "Interest Charge"
-"""
+
+_MERCHANT_RULES = """Merchant name rules (applied to `merchant_name`):
+- The normalized brand the user recognizes — usually the same as `cleaned_description`, but without the aggregator prefix. "DoorDash - Chipotle" -> merchant is "Chipotle". "Grubhub - Shake Shack" -> "Shake Shack". Plain "DoorDash" (no vendor) -> "DoorDash".
+- Strip type qualifiers: "Acme Corp Payroll" -> "Acme Corp", "Uber Trip" -> "Uber", "Uber Eats" -> "Uber Eats" (Uber Eats IS the brand).
+- If the transaction has no merchant (ATM, interest, bank fee), return a short type label ("ATM", "Bank", "Interest")."""
+
+
+_CATEGORY_RULES = """Category rules (applied to `suggested_category_uuid` + `suggested_subcategory_uuid`):
+- Pick the SUBCATEGORY first — the UUID MUST be one of the subcategory UUIDs listed below.
+- Its parent category UUID MUST be the parent it's listed under — never mix (e.g. subcategory "General Merchandise" ONLY pairs with parent "Miscellaneous"; "Home Goods" ONLY pairs with parent "Shopping"; these are not interchangeable).
+- NEVER emit a UUID that isn't in this list. NEVER invent one.
+- When no subcategory is a clean fit, pick "Miscellaneous / General Merchandise".
+- For income-shaped transactions (payroll, direct deposit, dividend, interest received), pick under "Income".
+- Mortgage payments go to Housing / Mortgage — NOT Debt Payment. Debt Payment is for credit cards, student loans, and car loans only.
+- Home Depot, Lowe's, and similar home-improvement stores go to Housing / Home Repair — NOT Shopping / Home Goods.
+- Cosmetics and beauty stores (Sephora, Ulta, MAC) go to Personal Care / Toiletries — NOT Shopping.
+- Generic Amazon purchases (AMZN MKTP, AMAZON.COM with no further context) go to Miscellaneous / General Merchandise — the item is unknown, so don't commit to Shopping.
+- For coffee shops specifically (Starbucks, Blue Bottle, etc.), use Food / Coffee Shops — not Restaurants.
+- For streaming services (Netflix, Spotify, Hulu), use Entertainment / Streaming Services.
+- Video games and gaming platforms (Steam, PlayStation, Xbox) go to Entertainment / Hobbies — NOT Streaming Services."""
+
+
+_FEW_SHOT_EXAMPLES = """Examples (raw input -> output JSON):
+
+Input: {"description": "PURCHASE AUTHORIZED ON 03/14 STARBUCKS STORE 12345 SEATTLE WA CARD 1234", "amount": "4.75", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "Starbucks", "merchant_name": "Starbucks", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "88accd63-6963-417a-b334-970d28a91cf5", "confidence": 0.98}
+
+Input: {"description": "DOORDASH*CHIPOTLE 855-9731040 CA", "amount": "23.40", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "DoorDash - Chipotle", "merchant_name": "Chipotle", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "dd2d9c68-4c00-444e-80ed-775a72087bea", "confidence": 0.95}
+
+Input: {"description": "DIRECT DEPOSIT ACME CORP PAYROLL", "amount": "3250.00", "transaction_type": "CREDIT"}
+Output: {"cleaned_description": "Acme Corp Payroll", "merchant_name": "Acme Corp", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "42e344f9-55f1-4f46-9c12-d548658409fb", "confidence": 0.99}
+
+Input: {"description": "NETFLIX.COM LOS GATOS CA", "amount": "15.49", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "Netflix", "merchant_name": "Netflix", "suggested_category_uuid": "78bd0a07-5447-4cb6-b2d6-315d3d4cb4a0", "suggested_subcategory_uuid": "d6762e10-a608-417a-a7a6-87a2977e59e1", "confidence": 0.99}
+
+Input: {"description": "ACH DEBIT CONED 1-800-752-6633", "amount": "98.22", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "ConEd", "merchant_name": "ConEd", "suggested_category_uuid": "f8ee90f0-2d76-4547-b9b4-71fbb2c506d6", "suggested_subcategory_uuid": "8b4be050-62fa-4520-b5af-012e0eb048f5", "confidence": 0.96}
+
+Input: {"description": "SHELL OIL 123 HWY 1 BURBANK CA", "amount": "52.00", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "Shell", "merchant_name": "Shell", "suggested_category_uuid": "d0032366-ed8b-484b-9564-7f5e9721aa7e", "suggested_subcategory_uuid": "936a458b-82eb-4278-b64f-4fba8f7ae8da", "confidence": 0.94}
+
+Input: {"description": "TRADER JOE'S #543 QPS BROOKLYN NY", "amount": "67.10", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "Trader Joe's", "merchant_name": "Trader Joe's", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "0b66599a-0919-46cb-8d86-ea0517a66f12", "confidence": 0.98}
+
+Input: {"description": "INTEREST CHARGE ON PURCHASES", "amount": "12.55", "transaction_type": "INTEREST"}
+Output: {"cleaned_description": "Interest Charge", "merchant_name": "Bank", "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "b9328f2f-88f5-4128-90af-87130c967280", "confidence": 0.9}
+
+Input: {"description": "WELLS FARGO HOME MORTGAGE", "amount": "2100.00", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "Wells Fargo Home Mortgage", "merchant_name": "Wells Fargo", "suggested_category_uuid": "f8ee90f0-2d76-4547-b9b4-71fbb2c506d6", "suggested_subcategory_uuid": "8c86ff04-3f6c-467c-a5cb-e9295521ae3a", "confidence": 0.97}
+
+Input: {"description": "HOME DEPOT #0345 BROOKLYN NY", "amount": "78.40", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "Home Depot", "merchant_name": "Home Depot", "suggested_category_uuid": "f8ee90f0-2d76-4547-b9b4-71fbb2c506d6", "suggested_subcategory_uuid": "17e8d1a2-3965-49ea-8bfd-5645657172da", "confidence": 0.92}
+
+Input: {"description": "SEPHORA #0125 NEW YORK", "amount": "56.20", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "Sephora", "merchant_name": "Sephora", "suggested_category_uuid": "ee02d7ee-7f8f-4983-8693-694dc0a1faae", "suggested_subcategory_uuid": "1a1b3dd2-e0e7-42dc-beed-1cdd88a5441b", "confidence": 0.93}
+
+Input: {"description": "AMZN MKTP US*AB1CD2EF3", "amount": "42.18", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "Amazon", "merchant_name": "Amazon", "suggested_category_uuid": "0284c65f-1af6-48d2-9133-3d3ac3393ede", "suggested_subcategory_uuid": "5247aeec-a479-4801-9f5e-07af3122f6f9", "confidence": 0.85}
+
+Input: {"description": "PAYPAL *STEAM GAMES 4029357733", "amount": "29.99", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "Steam", "merchant_name": "Steam", "suggested_category_uuid": "78bd0a07-5447-4cb6-b2d6-315d3d4cb4a0", "suggested_subcategory_uuid": "1831cdfa-bc8a-45e7-a552-404ee54b3464", "confidence": 0.95}"""
+
+
+def _build_system_prompt() -> str:
+    return "\n\n".join([
+        (
+            "You normalize messy transaction descriptions from bank and "
+            "credit-card statements, identify the merchant, and classify each "
+            "transaction into a predefined category/subcategory. Output is "
+            "machine-consumed — follow the schema exactly."
+        ),
+        _DESCRIPTION_CLEANUP_RULES,
+        _MERCHANT_RULES,
+        _CATEGORY_RULES,
+        render_for_prompt(),
+        _FEW_SHOT_EXAMPLES,
+    ])
+
+
+# Built once at import time — the category list + few-shots are static, so the
+# system prompt is constant across every call. llama-server's prompt cache
+# benefits from the exact-prefix match.
+_SYSTEM_PROMPT = _build_system_prompt()
+
+# Subcategory UUID -> parent UUID. Used to post-correct the model's category
+# choice: the JSON schema constrains each UUID field to its own enum but
+# doesn't enforce parent-child consistency, so the model can (and does) ship
+# invalid pairs like "Shopping + General Merchandise" where General Merchandise
+# actually lives under Miscellaneous. We trust the (harder) subcategory pick
+# and derive the parent from it.
+_SUB_TO_PARENT = subcategory_to_parent()
+
+
+def _build_batch_json_schema(count: int) -> dict:
+    """Response must be {"results": [TransactionBatchResult, ...]} of exactly `count` items.
+
+    The UUID fields are constrained to the predefined enum so the model cannot
+    hallucinate an ID that doesn't resolve to a real CategoryDB row.
+    """
+    return {
+        "name": "transaction_batch",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "results": {
+                    "type": "array",
+                    "minItems": count,
+                    "maxItems": count,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "cleaned_description": {"type": "string"},
+                            "merchant_name": {"type": "string"},
+                            "suggested_category_uuid": {
+                                "type": "string",
+                                "enum": all_parent_uuids(),
+                            },
+                            "suggested_subcategory_uuid": {
+                                "type": "string",
+                                "enum": all_subcategory_uuids(),
+                            },
+                            "confidence": {
+                                "type": "number",
+                                "minimum": 0.0,
+                                "maximum": 1.0,
+                            },
+                        },
+                        "required": [
+                            "cleaned_description",
+                            "merchant_name",
+                            "suggested_category_uuid",
+                            "suggested_subcategory_uuid",
+                            "confidence",
+                        ],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["results"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _render_parsed_for_prompt(parsed: "list") -> str:
+    """Serialize a batch of ParsedTransaction-shaped inputs for the user prompt.
+
+    Accepts either ``ParsedTransaction`` objects (with .description, .amount,
+    .transaction_type, .transaction_date attrs) or plain dicts with the same
+    keys, so callers can pass whatever shape they already have.
+    """
+    def _one(p) -> dict:
+        if isinstance(p, dict):
+            desc = p.get("description", "")
+            amount = p.get("amount", "")
+            ttype = p.get("transaction_type", "")
+            tdate = p.get("transaction_date", "")
+        else:
+            desc = getattr(p, "description", "")
+            amount = getattr(p, "amount", "")
+            ttype = getattr(p, "transaction_type", "")
+            tdate = getattr(p, "transaction_date", "")
+        if isinstance(amount, Decimal):
+            amount = str(amount)
+        if not isinstance(amount, str):
+            amount = str(amount)
+        return {
+            "description": desc or "",
+            "amount": amount,
+            "transaction_type": str(ttype) if ttype else "",
+            "transaction_date": str(tdate) if tdate else "",
+        }
+
+    lines = [
+        f"{i + 1}. {json.dumps(_one(p), ensure_ascii=False)}"
+        for i, p in enumerate(parsed)
+    ]
+    return (
+        "Classify each transaction below. Return JSON matching the schema: "
+        "an object with key 'results' whose value is an array of exactly "
+        f"{len(parsed)} objects in the same order.\n\n"
+        + "\n".join(lines)
+    )
 
 
 class LLMClient(ABC):
@@ -69,44 +260,30 @@ class LLMClient(ABC):
         """Identifier written to parsed_imports.llm_model (e.g. 'qwen3.5-9b-q4')."""
 
     @abstractmethod
+    def process_transaction_batch(self, parsed: list) -> list[TransactionBatchResult]:
+        """Clean + classify a batch of parsed transactions. Returns exactly
+        ``len(parsed)`` results in the same order. Raises ``LLMUnavailableError``
+        on any unrecoverable failure (connection, timeout, malformed JSON,
+        count mismatch)."""
+
     def clean_descriptions_batch(self, raws: list[str]) -> list[str]:
-        """Clean a batch of raw descriptions. Must return exactly len(raws) results,
-        in the same order. Raises LLMUnavailableError on unrecoverable failure."""
+        """Back-compat wrapper for #27's description-only callers.
+
+        Builds a minimal ``parsed`` payload from each raw and projects the
+        ``cleaned_description`` field out of the consolidated batch result.
+        Empty inputs are passed through without a model call."""
+        if not raws:
+            return []
+        parsed = [
+            {"description": r, "amount": "", "transaction_type": "", "transaction_date": ""}
+            for r in raws
+        ]
+        results = self.process_transaction_batch(parsed)
+        return [r["cleaned_description"] for r in results]
 
     def clean_description(self, raw: str) -> str:
-        """Convenience single-item wrapper around clean_descriptions_batch."""
+        """Convenience single-item wrapper."""
         return self.clean_descriptions_batch([raw])[0]
-
-
-def _build_json_schema(count: int) -> dict:
-    """Response must be {"cleaned": [str, str, ...]} of exactly `count` items."""
-    return {
-        "name": "cleaned_descriptions",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "cleaned": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "minItems": count,
-                    "maxItems": count,
-                },
-            },
-            "required": ["cleaned"],
-            "additionalProperties": False,
-        },
-    }
-
-
-def _build_user_prompt(raws: list[str]) -> str:
-    lines = [f"{i + 1}. {r}" for i, r in enumerate(raws)]
-    return (
-        "Clean the following transaction descriptions. Return JSON "
-        "matching the schema: an object with key 'cleaned' whose value is an array of "
-        f"exactly {len(raws)} strings in the same order.\n\n"
-        + "\n".join(lines)
-    )
 
 
 class LlamaCppClient(LLMClient):
@@ -133,26 +310,25 @@ class LlamaCppClient(LLMClient):
     def model_name(self) -> str:
         return self._model
 
-    def clean_descriptions_batch(self, raws: list[str]) -> list[str]:
-        if not raws:
+    def process_transaction_batch(self, parsed: list) -> list[TransactionBatchResult]:
+        if not parsed:
             return []
 
         try:
             response = self._client.chat.completions.create(
                 model=self._model,
                 messages=[
-                    {"role": "system", "content": DESCRIPTION_CLEANUP_SYSTEM_PROMPT},
-                    {"role": "user", "content": _build_user_prompt(raws)},
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": _render_parsed_for_prompt(parsed)},
                 ],
                 response_format={
                     "type": "json_schema",
-                    "json_schema": _build_json_schema(len(raws)),
+                    "json_schema": _build_batch_json_schema(len(parsed)),
                 },
                 temperature=0.0,
-                # Qwen3 ships with reasoning enabled by default; for a mechanical
-                # normalization task the chain-of-thought is pure overhead and
-                # blows past the 3s budget. Harmless for non-Qwen3 models — the
-                # server just ignores unknown template kwargs.
+                # Qwen3 reasoning mode blows past the latency budget and adds
+                # nothing for this mechanical task. Harmless on non-Qwen3 models
+                # — the server ignores unknown template kwargs.
                 extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
         except (APIConnectionError, APITimeoutError) as e:
@@ -165,27 +341,45 @@ class LlamaCppClient(LLMClient):
         content = response.choices[0].message.content or ""
         try:
             payload = json.loads(content)
-            cleaned = payload["cleaned"]
+            results = payload["results"]
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.error(f"LLM returned malformed JSON: {content!r}")
             raise LLMUnavailableError(f"Malformed JSON: {e}") from e
 
-        if len(cleaned) != len(raws):
+        if len(results) != len(parsed):
             logger.error(
-                f"LLM returned {len(cleaned)} items for {len(raws)} inputs; discarding"
+                f"LLM returned {len(results)} items for {len(parsed)} inputs; discarding"
             )
             raise LLMUnavailableError("Item count mismatch")
 
-        return [str(c).strip() for c in cleaned]
+        out: list[TransactionBatchResult] = []
+        for r in results:
+            try:
+                sub_uuid = str(r["suggested_subcategory_uuid"])
+                # Trust the subcategory, derive the parent — see _SUB_TO_PARENT comment.
+                cat_uuid = _SUB_TO_PARENT.get(sub_uuid, str(r["suggested_category_uuid"]))
+                out.append({
+                    "cleaned_description": str(r["cleaned_description"]).strip(),
+                    "merchant_name": str(r["merchant_name"]).strip(),
+                    "suggested_category_uuid": cat_uuid,
+                    "suggested_subcategory_uuid": sub_uuid,
+                    "confidence": float(r.get("confidence", 0.0)),
+                })
+            except (KeyError, TypeError, ValueError) as e:
+                logger.error(f"LLM result missing expected fields: {r!r}")
+                raise LLMUnavailableError(f"Malformed result row: {e}") from e
+
+        return out
 
 
 class AnthropicClient(LLMClient):
-    """Stub for production Anthropic backend. Implemented when we deploy to prod.
+    """Stub for production Anthropic backend — #30 implements this for real.
 
-    Will use the native `anthropic` SDK (not the OpenAI-compat layer — Anthropic's
-    OpenAI-compat layer ignores `response_format`). Structured output is enforced
-    via tool use: define a tool whose input_schema matches cleaned_descriptions,
-    force tool_choice={"type": "tool", "name": ...}, read response.content[0].input.
+    Will use the native ``anthropic`` SDK (not the OpenAI-compat layer —
+    Anthropic's OpenAI-compat layer ignores ``response_format``). Structured
+    output is enforced via tool use: define a tool whose input_schema matches
+    ``TransactionBatchResult`` with the category UUID enums, force
+    ``tool_choice={"type": "tool", "name": ...}``, read ``response.content[0].input``.
     """
 
     def __init__(self, model: str, api_key: Optional[str]):
@@ -196,7 +390,7 @@ class AnthropicClient(LLMClient):
     def model_name(self) -> str:
         return self._model
 
-    def clean_descriptions_batch(self, raws: list[str]) -> list[str]:
+    def process_transaction_batch(self, parsed: list) -> list[TransactionBatchResult]:
         raise NotImplementedError(
             "AnthropicClient is not implemented yet. Set LLM_BACKEND=llama_cpp."
         )
@@ -213,7 +407,7 @@ def get_llm_client() -> LLMClient:
         LLM_ENDPOINT     default 'http://localhost:8080/v1' (llama.cpp only)
         LLM_MODEL        model identifier; defaults depend on backend
         LLM_API_KEY      Anthropic API key (unused for llama.cpp)
-        LLM_TIMEOUT_S    per-call timeout in seconds (default 3.0)
+        LLM_TIMEOUT_S    per-call timeout in seconds (default 15.0)
     """
     global _client_singleton
     if _client_singleton is not None:

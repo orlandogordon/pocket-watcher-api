@@ -67,36 +67,19 @@ def seed_database():
 
         print("Seeding database...")
 
-        # 1. Categories (global, shared across users)
-        print("Creating categories...")
-        categories_structure = {
-            "Income": ["Paycheck", "Bonus", "Investment Income"],
-            "Housing": ["Rent", "Mortgage", "Utilities", "Home Repair"],
-            "Transportation": ["Gas", "Public Transit", "Car Maintenance", "Ride Share"],
-            "Food": ["Groceries", "Restaurants", "Coffee Shops"],
-            "Personal Care": ["Haircut", "Toiletries", "Pharmacy"],
-            "Entertainment": ["Movies", "Concerts", "Streaming Services", "Hobbies"],
-            "Debt Payment": ["Credit Card", "Student Loan", "Car Loan"],
-            "Investments": ["Stock Purchase", "Retirement Contribution", "Crypto"],
-            "Shopping": ["Clothing", "Electronics", "Home Goods"],
-            "Miscellaneous": ["Bank Fee", "General Merchandise"],
-        }
-
+        # 1. Categories come from the predefined-category Alembic migration
+        # (src/constants/categories.py). Seed reads them — never creates them.
         categories_map: dict[int, list[int]] = {}
-        for cat_name, sub_cat_names in categories_structure.items():
-            parent_cat = CategoryDB(uuid=uuid4(), name=cat_name)
-            db.add(parent_cat)
-            db.flush()
-            categories_map[parent_cat.id] = []
-
-            for sub_cat_name in sub_cat_names:
-                child_cat = CategoryDB(uuid=uuid4(), name=sub_cat_name, parent_category_id=parent_cat.id)
-                db.add(child_cat)
-                db.flush()
-                categories_map[parent_cat.id].append(child_cat.id)
-
-        db.commit()
-        print(f"{len(categories_map)} parent categories created.")
+        parents = db.query(CategoryDB).filter(CategoryDB.parent_category_id.is_(None)).all()
+        if not parents:
+            raise RuntimeError(
+                "No categories found — run `alembic upgrade head` before seeding. "
+                "See src/constants/categories.py."
+            )
+        for parent in parents:
+            children = db.query(CategoryDB).filter(CategoryDB.parent_category_id == parent.id).all()
+            categories_map[parent.id] = [c.id for c in children]
+        print(f"Loaded {len(categories_map)} parent categories from migration.")
 
         # 2. Users
         for i in range(NUM_USERS):
