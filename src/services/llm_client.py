@@ -63,6 +63,7 @@ _DESCRIPTION_CLEANUP_RULES = """Description cleanup rules (applied to `cleaned_d
   - Payment / transfer rows: `{Issuer} Payment {trailing-id}` (e.g. "Amex Payment 7284", "Discover Payment 4421"). Trailing identifier preserved verbatim regardless of length.
   - Deposits and bank-action rows with no merchant: `{Action}` plus any address/identifier the source carries (e.g. "ATM Withdrawal - 0123 Main St", "Acme Corp Payroll"). "Interest Charge" alone if no further detail.
   - Inbound deposits often concatenate `{Sender}{Suffix}{DepositType}{AccountSuffix}` with no spaces. Recognize these deposit-type tokens (sometimes mashed together with the sender's legal suffix): `SALARY`, `REG SALARY`, `PAYROLL`, `DIRECT DEPOSIT`, `INTEREST`, `INT PAYMENT`, `DIVIDEND`, `REFUND`, `REBATE`, `IRS REFUND`, `TAX REFUND`. Format as `{Sender} {DepositType} {AccountSuffix}` after splitting tokens correctly. So "PNCBANKNAREGSALARY****40047586" -> "PNC Bank Salary Deposit ****40047586".
+  - Investment / brokerage rows (containing `CALL`, `PUT`, `BOUGHT`, `SOLD`, `BUY`, `SELL`, `DIVIDEND`, `REINVEST`, or option-spec patterns like `$X EXP MM/DD/YY`): the action keyword AND any contract spec (strike, expiration, share count) are the meaningful identifiers. PRESERVE them — do not strip them as retail noise. Format as `{Underlying} {Action} {Spec}` (e.g. "CALLADVANCEDMICRODEVI$180 EXP07/19/24" -> "Advanced Micro Devices Call $180 exp 7/19/2024"). The strike and expiration must round-trip byte-exact — never alter numeric values. Strip only the trailing `Commission$X`, `ExchangeProcessingFee$X`, and similar fee-tail items.
 - Preserve as much useful detail as the source carries — it's harmless and aids reconciliation:
   - Store / branch / warehouse numbers (`Trader Joe's #543`, `Home Depot #0345`, `Costco #1025`).
   - City and state when present in the source. Don't try to distinguish "physical purchase location" from "corporate HQ" — both are fine.
@@ -168,7 +169,13 @@ Input: {"description": "INTERESTPAYMENT****99887766", "amount": "12.45", "transa
 Output: {"cleaned_description": "Interest Payment ****99887766", "merchant_name": "Bank", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "fe41dac0-0a3b-4e33-a731-9aecc6217d42", "confidence": 0.90}
 
 Input: {"description": "ACHDEBIT,HESAAPAYMENTP18514286", "amount": "200.14", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "HESAA Payment P18514286", "merchant_name": "HESAA", "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "3280dd39-0173-4754-bdba-17b1a3981e1e", "confidence": 0.92}"""
+Output: {"cleaned_description": "HESAA Payment P18514286", "merchant_name": "HESAA", "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "3280dd39-0173-4754-bdba-17b1a3981e1e", "confidence": 0.92}
+
+Input: {"description": "CALLADVANCEDMICRODEVI$180 EXP07/19/24 Commission$0.65;ExchangeProcessingFee$0.01", "amount": "1245.50", "transaction_type": "BUY"}
+Output: {"cleaned_description": "Advanced Micro Devices Call $180 exp 7/19/2024", "merchant_name": "Advanced Micro Devices", "suggested_category_uuid": "1601d6e1-e0d7-44f7-8f47-207ca11538be", "suggested_subcategory_uuid": "a762c7e9-7a3d-4ab5-97e4-814b14d81e0b", "confidence": 0.90}
+
+Input: {"description": "DIVIDEND VOO", "amount": "45.20", "transaction_type": "DIVIDEND"}
+Output: {"cleaned_description": "Vanguard VOO Dividend", "merchant_name": "Vanguard", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "fe41dac0-0a3b-4e33-a731-9aecc6217d42", "confidence": 0.95}"""
 
 
 def _build_system_prompt() -> str:
