@@ -56,7 +56,9 @@ class TransactionBatchResult(TypedDict):
 # ---------- prompt fragments ----------
 
 _DESCRIPTION_CLEANUP_RULES = """Description cleanup rules (applied to `cleaned_description`):
+- Goal: a description a human can understand at a glance. Lead with the human-readable identifier (merchant or transaction type) in the FIRST tokens. Don't over-strip — when in doubt, preserve a meaningful qualifier (e.g. "Venmo Payment", "Amazon Prime") rather than reduce to the bare brand. The minimum possible string is not the goal.
 - Strip authorization prefixes (PURCHASE AUTHORIZED ON, POS DEBIT, ACH DEBIT, DIRECT DEPOSIT, RECURRING PAYMENT), dates, store/location numbers, city/state, phone numbers, and card-suffix fragments (CARD 1234, XXXX1234).
+- Strip bare 10-digit phone-number runs adjacent to city/state or merchant names (e.g. "HARBORNYC 9179934001 *NY" -> drop the "9179934001"). The phone number is contact info, not the merchant identifier.
 - Preserve natural brand capitalization (Starbucks, Amazon, CVS, ConEd).
 - Delivery and marketplace services are user-visible choices — KEEP them paired with the vendor using " - ". Examples: DoorDash, Uber Eats, Grubhub, Seamless, Instacart, Caviar, Postmates. So "DOORDASH*CHIPOTLE" -> "DoorDash - Chipotle". If no vendor is attached, return just the service name ("Uber Eats").
 - Payment processors are just rails — STRIP them and keep the vendor. Examples: PAYPAL *, SQ * (Square), TST* (Toast), PY *, GOOGLE * (Google Pay), APPLE PAY. So "PAYPAL *STEAM GAMES" -> "Steam", "SQ *BLUE BOTTLE" -> "Blue Bottle Coffee", "TST* JOE'S PIZZA" -> "Joe's Pizza".
@@ -68,6 +70,10 @@ _DESCRIPTION_CLEANUP_RULES = """Description cleanup rules (applied to `cleaned_d
 _MERCHANT_RULES = """Merchant name rules (applied to `merchant_name`):
 - The normalized brand the user recognizes — usually the same as `cleaned_description`, but without the aggregator prefix. "DoorDash - Chipotle" -> merchant is "Chipotle". "Grubhub - Shake Shack" -> "Shake Shack". Plain "DoorDash" (no vendor) -> "DoorDash".
 - Strip type qualifiers: "Acme Corp Payroll" -> "Acme Corp", "Uber Trip" -> "Uber", "Uber Eats" -> "Uber Eats" (Uber Eats IS the brand).
+- Card networks vs issuers — the stoplist is tiered:
+  - VISA, MASTERCARD, MC are pure payment networks. NEVER select one as the merchant. If one of these tokens is the most prominent in the source, the actual merchant follows it (e.g. "VISADDAPURAP HARBORNYC ..." -> merchant is "HARBORNYC", not "Visa"). The token itself is rail noise like PAYPAL or SQ.
+  - AMEX, AMERICAN EXPRESS, DISCOVER, DISC are BOTH networks AND issuers. Treat as the merchant ONLY when the row is a payment/transfer (source contains ELECTRONICPMT, EPAYMENT, ACHPMT, WEBPMT, BILLPAY, or similar). On POS-purchase rows the same token is the network rail and should be stripped — pick whatever merchant token follows it instead.
+- Unrecognized merchants: if the merchant token is unfamiliar (no well-known brand match), output it AS-IS — preserve odd casing like "HARBORNYC" rather than substituting a recognizable nearby token (network name, processor, city). Better to surface the raw merchant string than to mislabel.
 - If the transaction has no merchant (ATM, interest, bank fee), return a short type label ("ATM", "Bank", "Interest")."""
 
 
@@ -93,6 +99,9 @@ Output: {"cleaned_description": "Starbucks", "merchant_name": "Starbucks", "sugg
 
 Input: {"description": "DOORDASH*CHIPOTLE 855-9731040 CA", "amount": "23.40", "transaction_type": "PURCHASE"}
 Output: {"cleaned_description": "DoorDash - Chipotle", "merchant_name": "Chipotle", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "dd2d9c68-4c00-444e-80ed-775a72087bea", "confidence": 0.95}
+
+Input: {"description": "UBER EATS *SWEETGREEN HELP.UBER.COM", "amount": "18.40", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "Uber Eats - Sweetgreen", "merchant_name": "Sweetgreen", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "dd2d9c68-4c00-444e-80ed-775a72087bea", "confidence": 0.94}
 
 Input: {"description": "DIRECT DEPOSIT ACME CORP PAYROLL", "amount": "3250.00", "transaction_type": "CREDIT"}
 Output: {"cleaned_description": "Acme Corp Payroll", "merchant_name": "Acme Corp", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "42e344f9-55f1-4f46-9c12-d548658409fb", "confidence": 0.99}
@@ -125,7 +134,16 @@ Input: {"description": "AMZN MKTP US*AB1CD2EF3", "amount": "42.18", "transaction
 Output: {"cleaned_description": "Amazon", "merchant_name": "Amazon", "suggested_category_uuid": "0284c65f-1af6-48d2-9133-3d3ac3393ede", "suggested_subcategory_uuid": "5247aeec-a479-4801-9f5e-07af3122f6f9", "confidence": 0.85}
 
 Input: {"description": "PAYPAL *STEAM GAMES 4029357733", "amount": "29.99", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "Steam", "merchant_name": "Steam", "suggested_category_uuid": "78bd0a07-5447-4cb6-b2d6-315d3d4cb4a0", "suggested_subcategory_uuid": "1831cdfa-bc8a-45e7-a552-404ee54b3464", "confidence": 0.95}"""
+Output: {"cleaned_description": "Steam", "merchant_name": "Steam", "suggested_category_uuid": "78bd0a07-5447-4cb6-b2d6-315d3d4cb4a0", "suggested_subcategory_uuid": "1831cdfa-bc8a-45e7-a552-404ee54b3464", "confidence": 0.95}
+
+Input: {"description": "DBCRDPURAP,*****30089881312,AUT121524VISADDAPURAP HARBORNYC 9179934001 *NY", "amount": "42.52", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "HARBORNYC", "merchant_name": "HARBORNYC", "suggested_category_uuid": "0284c65f-1af6-48d2-9133-3d3ac3393ede", "suggested_subcategory_uuid": "5247aeec-a479-4801-9f5e-07af3122f6f9", "confidence": 0.55}
+
+Input: {"description": "ELECTRONICPMT-WEB, AMEXEPAYMENTACHPMTM7284", "amount": "3000.00", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "Amex Payment 7284", "merchant_name": "Amex", "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "b9328f2f-88f5-4128-90af-87130c967280", "confidence": 0.95}
+
+Input: {"description": "MASTERCARD PURCHASE FERN COFFEE BAR PORTLAND OR", "amount": "6.25", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "Fern Coffee Bar", "merchant_name": "Fern Coffee Bar", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "88accd63-6963-417a-b334-970d28a91cf5", "confidence": 0.85}"""
 
 
 def _build_system_prompt() -> str:
