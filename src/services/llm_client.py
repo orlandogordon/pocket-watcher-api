@@ -62,6 +62,7 @@ _DESCRIPTION_CLEANUP_RULES = """Description cleanup rules (applied to `cleaned_d
   - Aggregator + vendor: `{Aggregator} - {Vendor}` with location appended when present in the source (e.g. "TST* JOE'S PIZZA - NEW YORK NY" -> "Joe's Pizza - New York, NY", processor stripped, vendor preserved with location).
   - Payment / transfer rows: `{Issuer} Payment {trailing-id}` (e.g. "Amex Payment 7284", "Discover Payment 4421"). Trailing identifier preserved verbatim regardless of length.
   - Deposits and bank-action rows with no merchant: `{Action}` plus any address/identifier the source carries (e.g. "ATM Withdrawal - 0123 Main St", "Acme Corp Payroll"). "Interest Charge" alone if no further detail.
+  - Inbound deposits often concatenate `{Sender}{Suffix}{DepositType}{AccountSuffix}` with no spaces. Recognize these deposit-type tokens (sometimes mashed together with the sender's legal suffix): `SALARY`, `REG SALARY`, `PAYROLL`, `DIRECT DEPOSIT`, `INTEREST`, `INT PAYMENT`, `DIVIDEND`, `REFUND`, `REBATE`, `IRS REFUND`, `TAX REFUND`. Format as `{Sender} {DepositType} {AccountSuffix}` after splitting tokens correctly. So "PNCBANKNAREGSALARY****40047586" -> "PNC Bank Salary Deposit ****40047586".
 - Preserve as much useful detail as the source carries — it's harmless and aids reconciliation:
   - Store / branch / warehouse numbers (`Trader Joe's #543`, `Home Depot #0345`, `Costco #1025`).
   - City and state when present in the source. Don't try to distinguish "physical purchase location" from "corporate HQ" — both are fine.
@@ -81,6 +82,7 @@ _DESCRIPTION_CLEANUP_RULES = """Description cleanup rules (applied to `cleaned_d
 _MERCHANT_RULES = """Merchant name rules (applied to `merchant_name`):
 - The merchant is JUST the normalized brand — no metadata. The cleaned_description carries extras (location, store number, identifier, phone, .com suffixes); merchant_name strips all of those down to the brand alone. So "Starbucks #12345 - Seattle, WA" -> merchant "Starbucks"; "Costco Whse #1025 - Manahawkin, NJ" -> merchant "Costco"; "Apple.com/bill 866-712-7753" -> merchant "Apple"; "Venmo Payment 3125551234" -> merchant "Venmo".
 - Aggregator-prefixed descriptions: take the vendor, not the aggregator. "DoorDash - Chipotle" -> merchant "Chipotle". "Grubhub - Shake Shack" -> "Shake Shack". Plain "DoorDash" (no vendor) -> "DoorDash".
+- Legal-entity suffixes (`NA`, `N.A.`, `FSB`, `CU`, `INC`, `LLC`, `CO`, `LTD`, `PLC`) are formal corporate designations, not part of the brand. Treat them as a token boundary — the brand stops before the suffix; whatever follows the suffix is descriptive (deposit type, payment shape, qualifier). Strip the suffix from merchant_name. So "PNCBANKNAREGSALARY" decomposes as "PNC Bank" (brand) + "NA" (suffix) + "REG SALARY" (deposit type) — merchant is "PNC Bank", description preserves the deposit type. Same boundary logic applies to any corporate suffix anywhere.
 - Strip type qualifiers: "Acme Corp Payroll" -> "Acme Corp", "Uber Trip" -> "Uber", "Uber Eats" -> "Uber Eats" (Uber Eats IS the brand).
 - Card networks vs issuers — the stoplist is tiered:
   - VISA, MASTERCARD, MC are pure payment networks. NEVER select one as the merchant. If one of these tokens is the most prominent in the source, the actual merchant follows it (e.g. "VISADDAPURAP HARBORNYC ..." -> merchant is "HARBORNYC", not "Visa"). The token itself is rail noise like PAYPAL or SQ.
@@ -155,7 +157,13 @@ Input: {"description": "ELECTRONICPMT-WEB, AMEXEPAYMENTACHPMTM7284", "amount": "
 Output: {"cleaned_description": "Amex Payment 7284", "merchant_name": "Amex", "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "b9328f2f-88f5-4128-90af-87130c967280", "confidence": 0.95}
 
 Input: {"description": "MASTERCARD PURCHASE FERN COFFEE BAR PORTLAND OR", "amount": "6.25", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "Fern Coffee Bar - Portland, OR", "merchant_name": "Fern Coffee Bar", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "88accd63-6963-417a-b334-970d28a91cf5", "confidence": 0.85}"""
+Output: {"cleaned_description": "Fern Coffee Bar - Portland, OR", "merchant_name": "Fern Coffee Bar", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "88accd63-6963-417a-b334-970d28a91cf5", "confidence": 0.85}
+
+Input: {"description": "ACHDEPOSIT,PNCBANKNAREGSALARY****40047586", "amount": "2523.89", "transaction_type": "DEPOSIT"}
+Output: {"cleaned_description": "PNC Bank Salary Deposit ****40047586", "merchant_name": "PNC Bank", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "42e344f9-55f1-4f46-9c12-d548658409fb", "confidence": 0.92}
+
+Input: {"description": "INTERESTPAYMENT****99887766", "amount": "12.45", "transaction_type": "DEPOSIT"}
+Output: {"cleaned_description": "Interest Payment ****99887766", "merchant_name": "Bank", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "fe41dac0-0a3b-4e33-a731-9aecc6217d42", "confidence": 0.90}"""
 
 
 def _build_system_prompt() -> str:
