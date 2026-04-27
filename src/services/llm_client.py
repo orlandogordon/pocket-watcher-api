@@ -98,6 +98,8 @@ _CATEGORY_RULES = """Category rules (applied to `suggested_category_uuid` + `sug
 - When no subcategory is a clean fit, pick "Miscellaneous / General Merchandise".
 - For income-shaped transactions (payroll, direct deposit, dividend, interest received), pick under "Income".
 - Mortgage payments go to Housing / Mortgage — NOT Debt Payment. Debt Payment is for credit cards, student loans, and car loans only.
+- Student loan servicers (HESAA, Nelnet, MOHELA, Sallie Mae, Navient, Great Lakes, EdFinancial, Dept of Education / DEPTEDUCATION) on payment-shaped rows go to Debt Payment / Student Loan. The merchant token may be concatenated with PAYMENT (e.g. HESAAPAYMENT, NELNETPAYMENT) — preserve all letters of the servicer name; do not drop trailing letters when the token splits.
+- Auto lenders (Ally, Capital One Auto, Toyota Financial Services, Honda Financial, Ford Credit) on payment-shaped rows go to Debt Payment / Car Loan.
 - Home Depot, Lowe's, and similar home-improvement stores go to Housing / Home Repair — NOT Shopping / Home Goods.
 - Cosmetics and beauty stores (Sephora, Ulta, MAC) go to Personal Care / Toiletries — NOT Shopping.
 - Generic Amazon purchases (AMZN MKTP, AMAZON.COM with no further context) go to Miscellaneous / General Merchandise — the item is unknown, so don't commit to Shopping.
@@ -163,7 +165,10 @@ Input: {"description": "ACHDEPOSIT,PNCBANKNAREGSALARY****40047586", "amount": "2
 Output: {"cleaned_description": "PNC Bank Salary Deposit ****40047586", "merchant_name": "PNC Bank", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "42e344f9-55f1-4f46-9c12-d548658409fb", "confidence": 0.92}
 
 Input: {"description": "INTERESTPAYMENT****99887766", "amount": "12.45", "transaction_type": "DEPOSIT"}
-Output: {"cleaned_description": "Interest Payment ****99887766", "merchant_name": "Bank", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "fe41dac0-0a3b-4e33-a731-9aecc6217d42", "confidence": 0.90}"""
+Output: {"cleaned_description": "Interest Payment ****99887766", "merchant_name": "Bank", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "fe41dac0-0a3b-4e33-a731-9aecc6217d42", "confidence": 0.90}
+
+Input: {"description": "ACHDEBIT,HESAAPAYMENTP18514286", "amount": "200.14", "transaction_type": "PURCHASE"}
+Output: {"cleaned_description": "HESAA Payment P18514286", "merchant_name": "HESAA", "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "3280dd39-0173-4754-bdba-17b1a3981e1e", "confidence": 0.92}"""
 
 
 def _build_system_prompt() -> str:
