@@ -303,12 +303,17 @@ def main() -> int:
         regex_n = sum(1 for r in rows if r.merchant_source == "regex")
         llm_n = sum(1 for r in rows if r.merchant_source == "llm")
         null_n = sum(1 for r in rows if r.merchant_source == "null")
+        # Category-null rows route to the Needs Review tag at confirm time
+        # (#34) — track separately from merchant-null since they are
+        # independent signals (a row can have one without the other).
+        cat_null_n = sum(1 for r in rows if not r.category_uuid)
         regex_pct = 100.0 * regex_n / len(rows) if rows else 0.0
         print(
             f"  {institution:<16} {len(rows):>5} rows  "
             f"avg conf {avg_conf:.2f}  "
             f"low-conf {len(low_conf):>4} (<{args.threshold})  "
-            f"regex {regex_n:>4} ({regex_pct:.0f}%)  llm {llm_n:>4}  null {null_n:>4}"
+            f"regex {regex_n:>4} ({regex_pct:.0f}%)  llm {llm_n:>4}  null-merch {null_n:>4}  "
+            f"null-cat {cat_null_n:>4}"
         )
 
     print()

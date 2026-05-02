@@ -44,6 +44,13 @@ logger = get_logger(__name__)
 # catches the obvious noise tier (Mobile Payment, Annual Membership Fee, etc.).
 _MERCHANT_CONFIDENCE_FLOOR = 0.85
 
+# Category outputs below this confidence are dropped to (None, None). Pairs
+# with the schema-level nullability of the category UUID fields: ambiguous
+# rows surface as null and route through the "Needs Review" tag workflow at
+# confirm time (#34) instead of being filed under Miscellaneous at high
+# confidence. 0.8 is a starting value; tune via inspection runs.
+_CATEGORY_CONFIDENCE_FLOOR = 0.8
+
 
 class LLMUnavailableError(Exception):
     """Raised when the LLM backend cannot be reached or fails all retries.
@@ -61,10 +68,17 @@ class TransactionBatchResult(TypedDict):
     descriptors, parser-corrupted tokens). The post-processing layer also
     drops merchant to None when ``confidence`` falls below
     ``_MERCHANT_CONFIDENCE_FLOOR``.
+
+    ``suggested_category_uuid`` and ``suggested_subcategory_uuid`` are
+    nullable in the same shape: the model emits null when the row's purpose
+    is genuinely ambiguous (P2P transfers, generic ACH with no payee
+    context). Post-processing also drops the pair to (None, None) when
+    ``confidence`` falls below ``_CATEGORY_CONFIDENCE_FLOOR``. The two UUID
+    fields are always either both null or both populated — they never split.
     """
     merchant_name: Optional[str]
-    suggested_category_uuid: str
-    suggested_subcategory_uuid: str
+    suggested_category_uuid: Optional[str]
+    suggested_subcategory_uuid: Optional[str]
     confidence: float
 
 
@@ -92,7 +106,9 @@ _CATEGORY_RULES = """Category rules (applied to `suggested_category_uuid` + `sug
 - Pick the SUBCATEGORY first — the UUID MUST be one of the subcategory UUIDs listed below.
 - Its parent category UUID MUST be the parent it's listed under — never mix (e.g. subcategory "General Merchandise" ONLY pairs with parent "Miscellaneous"; "Home Goods" ONLY pairs with parent "Shopping"; these are not interchangeable).
 - NEVER emit a UUID that isn't in this list. NEVER invent one.
-- When no subcategory is a clean fit, pick "Miscellaneous / General Merchandise".
+- **Both category fields are nullable. Return null for both when the row's purpose is genuinely ambiguous and you'd be guessing rather than reasoning.** Typical case: peer-to-peer transfers (Zelle, Venmo, Cash App) where the source string contains a counterparty's name but no spending context — the same $40 Venmo could be a restaurant split, concert ticket, rent contribution, or loan repayment. Other examples: generic ACH deposits with no recognizable sender, bare-amount entries with no payee. Return null for BOTH category and subcategory together — they always travel as a pair, never split. The user will categorize from the preview UI; null routes the row to a review queue rather than filing it under a catchall at high confidence.
+- Do NOT pick a catchall category just to fill the field. "Miscellaneous / General Merchandise" is the right call when the row IS shopping but the specific subcategory is unclear (e.g. AMZN MKTP with no item context). It is the WRONG call when the row's category is unknown — emit null instead.
+- When no subcategory is a clean fit but the category itself is clear (e.g. "this is shopping, just unclear what kind"), pick "Miscellaneous / General Merchandise". Reserve null for genuine purpose-ambiguity, not subcategory-ambiguity.
 - For income-shaped transactions (payroll, direct deposit, dividend, interest received), pick under "Income".
 - Mortgage payments go to Housing / Mortgage — NOT Debt Payment. Debt Payment is for credit cards, student loans, and car loans only.
 - Student loan servicers (HESAA, Nelnet, MOHELA, Sallie Mae, Navient, Great Lakes, EdFinancial, Dept of Education / DEPTEDUCATION) on payment-shaped rows go to Debt Payment / Student Loan. The merchant token may be concatenated with PAYMENT (e.g. HESAAPAYMENT, NELNETPAYMENT) — preserve all letters of the servicer name; do not drop trailing letters when the token splits.
@@ -153,7 +169,16 @@ Input: {"description": "EDDITINCCLASS A", "amount": "245.00", "transaction_type"
 Output: {"merchant_name": null, "suggested_category_uuid": "1601d6e1-e0d7-44f7-8f47-207ca11538be", "suggested_subcategory_uuid": "a762c7e9-7a3d-4ab5-97e4-814b14d81e0b", "confidence": 0.6}
 
 Input: {"description": "DIVIDEND VOO", "amount": "45.20", "transaction_type": "DIVIDEND"}
-Output: {"merchant_name": "Vanguard", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "fe41dac0-0a3b-4e33-a731-9aecc6217d42", "confidence": 0.95}"""
+Output: {"merchant_name": "Vanguard", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "fe41dac0-0a3b-4e33-a731-9aecc6217d42", "confidence": 0.95}
+
+Input: {"description": "TD ZELLE SENT 611400H09TUA Zelle MATTHEW MIHM", "amount": "40.00", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "Zelle", "suggested_category_uuid": null, "suggested_subcategory_uuid": null, "confidence": 0.5}
+
+Input: {"description": "VENMO PAYMENT 3125551234 SUSAN PARK", "amount": "65.00", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "Venmo", "suggested_category_uuid": null, "suggested_subcategory_uuid": null, "confidence": 0.5}
+
+Input: {"description": "ACH CREDIT XXXXX1234 ", "amount": "320.00", "transaction_type": "DEPOSIT"}
+Output: {"merchant_name": null, "suggested_category_uuid": null, "suggested_subcategory_uuid": null, "confidence": 0.4}"""
 
 
 def _build_system_prompt() -> str:
@@ -163,8 +188,10 @@ def _build_system_prompt() -> str:
             "into a predefined category/subcategory. The raw description is "
             "preserved verbatim by the caller — do NOT rewrite or clean it. "
             "merchant_name is nullable: return null when the source contains "
-            "no real brand. Output is machine-consumed — follow the schema "
-            "exactly."
+            "no real brand. The category and subcategory UUIDs are also "
+            "nullable: return null for both (always together) when the row's "
+            "purpose is genuinely ambiguous and you'd be guessing. Output is "
+            "machine-consumed — follow the schema exactly."
         ),
         _MERCHANT_RULES,
         _CATEGORY_RULES,
@@ -191,7 +218,11 @@ def _build_batch_json_schema(count: int) -> dict:
     """Response must be {"results": [TransactionBatchResult, ...]} of exactly `count` items.
 
     The UUID fields are constrained to the predefined enum so the model cannot
-    hallucinate an ID that doesn't resolve to a real CategoryDB row.
+    hallucinate an ID that doesn't resolve to a real CategoryDB row. Category
+    UUIDs are nullable via ``anyOf: [enum-string, null]`` rather than
+    ``type: ["string", "null"]`` because the latter would cause the enum to
+    be evaluated against null on null-valued rows. The merchant field has no
+    enum constraint, so the simpler ``type: ["string", "null"]`` works there.
     """
     return {
         "name": "transaction_batch",
@@ -210,13 +241,20 @@ def _build_batch_json_schema(count: int) -> dict:
                             # exists in the source (bare addresses, generic
                             # descriptors, parser-corrupted tokens).
                             "merchant_name": {"type": ["string", "null"]},
+                            # Nullable enum: emit null for genuinely ambiguous
+                            # rows (P2P transfers with no spending context).
+                            # See _CATEGORY_RULES for null guidance.
                             "suggested_category_uuid": {
-                                "type": "string",
-                                "enum": all_parent_uuids(),
+                                "anyOf": [
+                                    {"type": "string", "enum": all_parent_uuids()},
+                                    {"type": "null"},
+                                ],
                             },
                             "suggested_subcategory_uuid": {
-                                "type": "string",
-                                "enum": all_subcategory_uuids(),
+                                "anyOf": [
+                                    {"type": "string", "enum": all_subcategory_uuids()},
+                                    {"type": "null"},
+                                ],
                             },
                             "confidence": {
                                 "type": "number",
@@ -292,9 +330,10 @@ class LLMClient(ABC):
     @abstractmethod
     def process_transaction_batch(self, parsed: list) -> list[TransactionBatchResult]:
         """Classify a batch of parsed transactions: merchant (nullable) +
-        category UUIDs + confidence. Returns exactly ``len(parsed)`` results
-        in the same order. Raises ``LLMUnavailableError`` on any unrecoverable
-        failure (connection, timeout, malformed JSON, count mismatch)."""
+        category UUIDs (nullable, always paired) + confidence. Returns exactly
+        ``len(parsed)`` results in the same order. Raises ``LLMUnavailableError``
+        on any unrecoverable failure (connection, timeout, malformed JSON,
+        count mismatch)."""
 
 
 class LlamaCppClient(LLMClient):
@@ -366,10 +405,22 @@ class LlamaCppClient(LLMClient):
         out: list[TransactionBatchResult] = []
         for r in results:
             try:
-                sub_uuid = str(r["suggested_subcategory_uuid"])
-                # Trust the subcategory, derive the parent — see _SUB_TO_PARENT comment.
-                cat_uuid = _SUB_TO_PARENT.get(sub_uuid, str(r["suggested_category_uuid"]))
                 confidence = float(r.get("confidence", 0.0))
+
+                # Category nullability: the model can emit null for either or
+                # both UUID fields. Treat them as a pair — if either is null,
+                # both go to None. Apply the confidence floor too: low-confidence
+                # category guesses route through the Needs Review tag instead
+                # of being filed at face value (#34).
+                raw_sub = r["suggested_subcategory_uuid"]
+                raw_cat = r["suggested_category_uuid"]
+                if raw_sub is None or raw_cat is None or confidence < _CATEGORY_CONFIDENCE_FLOOR:
+                    sub_uuid: Optional[str] = None
+                    cat_uuid: Optional[str] = None
+                else:
+                    sub_uuid = str(raw_sub)
+                    # Trust the subcategory, derive the parent — see _SUB_TO_PARENT comment.
+                    cat_uuid = _SUB_TO_PARENT.get(sub_uuid, str(raw_cat))
 
                 # Merchant nullability: schema allows null, and we additionally
                 # drop merchant when confidence is below the floor (catches the

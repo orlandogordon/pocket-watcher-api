@@ -808,8 +808,12 @@ async def confirm_statement_import(
     # Collect tag associations to create after flush
     pending_tag_associations: list[tuple[TransactionDB, list[int]]] = []
 
-    # Look up "Approved Duplicate" system tag for auto-tagging
+    # Look up system tags used for auto-tagging at confirm time.
+    # "Needs Review" attaches to any regular transaction whose final state
+    # has a null category_id or null merchant_name — surfaces ambiguous rows
+    # in the user's review queue post-import. See backend todo #34.
     approved_dup_tag = get_system_tag(user_id, db, "Approved Duplicate")
+    needs_review_tag = get_system_tag(user_id, db, "Needs Review")
 
     # Create upload job up front so each ParsedImportDB can link to it via relationship.
     # Counter fields are updated before commit once we know final totals.
@@ -952,6 +956,11 @@ async def confirm_statement_import(
         tag_ids = [tag_uuid_map[t] for t in final_data.get("tag_uuids", []) if t in tag_uuid_map]
         if is_approved_dup and approved_dup_tag:
             tag_ids.append(approved_dup_tag.tag_id)
+        # Tag rows whose final state has no category or no merchant — covers
+        # both the preview path (user left it blank) and the bulk path (LLM
+        # nulls survive untouched). #34 — Option A: derived from final state.
+        if needs_review_tag and (category_id_val is None or not merchant_name_val):
+            tag_ids.append(needs_review_tag.tag_id)
         if tag_ids:
             pending_tag_associations.append((db_txn, tag_ids))
 

@@ -31,9 +31,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.join(SCRIPT_DIR, "..")
 sys.path.append(PROJECT_ROOT)
 
-from src.db.core import DATABASE_URL, CategoryDB
+from src.db.core import DATABASE_URL, CategoryDB, TransactionTagDB
 from src.services.importer import PARSER_MAPPING
 from src.services.description_cleanup import process_preview_items, CleanedResult
+from src.services.system_tags import ensure_system_tags, get_system_tag
 from src.crud import crud_transaction, crud_investment
 
 # --- Configuration ---
@@ -92,15 +93,28 @@ def _resolve_category_uuids(db, suggestions: list[dict]) -> dict:
     return {str(r.uuid): r.id for r in rows}
 
 
-def _apply_cleanup_to_created(created_rows, parsed_txns, results: list[CleanedResult],
+def _apply_cleanup_to_created(db, user_id, created_rows, parsed_txns, results: list[CleanedResult],
                               category_uuid_to_id: dict, has_category_columns: bool):
     """Walk the freshly-created DB rows and (when applicable) apply
     merchant_name/category_id/subcategory_id from the matching CleanedResult.
     Description stays as the parser produced it — #35 removed the cleaned
-    middle tier. Returns (suggestions_applied_count, fallthrough_count)."""
+    middle tier.
+
+    For regular-transaction rows (``has_category_columns=True``), also queues
+    the user's "Needs Review" system tag onto rows whose final state has a
+    null ``category_id`` or null ``merchant_name`` (#34). Investment rows have
+    no category/merchant columns and no tag join table, so the tag step is
+    skipped for them.
+
+    Returns (suggestions_applied_count, fallthrough_count, needs_review_count).
+    """
     lookup = _build_result_lookup(parsed_txns, results)
     suggestions_applied = 0
     fallthroughs = 0
+    needs_review_tag = (
+        get_system_tag(user_id, db, "Needs Review") if has_category_columns else None
+    )
+    needs_review_rows: list = []
 
     for row in created_rows:
         # TransactionDB.amount is abs() of parser amount; match on raw fields
@@ -132,9 +146,25 @@ def _apply_cleanup_to_created(created_rows, parsed_txns, results: list[CleanedRe
                         if sub_uuid and sub_uuid in category_uuid_to_id:
                             row.subcategory_id = category_uuid_to_id[sub_uuid]
                         suggestions_applied += 1
+
+                    if needs_review_tag and (
+                        row.category_id is None or not row.merchant_name
+                    ):
+                        needs_review_rows.append(row)
                 break
 
-    return suggestions_applied, fallthroughs
+    needs_review_count = 0
+    if needs_review_tag and needs_review_rows:
+        # Need db_id for the join row; flush so SQLAlchemy assigns it.
+        db.flush()
+        for row in needs_review_rows:
+            db.add(TransactionTagDB(
+                transaction_id=row.db_id,
+                tag_id=needs_review_tag.tag_id,
+            ))
+        needs_review_count = len(needs_review_rows)
+
+    return suggestions_applied, fallthroughs, needs_review_count
 
 
 def process_local_file(db, file_path, institution, account_id, user_id):
@@ -145,6 +175,11 @@ def process_local_file(db, file_path, institution, account_id, user_id):
     if not parser:
         print(f"    Warning: No parser found for institution '{institution}'. Skipping.")
         return
+
+    # Make sure system tags (Needs Review, Approved Duplicate) exist for
+    # this user — the auto-tagging path in _apply_cleanup_to_created depends
+    # on Needs Review being looked-uppable. ensure_system_tags is idempotent.
+    ensure_system_tags(user_id, db)
 
     try:
         with open(file_path, 'rb') as f:
@@ -178,13 +213,13 @@ def process_local_file(db, file_path, institution, account_id, user_id):
                 institution_name=institution,
                 account_id=account_id,
             )
-            applied, fallthroughs = _apply_cleanup_to_created(
-                created, parsed_data.transactions, results,
+            applied, fallthroughs, needs_review = _apply_cleanup_to_created(
+                db, user_id, created, parsed_data.transactions, results,
                 uuid_to_id, has_category_columns=True,
             )
             db.commit()
             print(f"    Inserted {len(created)} (suggestions applied: {applied}, "
-                  f"raw fallthroughs: {fallthroughs})")
+                  f"raw fallthroughs: {fallthroughs}, needs review: {needs_review})")
 
         # --- Investment transactions ---
         if parsed_data.investment_transactions:
@@ -210,9 +245,11 @@ def process_local_file(db, file_path, institution, account_id, user_id):
                 institution_name=institution,
                 account_id=account_id,
             )
-            # Investment rows: only overwrite description (no category columns).
+            # Investment rows: no category columns, no tag join — just walk
+            # for fallthrough accounting. The Needs-Review path is skipped
+            # internally when has_category_columns=False.
             _apply_cleanup_to_created(
-                created_inv, parsed_data.investment_transactions, inv_results,
+                db, user_id, created_inv, parsed_data.investment_transactions, inv_results,
                 category_uuid_to_id={}, has_category_columns=False,
             )
             db.commit()
