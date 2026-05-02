@@ -1,9 +1,13 @@
 """
-Evaluate the configured (prompt, model) pair against a hand-labeled golden set.
+Evaluate the configured (prompt, model) pair's merchant accuracy against a
+hand-labeled golden set.
 
-Runs each raw description in `eval/description_cleanup_golden.csv` directly through
-the LLM client — regex seeds and DB cache are bypassed so we measure pure model
-performance. Reports accuracy and prints failures.
+Runs each raw description in `eval/description_cleanup_golden.csv` directly
+through the LLM client — DB cache and regex extraction are bypassed so we
+measure pure model performance on merchant inference. The golden CSV's
+``expected`` column (formerly cleaned-description target) is ignored under
+#35; only ``expected_merchant`` is asserted. Empty expected_merchant rows
+are skipped.
 
 Usage:
     python scripts/eval_description_cleanup.py
@@ -22,21 +26,23 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.services.llm_client import get_llm_client, LLMUnavailableError, reset_llm_client  # noqa: E402
 
 
-def _load_golden(path: Path) -> list[tuple[str, str, str]]:
-    """Returns (raw, expected_description, expected_merchant). The merchant
-    column is optional — empty string means "don't assert merchant for this row".
-    """
+def _load_golden(path: Path) -> list[tuple[str, str]]:
+    """Returns (raw, expected_merchant). Rows with no expected_merchant are
+    skipped — the description column from earlier iterations is no longer
+    asserted (see #35)."""
     with path.open(encoding="utf-8") as f:
         reader = csv.DictReader(f)
         return [
-            (row["raw"], row["expected"], row.get("expected_merchant", "") or "")
+            (row["raw"], row.get("expected_merchant", "") or "")
             for row in reader
+            if (row.get("expected_merchant") or "").strip()
         ]
 
 
@@ -67,7 +73,7 @@ def main() -> int:
 
     rows = _load_golden(golden_path)
     if not rows:
-        print(f"ERROR: {golden_path} is empty")
+        print(f"ERROR: {golden_path} has no rows with expected_merchant set")
         return 2
 
     reset_llm_client()
@@ -78,65 +84,38 @@ def main() -> int:
     print(f"Endpoint: {os.getenv('LLM_ENDPOINT', 'http://localhost:8080/v1')}")
     print()
 
-    raws = [r for r, _, _ in rows]
-    expected_descs = [d for _, d, _ in rows]
-    expected_merchants = [m for _, _, m in rows]
+    raws = [r for r, _ in rows]
+    expected_merchants = [m for _, m in rows]
 
-    # Build minimal payload — same shape clean_descriptions_batch builds
-    # internally, but we go through process_transaction_batch directly so we
-    # can read merchant_name back too.
     parsed_rows = [
         {"description": r, "amount": "", "transaction_type": "", "transaction_date": ""}
         for r in raws
     ]
 
-    cleaned_descs: list[str] = []
-    cleaned_merchants: list[str] = []
+    actual_merchants: list[Optional[str]] = []
     start = time.time()
     try:
         for i in range(0, len(parsed_rows), args.batch_size):
             batch = parsed_rows[i:i + args.batch_size]
             results = client.process_transaction_batch(batch)
-            cleaned_descs.extend(r["cleaned_description"] for r in results)
-            cleaned_merchants.extend(r["merchant_name"] for r in results)
+            actual_merchants.extend(r["merchant_name"] for r in results)
     except LLMUnavailableError as e:
         print(f"ERROR: LLM unavailable — {e}")
         return 2
     elapsed_ms = int((time.time() - start) * 1000)
 
-    desc_failures: list[tuple[str, str, str]] = []
-    merchant_failures: list[tuple[str, str, str]] = []
-    for raw, exp_desc, exp_merch, act_desc, act_merch in zip(
-        raws, expected_descs, expected_merchants, cleaned_descs, cleaned_merchants
-    ):
-        if _norm(act_desc) != _norm(exp_desc):
-            desc_failures.append((raw, exp_desc, act_desc))
-        if exp_merch and _norm(act_merch) != _norm(exp_merch):
+    merchant_failures: list[tuple[str, str, Optional[str]]] = []
+    for raw, exp_merch, act_merch in zip(raws, expected_merchants, actual_merchants):
+        if _norm(act_merch or "") != _norm(exp_merch):
             merchant_failures.append((raw, exp_merch, act_merch))
 
-    desc_checked = len(rows)
-    merchant_checked = sum(1 for m in expected_merchants if m)
-    desc_passed = desc_checked - len(desc_failures)
-    merchant_passed = merchant_checked - len(merchant_failures)
-    desc_pct = 100.0 * desc_passed / desc_checked
-    merchant_pct = 100.0 * merchant_passed / merchant_checked if merchant_checked else 100.0
+    merchant_passed = len(rows) - len(merchant_failures)
+    merchant_pct = 100.0 * merchant_passed / len(rows)
     per_batch_ms = elapsed_ms / max(1, (len(rows) + args.batch_size - 1) // args.batch_size)
 
-    print(f"Description accuracy: {desc_passed}/{desc_checked} ({desc_pct:.1f}%)")
-    if merchant_checked:
-        print(f"Merchant accuracy:    {merchant_passed}/{merchant_checked} ({merchant_pct:.1f}%)")
-    else:
-        print("Merchant accuracy:    (no expected_merchant column populated)")
+    print(f"Merchant accuracy: {merchant_passed}/{len(rows)} ({merchant_pct:.1f}%)")
     print(f"Total time: {elapsed_ms}ms   Avg per batch ({args.batch_size} items): {per_batch_ms:.0f}ms")
     print()
-
-    if desc_failures:
-        print("DESCRIPTION FAILURES:")
-        for raw, expected, actual in desc_failures:
-            print(f"  raw:      {raw}")
-            print(f"  expected: {expected}")
-            print(f"  actual:   {actual}")
-            print()
 
     if merchant_failures:
         print("MERCHANT FAILURES:")
@@ -145,8 +124,6 @@ def main() -> int:
             print(f"  expected: {expected}")
             print(f"  actual:   {actual}")
             print()
-
-    if desc_failures or merchant_failures:
         return 1
 
     print("All golden rows passed.")

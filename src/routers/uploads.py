@@ -200,14 +200,11 @@ def get_skipped_transactions(
 def _resolve_display_description(item: dict, parsed_data: dict) -> Optional[str]:
     """Choose the description to store on TransactionDB.
 
-    Precedence: user edit > LLM/cache cleaned value > raw parser output.
+    Precedence: user edit > raw parser output. (Description cleanup was
+    removed in #35 — there is no longer a cleaned middle tier.)
     """
     edited = item.get("edited_data") or {}
-    return (
-        edited.get("description")
-        or item.get("cleaned_description")
-        or parsed_data.get("description")
-    )
+    return edited.get("description") or parsed_data.get("description")
 
 
 def _parse_iso(value: Optional[str]) -> Optional[datetime]:
@@ -335,10 +332,10 @@ async def create_statement_preview(
 
     # Run LLM processing across every preview item (both regular and investment,
     # both ready and rejected). Raw parser output stays untouched in parsed_data;
-    # the cleaned display value + category/merchant suggestion land on sibling
-    # fields so confirm can prefer them.
+    # the merchant + category suggestion land on sibling fields so confirm can
+    # prefer them. Per #35: description is preserved raw — no cleaned tier.
     all_items = rejected_txns + ready_txns + rejected_inv + ready_inv
-    llm_summary = _apply_llm_processing(db, user_id, all_items)
+    llm_summary = _apply_llm_processing(db, user_id, institution, all_items)
 
     total_rejected = len(rejected_txns) + len(rejected_inv)
     total_ready = len(ready_txns) + len(ready_inv)
@@ -376,22 +373,34 @@ async def create_statement_preview(
     }
 
 
-def _apply_llm_processing(db: Session, user_id: int, items: list[dict]) -> dict:
+def _apply_llm_processing(
+    db: Session,
+    user_id: int,
+    institution: str,
+    items: list[dict],
+) -> dict:
     """Run LLM processing for every preview item. Mutates each item in place,
-    setting sibling fields: cleaned_description, llm_model, llm_processed_at,
-    llm_status, and llm_suggestion (nested object with merchant + category
-    UUIDs; present only for rows the LLM actually processed).
+    setting sibling fields: llm_model, llm_processed_at, llm_status, and
+    llm_suggestion (nested object with merchant + category UUIDs; present
+    only for rows the LLM actually processed).
+
+    The merchant on ``llm_suggestion`` is the post-extractor decision
+    (regex > llm). The raw LLM output is preserved separately on
+    ``llm_suggestion_raw`` for the audit trail.
 
     Returns a session-level summary: source counts + a `degraded` flag so the
-    frontend can show a banner when the LLM fell through.
+    frontend can show a banner when the LLM fell through, plus regex-coverage
+    counts for operational signal on parser format drift.
     """
     parsed_list = [item.get("parsed_data") or {} for item in items]
-    results = process_preview_items(db, parsed_list, user_id=user_id)
+    results = process_preview_items(
+        db, parsed_list, user_id=user_id, institution=institution,
+    )
 
-    source_counts = {"cache": 0, "regex_seed": 0, "llm": 0, "raw_fallthrough": 0}
+    source_counts = {"empty": 0, "llm": 0, "raw_fallthrough": 0}
+    merchant_source_counts = {"regex": 0, "llm": 0, "null": 0}
     suggestions_made = 0
     for item, result in zip(items, results):
-        item["cleaned_description"] = result.cleaned
         item["llm_status"] = result.source
         item["llm_model"] = result.llm_model
         item["llm_processed_at"] = (
@@ -399,22 +408,40 @@ def _apply_llm_processing(db: Session, user_id: int, items: list[dict]) -> dict:
         )
         if result.llm_suggestion is not None:
             # Surface the suggestion to the preview UI under the #29-spec shape.
-            s = result.llm_suggestion
+            # The merchant we put here is the post-extractor decision (regex
+            # > llm), not the LLM's raw output — that's what the user reviews
+            # and what confirm should persist by default.
+            raw_sug = result.llm_suggestion
             item["llm_suggestion"] = {
-                "merchant_name": s["merchant_name"],
-                "category_uuid": s["suggested_category_uuid"],
-                "subcategory_uuid": s["suggested_subcategory_uuid"],
-                "confidence": s["confidence"],
+                "merchant_name": result.merchant_name,
+                "category_uuid": raw_sug["suggested_category_uuid"],
+                "subcategory_uuid": raw_sug["suggested_subcategory_uuid"],
+                "confidence": raw_sug["confidence"],
             }
-            # Preserve the DB-shape copy for persistence at confirm time.
-            item["llm_suggestion_raw"] = s
+            # Preserve the DB-shape copy of the LLM's raw output for the
+            # audit trail. merchant_source records who picked the merchant.
+            item["llm_suggestion_raw"] = raw_sug
+            item["merchant_source"] = result.merchant_source
             suggestions_made += 1
         else:
             item["llm_suggestion"] = None
+            item["merchant_source"] = result.merchant_source
+
         source_counts[result.source] = source_counts.get(result.source, 0) + 1
+        merchant_source_counts[result.merchant_source or "null"] = (
+            merchant_source_counts.get(result.merchant_source or "null", 0) + 1
+        )
+
+    logger.info(
+        "merchant_extractor_coverage "
+        f"institution={institution} regex={merchant_source_counts['regex']} "
+        f"llm={merchant_source_counts['llm']} null={merchant_source_counts['null']} "
+        f"total={len(items)}"
+    )
 
     return {
         "source_counts": source_counts,
+        "merchant_source_counts": merchant_source_counts,
         "degraded": source_counts["raw_fallthrough"] > 0,
         "suggestions_made": suggestions_made,
         "total": len(items),

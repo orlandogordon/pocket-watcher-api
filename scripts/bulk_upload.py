@@ -4,20 +4,21 @@ preview/confirm HTTP flow.
 
 This is a dev-only convenience script. Unlike the preview flow (which gives
 the user a chance to review LLM suggestions before they hit the DB), this
-script auto-accepts every suggestion the LLM produces. That's intentional —
-the script's whole point is to skip the review step.
+script auto-accepts every suggestion. That's intentional — the script's
+whole point is to skip the review step.
 
 Pipeline per file:
   1. Parse with the institution's parser (raw ParsedTransaction list).
-  2. Run the parsed rows through process_preview_items to get cleaned
-     descriptions + per-row category/merchant suggestions (#27 + #29).
+  2. Run the parsed rows through process_preview_items to get per-row
+     merchant + category/subcategory suggestions (#29 / #35).
   3. Bulk-insert via the same crud helpers the legacy path used. Hashes are
      computed from the RAW parser description so re-uploads stay deduped
      against transactions imported via either path.
-  4. Post-process the freshly-created TransactionDB rows: overwrite the
-     description with the cleaned value and apply the suggestion's
-     merchant_name + category_id + subcategory_id. Investment rows only get
-     the cleaned description (no category_id column on InvestmentTransactionDB).
+  4. Post-process the freshly-created TransactionDB rows: apply the
+     post-extractor merchant_name and the suggestion's category_id /
+     subcategory_id. Description is preserved verbatim from the parser
+     (no rewrite — see #35). Investment rows skip category columns
+     (InvestmentTransactionDB has none).
 """
 import os
 import sys
@@ -93,9 +94,10 @@ def _resolve_category_uuids(db, suggestions: list[dict]) -> dict:
 
 def _apply_cleanup_to_created(created_rows, parsed_txns, results: list[CleanedResult],
                               category_uuid_to_id: dict, has_category_columns: bool):
-    """Walk the freshly-created DB rows and overwrite description + (when
-    applicable) merchant_name/category_id/subcategory_id from the matching
-    CleanedResult. Returns (suggestions_applied_count, fallthrough_count)."""
+    """Walk the freshly-created DB rows and (when applicable) apply
+    merchant_name/category_id/subcategory_id from the matching CleanedResult.
+    Description stays as the parser produced it — #35 removed the cleaned
+    middle tier. Returns (suggestions_applied_count, fallthrough_count)."""
     lookup = _build_result_lookup(parsed_txns, results)
     suggestions_applied = 0
     fallthroughs = 0
@@ -114,20 +116,22 @@ def _apply_cleanup_to_created(created_rows, parsed_txns, results: list[CleanedRe
                 if result is None:
                     continue
 
-                row.description = result.cleaned
                 if result.is_fallthrough:
                     fallthroughs += 1
 
-                if has_category_columns and result.llm_suggestion:
-                    sug = result.llm_suggestion
-                    row.merchant_name = sug.get("merchant_name")
-                    cat_uuid = sug.get("suggested_category_uuid")
-                    sub_uuid = sug.get("suggested_subcategory_uuid")
-                    if cat_uuid and cat_uuid in category_uuid_to_id:
-                        row.category_id = category_uuid_to_id[cat_uuid]
-                    if sub_uuid and sub_uuid in category_uuid_to_id:
-                        row.subcategory_id = category_uuid_to_id[sub_uuid]
-                    suggestions_applied += 1
+                if has_category_columns:
+                    # merchant_name comes from the post-extractor decision
+                    # (regex > llm), available even when the LLM fell through.
+                    row.merchant_name = result.merchant_name
+                    if result.llm_suggestion:
+                        sug = result.llm_suggestion
+                        cat_uuid = sug.get("suggested_category_uuid")
+                        sub_uuid = sug.get("suggested_subcategory_uuid")
+                        if cat_uuid and cat_uuid in category_uuid_to_id:
+                            row.category_id = category_uuid_to_id[cat_uuid]
+                        if sub_uuid and sub_uuid in category_uuid_to_id:
+                            row.subcategory_id = category_uuid_to_id[sub_uuid]
+                        suggestions_applied += 1
                 break
 
     return suggestions_applied, fallthroughs
@@ -160,7 +164,9 @@ def process_local_file(db, file_path, institution, account_id, user_id):
                 }
                 for t in parsed_data.transactions
             ]
-            results = process_preview_items(db, parsed_items, user_id=user_id)
+            results = process_preview_items(
+                db, parsed_items, user_id=user_id, institution=institution,
+            )
             suggestions = [r.llm_suggestion for r in results if r.llm_suggestion]
             uuid_to_id = _resolve_category_uuids(db, suggestions)
 
@@ -192,7 +198,9 @@ def process_local_file(db, file_path, institution, account_id, user_id):
                 }
                 for t in parsed_data.investment_transactions
             ]
-            inv_results = process_preview_items(db, inv_items, user_id=user_id)
+            inv_results = process_preview_items(
+                db, inv_items, user_id=user_id, institution=institution,
+            )
 
             print(f"    Importing {len(parsed_data.investment_transactions)} investment transactions...")
             created_inv, _skipped_inv, _backfill_id = crud_investment.bulk_create_investment_transactions_from_parsed_data(

@@ -5,13 +5,16 @@ Backends are selected via the LLM_BACKEND env var. Callers depend only on the
 abstract interface; swapping backends (local llama.cpp <-> Anthropic API) is an
 env-var change at factory level.
 
-The canonical entry point is ``process_transaction_batch`` — it cleans the raw
-description, normalizes the merchant, and suggests a (category, subcategory)
-UUID from the locked set in ``src.constants.categories`` in a single round
-trip. ``clean_descriptions_batch`` is retained as a thin projection over it for
-#27's existing call sites.
+The canonical entry point is ``process_transaction_batch`` — it normalizes the
+merchant (when one is present) and suggests a (category, subcategory) UUID
+from the locked set in ``src.constants.categories`` in a single round trip.
+The raw description is preserved verbatim by callers; the LLM no longer
+rewrites it. The merchant column is nullable: rows whose source contains only
+an address, generic descriptor, or parser-corrupted token return null and the
+caller falls through.
 
-See backend todos #27 (description cleanup) and #29 (category + merchant).
+See backend todos #29 (category + merchant) and #35 (raw descriptions +
+regex-first merchant extraction).
 """
 
 from __future__ import annotations
@@ -35,6 +38,12 @@ from src.logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# LLM merchant outputs below this confidence are dropped to None — the model's
+# confidence score is poorly calibrated on bare-address / corrupted-token rows
+# (which can score >0.9 on confidently-invented brands), but the floor still
+# catches the obvious noise tier (Mobile Payment, Annual Membership Fee, etc.).
+_MERCHANT_CONFIDENCE_FLOOR = 0.85
+
 
 class LLMUnavailableError(Exception):
     """Raised when the LLM backend cannot be reached or fails all retries.
@@ -45,9 +54,15 @@ class LLMUnavailableError(Exception):
 
 
 class TransactionBatchResult(TypedDict):
-    """One row of output from ``process_transaction_batch``."""
-    cleaned_description: str
-    merchant_name: str
+    """One row of output from ``process_transaction_batch``.
+
+    ``merchant_name`` is nullable: the model is instructed to return null for
+    rows whose source contains no real brand (bare addresses, generic
+    descriptors, parser-corrupted tokens). The post-processing layer also
+    drops merchant to None when ``confidence`` falls below
+    ``_MERCHANT_CONFIDENCE_FLOOR``.
+    """
+    merchant_name: Optional[str]
     suggested_category_uuid: str
     suggested_subcategory_uuid: str
     confidence: float
@@ -55,41 +70,22 @@ class TransactionBatchResult(TypedDict):
 
 # ---------- prompt fragments ----------
 
-_DESCRIPTION_CLEANUP_RULES = """Description cleanup rules (applied to `cleaned_description`):
-- Goal: human-readable. Lead with the merchant in the FIRST tokens, then preserve metadata that distinguishes one transaction from another (store/branch number, city/state for physical purchases, row-specific identifier). The minimum possible string is NOT the goal — readability is. Don't over-strip.
-- Format conventions (use a single " - " separator — space-dash-space — consistently):
-  - Physical retail: `{Merchant}[ #{StoreNum}] - {City}, {ST}` (e.g. "Trader Joe's #543 - Brooklyn, NY", "Shell - Burbank, CA"). Drop the store-number segment when not present; drop the city when only a state is present (e.g. "HARBORNYC - NY").
-  - Aggregator + vendor: `{Aggregator} - {Vendor}` with location appended when present in the source (e.g. "TST* JOE'S PIZZA - NEW YORK NY" -> "Joe's Pizza - New York, NY", processor stripped, vendor preserved with location).
-  - Payment / transfer rows: `{Issuer} Payment {trailing-id}` (e.g. "Amex Payment 7284", "Discover Payment 4421"). Trailing identifier preserved verbatim regardless of length.
-  - Deposits and bank-action rows with no merchant: `{Action}` plus any address/identifier the source carries (e.g. "ATM Withdrawal - 0123 Main St", "Acme Corp Payroll"). "Interest Charge" alone if no further detail.
-  - Inbound deposits often concatenate `{Sender}{Suffix}{DepositType}{AccountSuffix}` with no spaces. Recognize these deposit-type tokens (sometimes mashed together with the sender's legal suffix): `SALARY`, `REG SALARY`, `PAYROLL`, `DIRECT DEPOSIT`, `INTEREST`, `INT PAYMENT`, `DIVIDEND`, `REFUND`, `REBATE`, `IRS REFUND`, `TAX REFUND`. Format as `{Sender} {DepositType} {AccountSuffix}` after splitting tokens correctly. So "PNCBANKNAREGSALARY****40047586" -> "PNC Bank Salary Deposit ****40047586".
-  - Investment / brokerage rows (containing `CALL`, `PUT`, `BOUGHT`, `SOLD`, `BUY`, `SELL`, `DIVIDEND`, `REINVEST`, or option-spec patterns like `$X EXP MM/DD/YY`): the action keyword AND any contract spec (strike, expiration, share count) are the meaningful identifiers. PRESERVE them — do not strip them as retail noise. Format as `{Underlying} {Action} {Spec}` (e.g. "CALLADVANCEDMICRODEVI$180 EXP07/19/24" -> "Advanced Micro Devices Call $180 exp 7/19/2024"). The strike and expiration must round-trip byte-exact — never alter numeric values. Strip only the trailing `Commission$X`, `ExchangeProcessingFee$X`, and similar fee-tail items.
-- Preserve as much useful detail as the source carries — it's harmless and aids reconciliation:
-  - Store / branch / warehouse numbers (`Trader Joe's #543`, `Home Depot #0345`, `Costco #1025`).
-  - City and state when present in the source. Don't try to distinguish "physical purchase location" from "corporate HQ" — both are fine.
-  - Row-specific identifiers (last-4 on card payments, full account suffix on transfers, payment reference numbers).
-  - Phone numbers next to a merchant or location. They're harmless context.
-- Strip ONLY these clearly-meaningless items:
-  - Authorization prefixes: PURCHASE AUTHORIZED ON, POS DEBIT, DEBITPOSAP, DBCRDPURAP, DDAPURCHASEAP, DDAPURAP, ACH DEBIT, DIRECT DEPOSIT, ELECTRONICPMT, RECURRING PAYMENT, and similar.
-  - Auth codes (e.g. `AUT121524`, embedded transaction dates).
-  - Masked card numbers (`*****12345`, `XXXX1234`, `CARD 1234`).
-  - Card-network tokens on POS rows (VISA, MASTERCARD, MC) — see merchant rules for the tiered policy on AMEX / DISCOVER.
-- Preserve natural brand capitalization (Starbucks, Amazon, CVS Pharmacy, ConEd, Whole Foods Market). Preserve odd casing on unfamiliar merchants (HARBORNYC).
-- Delivery and marketplace services are user-visible — KEEP them paired with the vendor using " - ". Examples: DoorDash, Uber Eats, Grubhub, Seamless, Instacart, Caviar, Postmates. So "DOORDASH*CHIPOTLE" -> "DoorDash - Chipotle". If no vendor is attached, return just the service name ("Uber Eats").
-- Payment processors are just rails — STRIP them and keep the vendor. Examples: PAYPAL *, SQ * (Square), TST* (Toast), PY *, GOOGLE * (Google Pay), APPLE PAY. So "PAYPAL *STEAM GAMES" -> "Steam", "SQ *BLUE BOTTLE COFFEE OAKLAND CA" -> "Blue Bottle Coffee - Oakland, CA".
-- Keep meaningful qualifiers that identify the income/expense type: "Acme Corp Payroll" (not "Acme Corp"), "Amazon Prime" (not "Amazon"), "Uber Trip" vs "Uber Eats", "Venmo Payment"."""
-
-
 _MERCHANT_RULES = """Merchant name rules (applied to `merchant_name`):
-- The merchant is JUST the normalized brand — no metadata. The cleaned_description carries extras (location, store number, identifier, phone, .com suffixes); merchant_name strips all of those down to the brand alone. So "Starbucks #12345 - Seattle, WA" -> merchant "Starbucks"; "Costco Whse #1025 - Manahawkin, NJ" -> merchant "Costco"; "Apple.com/bill 866-712-7753" -> merchant "Apple"; "Venmo Payment 3125551234" -> merchant "Venmo".
-- Aggregator-prefixed descriptions: take the vendor, not the aggregator. "DoorDash - Chipotle" -> merchant "Chipotle". "Grubhub - Shake Shack" -> "Shake Shack". Plain "DoorDash" (no vendor) -> "DoorDash".
-- Legal-entity suffixes (`NA`, `N.A.`, `FSB`, `CU`, `INC`, `LLC`, `CO`, `LTD`, `PLC`) are formal corporate designations, not part of the brand. Treat them as a token boundary — the brand stops before the suffix; whatever follows the suffix is descriptive (deposit type, payment shape, qualifier). Strip the suffix from merchant_name. So "PNCBANKNAREGSALARY" decomposes as "PNC Bank" (brand) + "NA" (suffix) + "REG SALARY" (deposit type) — merchant is "PNC Bank", description preserves the deposit type. Same boundary logic applies to any corporate suffix anywhere.
+- `merchant_name` is JUST the normalized brand — no metadata, no location, no store number, no identifier. So "STARBUCKS STORE 12345 SEATTLE WA" -> merchant "Starbucks"; "COSTCO WHSE 1025 MANAHAWKIN NJ" -> merchant "Costco"; "Apple.com/bill 866-712-7753" -> merchant "Apple"; "VENMO 3125551234" -> merchant "Venmo".
+- **Return null when there is no real brand in the source.** The merchant column is allowed to be null and SHOULD be null for:
+  - Bare-address rows (e.g. "DDA WITHDRAW AP TW04C996 1120 TILTON RD NORTHFIELD * NJ" — there is no merchant, just a street address; return null. Do NOT invent a brand from the address).
+  - ATM cash deposits at branch addresses (e.g. "ATM CASH DEPOSIT 1101 HOOPER AVENUE TOMS RIVER * NJ" — return null).
+  - Generic transaction-type descriptors that name no payee: "Mobile Payment", "Online Payment", "Annual Membership Fee", "Charge On Purchases", "Asset-Based Bill", "FDIC Insured Deposit Account", "Interest Charge". Return null — these are descriptors, not merchants.
+  - Parser-corrupted tokens with no recoverable brand: rows that begin mid-word (e.g. "EDDITINCCLASS A" — corrupted "REDDIT", but you cannot be SURE which company it is). Return null. Do NOT guess a plausible brand. Returning null is correct; inventing "Eddit Inc" is wrong.
+  - Single-token AmEx authorization codes with no merchant context (e.g. "MENLO PARK, NJ-ANF 000011626" where no business name appears — return null).
+- Aggregator-prefixed descriptions: take the vendor, not the aggregator. "DOORDASH*CHIPOTLE" -> merchant "Chipotle". "GRUBHUB*SHAKE SHACK" -> "Shake Shack". Plain "DOORDASH" (no vendor) -> "DoorDash".
+- Legal-entity suffixes (`NA`, `N.A.`, `FSB`, `CU`, `INC`, `LLC`, `CO`, `LTD`, `PLC`) are formal corporate designations, not part of the brand. Treat them as a token boundary — the brand stops before the suffix. So "PNCBANKNAREGSALARY" decomposes as "PNC Bank" (brand) + "NA" (suffix) + "REG SALARY" (deposit type) — merchant is "PNC Bank".
 - Strip type qualifiers: "Acme Corp Payroll" -> "Acme Corp", "Uber Trip" -> "Uber", "Uber Eats" -> "Uber Eats" (Uber Eats IS the brand).
 - Card networks vs issuers — the stoplist is tiered:
-  - VISA, MASTERCARD, MC are pure payment networks. NEVER select one as the merchant. If one of these tokens is the most prominent in the source, the actual merchant follows it (e.g. "VISADDAPURAP HARBORNYC ..." -> merchant is "HARBORNYC", not "Visa"). The token itself is rail noise like PAYPAL or SQ.
+  - VISA, MASTERCARD, MC are pure payment networks. NEVER select one as the merchant. If one of these tokens is the most prominent in the source, the actual merchant follows it (e.g. "VISADDAPURAP HARBORNYC ..." -> merchant is "HARBORNYC", not "Visa"). The token itself is rail noise.
   - AMEX, AMERICAN EXPRESS, DISCOVER, DISC are BOTH networks AND issuers. Treat as the merchant ONLY when the row is a payment/transfer (source contains ELECTRONICPMT, EPAYMENT, ACHPMT, WEBPMT, BILLPAY, or similar). On POS-purchase rows the same token is the network rail and should be stripped — pick whatever merchant token follows it instead.
-- Unrecognized merchants: if the merchant token is unfamiliar (no well-known brand match), output it AS-IS — preserve odd casing like "HARBORNYC" rather than substituting a recognizable nearby token (network name, processor, city). Better to surface the raw merchant string than to mislabel.
-- If the transaction has no merchant (ATM, interest, bank fee), return a short type label ("ATM", "Bank", "Interest")."""
+- Payment processors (PAYPAL *, SQ *, TST*, STRIPE *) wrap the real merchant — emit the wrapped vendor, not the wrapper. "PAYPAL *STEAM GAMES" -> "Steam".
+- Unrecognized merchants: if the merchant token is unfamiliar (no well-known brand match) but a brand IS clearly present in the source, output it AS-IS — preserve odd casing like "HARBORNYC". The bar is "is there a brand string in the source?" — if yes, return it; if not, return null."""
 
 
 _CATEGORY_RULES = """Category rules (applied to `suggested_category_uuid` + `suggested_subcategory_uuid`):
@@ -112,81 +108,64 @@ _CATEGORY_RULES = """Category rules (applied to `suggested_category_uuid` + `sug
 _FEW_SHOT_EXAMPLES = """Examples (raw input -> output JSON):
 
 Input: {"description": "PURCHASE AUTHORIZED ON 03/14 STARBUCKS STORE 12345 SEATTLE WA CARD 1234", "amount": "4.75", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "Starbucks #12345 - Seattle, WA", "merchant_name": "Starbucks", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "88accd63-6963-417a-b334-970d28a91cf5", "confidence": 0.98}
+Output: {"merchant_name": "Starbucks", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "88accd63-6963-417a-b334-970d28a91cf5", "confidence": 0.98}
 
 Input: {"description": "DOORDASH*CHIPOTLE 855-9731040 CA", "amount": "23.40", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "DoorDash - Chipotle", "merchant_name": "Chipotle", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "dd2d9c68-4c00-444e-80ed-775a72087bea", "confidence": 0.95}
+Output: {"merchant_name": "Chipotle", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "dd2d9c68-4c00-444e-80ed-775a72087bea", "confidence": 0.95}
 
 Input: {"description": "UBER EATS *SWEETGREEN HELP.UBER.COM", "amount": "18.40", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "Uber Eats - Sweetgreen", "merchant_name": "Sweetgreen", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "dd2d9c68-4c00-444e-80ed-775a72087bea", "confidence": 0.94}
+Output: {"merchant_name": "Sweetgreen", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "dd2d9c68-4c00-444e-80ed-775a72087bea", "confidence": 0.94}
 
 Input: {"description": "DIRECT DEPOSIT ACME CORP PAYROLL", "amount": "3250.00", "transaction_type": "CREDIT"}
-Output: {"cleaned_description": "Acme Corp Payroll", "merchant_name": "Acme Corp", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "42e344f9-55f1-4f46-9c12-d548658409fb", "confidence": 0.99}
+Output: {"merchant_name": "Acme Corp", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "42e344f9-55f1-4f46-9c12-d548658409fb", "confidence": 0.99}
 
 Input: {"description": "NETFLIX.COM LOS GATOS CA", "amount": "15.49", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "Netflix", "merchant_name": "Netflix", "suggested_category_uuid": "78bd0a07-5447-4cb6-b2d6-315d3d4cb4a0", "suggested_subcategory_uuid": "d6762e10-a608-417a-a7a6-87a2977e59e1", "confidence": 0.99}
-
-Input: {"description": "ACH DEBIT CONED 1-800-752-6633", "amount": "98.22", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "ConEd", "merchant_name": "ConEd", "suggested_category_uuid": "f8ee90f0-2d76-4547-b9b4-71fbb2c506d6", "suggested_subcategory_uuid": "8b4be050-62fa-4520-b5af-012e0eb048f5", "confidence": 0.96}
-
-Input: {"description": "SHELL OIL 123 HWY 1 BURBANK CA", "amount": "52.00", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "Shell - Burbank, CA", "merchant_name": "Shell", "suggested_category_uuid": "d0032366-ed8b-484b-9564-7f5e9721aa7e", "suggested_subcategory_uuid": "936a458b-82eb-4278-b64f-4fba8f7ae8da", "confidence": 0.94}
-
-Input: {"description": "TRADER JOE'S #543 QPS BROOKLYN NY", "amount": "67.10", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "Trader Joe's #543 - Brooklyn, NY", "merchant_name": "Trader Joe's", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "0b66599a-0919-46cb-8d86-ea0517a66f12", "confidence": 0.98}
-
-Input: {"description": "INTEREST CHARGE ON PURCHASES", "amount": "12.55", "transaction_type": "INTEREST"}
-Output: {"cleaned_description": "Interest Charge", "merchant_name": "Bank", "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "b9328f2f-88f5-4128-90af-87130c967280", "confidence": 0.9}
-
-Input: {"description": "WELLS FARGO HOME MORTGAGE", "amount": "2100.00", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "Wells Fargo Home Mortgage", "merchant_name": "Wells Fargo", "suggested_category_uuid": "f8ee90f0-2d76-4547-b9b4-71fbb2c506d6", "suggested_subcategory_uuid": "8c86ff04-3f6c-467c-a5cb-e9295521ae3a", "confidence": 0.97}
-
-Input: {"description": "HOME DEPOT #0345 BROOKLYN NY", "amount": "78.40", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "Home Depot #0345 - Brooklyn, NY", "merchant_name": "Home Depot", "suggested_category_uuid": "f8ee90f0-2d76-4547-b9b4-71fbb2c506d6", "suggested_subcategory_uuid": "17e8d1a2-3965-49ea-8bfd-5645657172da", "confidence": 0.92}
-
-Input: {"description": "SEPHORA #0125 NEW YORK", "amount": "56.20", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "Sephora #0125 - New York", "merchant_name": "Sephora", "suggested_category_uuid": "ee02d7ee-7f8f-4983-8693-694dc0a1faae", "suggested_subcategory_uuid": "1a1b3dd2-e0e7-42dc-beed-1cdd88a5441b", "confidence": 0.93}
-
-Input: {"description": "AMZN MKTP US*AB1CD2EF3", "amount": "42.18", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "Amazon", "merchant_name": "Amazon", "suggested_category_uuid": "0284c65f-1af6-48d2-9133-3d3ac3393ede", "suggested_subcategory_uuid": "5247aeec-a479-4801-9f5e-07af3122f6f9", "confidence": 0.85}
+Output: {"merchant_name": "Netflix", "suggested_category_uuid": "78bd0a07-5447-4cb6-b2d6-315d3d4cb4a0", "suggested_subcategory_uuid": "d6762e10-a608-417a-a7a6-87a2977e59e1", "confidence": 0.99}
 
 Input: {"description": "PAYPAL *STEAM GAMES 4029357733", "amount": "29.99", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "Steam", "merchant_name": "Steam", "suggested_category_uuid": "78bd0a07-5447-4cb6-b2d6-315d3d4cb4a0", "suggested_subcategory_uuid": "1831cdfa-bc8a-45e7-a552-404ee54b3464", "confidence": 0.95}
-
-Input: {"description": "DBCRDPURAP,*****30089881312,AUT121524VISADDAPURAP HARBORNYC 9179934001 *NY", "amount": "42.52", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "HARBORNYC - NY", "merchant_name": "HARBORNYC", "suggested_category_uuid": "0284c65f-1af6-48d2-9133-3d3ac3393ede", "suggested_subcategory_uuid": "5247aeec-a479-4801-9f5e-07af3122f6f9", "confidence": 0.55}
+Output: {"merchant_name": "Steam", "suggested_category_uuid": "78bd0a07-5447-4cb6-b2d6-315d3d4cb4a0", "suggested_subcategory_uuid": "1831cdfa-bc8a-45e7-a552-404ee54b3464", "confidence": 0.95}
 
 Input: {"description": "ELECTRONICPMT-WEB, AMEXEPAYMENTACHPMTM7284", "amount": "3000.00", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "Amex Payment 7284", "merchant_name": "Amex", "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "b9328f2f-88f5-4128-90af-87130c967280", "confidence": 0.95}
+Output: {"merchant_name": "American Express", "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "b9328f2f-88f5-4128-90af-87130c967280", "confidence": 0.95}
 
 Input: {"description": "MASTERCARD PURCHASE FERN COFFEE BAR PORTLAND OR", "amount": "6.25", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "Fern Coffee Bar - Portland, OR", "merchant_name": "Fern Coffee Bar", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "88accd63-6963-417a-b334-970d28a91cf5", "confidence": 0.85}
+Output: {"merchant_name": "Fern Coffee Bar", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "88accd63-6963-417a-b334-970d28a91cf5", "confidence": 0.85}
 
 Input: {"description": "ACHDEPOSIT,PNCBANKNAREGSALARY****40047586", "amount": "2523.89", "transaction_type": "DEPOSIT"}
-Output: {"cleaned_description": "PNC Bank Salary Deposit ****40047586", "merchant_name": "PNC Bank", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "42e344f9-55f1-4f46-9c12-d548658409fb", "confidence": 0.92}
-
-Input: {"description": "INTERESTPAYMENT****99887766", "amount": "12.45", "transaction_type": "DEPOSIT"}
-Output: {"cleaned_description": "Interest Payment ****99887766", "merchant_name": "Bank", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "fe41dac0-0a3b-4e33-a731-9aecc6217d42", "confidence": 0.90}
+Output: {"merchant_name": "PNC Bank", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "42e344f9-55f1-4f46-9c12-d548658409fb", "confidence": 0.92}
 
 Input: {"description": "ACHDEBIT,HESAAPAYMENTP18514286", "amount": "200.14", "transaction_type": "PURCHASE"}
-Output: {"cleaned_description": "HESAA Payment P18514286", "merchant_name": "HESAA", "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "3280dd39-0173-4754-bdba-17b1a3981e1e", "confidence": 0.92}
+Output: {"merchant_name": "HESAA", "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "3280dd39-0173-4754-bdba-17b1a3981e1e", "confidence": 0.92}
 
-Input: {"description": "CALLADVANCEDMICRODEVI$180 EXP07/19/24 Commission$0.65;ExchangeProcessingFee$0.01", "amount": "1245.50", "transaction_type": "BUY"}
-Output: {"cleaned_description": "Advanced Micro Devices Call $180 exp 7/19/2024", "merchant_name": "Advanced Micro Devices", "suggested_category_uuid": "1601d6e1-e0d7-44f7-8f47-207ca11538be", "suggested_subcategory_uuid": "a762c7e9-7a3d-4ab5-97e4-814b14d81e0b", "confidence": 0.90}
+Input: {"description": "DDA WITHDRAW AP TW04C996  1120 TILTON RD  NORTHFIELD  * NJ", "amount": "200.00", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": null, "suggested_category_uuid": "0284c65f-1af6-48d2-9133-3d3ac3393ede", "suggested_subcategory_uuid": "d7a3041e-5253-492c-82ca-ca24fb25df26", "confidence": 0.7}
+
+Input: {"description": "ATM CASH DEPOSIT TW04C196  1101 HOOPER AVENUE  TOMS RIVER  * NJ", "amount": "300.00", "transaction_type": "DEPOSIT"}
+Output: {"merchant_name": null, "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "42e344f9-55f1-4f46-9c12-d548658409fb", "confidence": 0.7}
+
+Input: {"description": "ANNUAL MEMBERSHIP FEE", "amount": "95.00", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": null, "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "b9328f2f-88f5-4128-90af-87130c967280", "confidence": 0.85}
+
+Input: {"description": "MOBILE PAYMENT - THANK YOU", "amount": "1500.00", "transaction_type": "TRANSFER_IN"}
+Output: {"merchant_name": null, "suggested_category_uuid": "0284c65f-1af6-48d2-9133-3d3ac3393ede", "suggested_subcategory_uuid": "5247aeec-a479-4801-9f5e-07af3122f6f9", "confidence": 0.65}
+
+Input: {"description": "EDDITINCCLASS A", "amount": "245.00", "transaction_type": "BUY"}
+Output: {"merchant_name": null, "suggested_category_uuid": "1601d6e1-e0d7-44f7-8f47-207ca11538be", "suggested_subcategory_uuid": "a762c7e9-7a3d-4ab5-97e4-814b14d81e0b", "confidence": 0.6}
 
 Input: {"description": "DIVIDEND VOO", "amount": "45.20", "transaction_type": "DIVIDEND"}
-Output: {"cleaned_description": "Vanguard VOO Dividend", "merchant_name": "Vanguard", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "fe41dac0-0a3b-4e33-a731-9aecc6217d42", "confidence": 0.95}"""
+Output: {"merchant_name": "Vanguard", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "fe41dac0-0a3b-4e33-a731-9aecc6217d42", "confidence": 0.95}"""
 
 
 def _build_system_prompt() -> str:
     return "\n\n".join([
         (
-            "You normalize messy transaction descriptions from bank and "
-            "credit-card statements, identify the merchant, and classify each "
-            "transaction into a predefined category/subcategory. Output is "
-            "machine-consumed — follow the schema exactly."
+            "You identify the merchant brand and classify each transaction "
+            "into a predefined category/subcategory. The raw description is "
+            "preserved verbatim by the caller — do NOT rewrite or clean it. "
+            "merchant_name is nullable: return null when the source contains "
+            "no real brand. Output is machine-consumed — follow the schema "
+            "exactly."
         ),
-        _DESCRIPTION_CLEANUP_RULES,
         _MERCHANT_RULES,
         _CATEGORY_RULES,
         render_for_prompt(),
@@ -227,8 +206,10 @@ def _build_batch_json_schema(count: int) -> dict:
                     "items": {
                         "type": "object",
                         "properties": {
-                            "cleaned_description": {"type": "string"},
-                            "merchant_name": {"type": "string"},
+                            # Nullable: model emits null when no real brand
+                            # exists in the source (bare addresses, generic
+                            # descriptors, parser-corrupted tokens).
+                            "merchant_name": {"type": ["string", "null"]},
                             "suggested_category_uuid": {
                                 "type": "string",
                                 "enum": all_parent_uuids(),
@@ -244,7 +225,6 @@ def _build_batch_json_schema(count: int) -> dict:
                             },
                         },
                         "required": [
-                            "cleaned_description",
                             "merchant_name",
                             "suggested_category_uuid",
                             "suggested_subcategory_uuid",
@@ -311,29 +291,10 @@ class LLMClient(ABC):
 
     @abstractmethod
     def process_transaction_batch(self, parsed: list) -> list[TransactionBatchResult]:
-        """Clean + classify a batch of parsed transactions. Returns exactly
-        ``len(parsed)`` results in the same order. Raises ``LLMUnavailableError``
-        on any unrecoverable failure (connection, timeout, malformed JSON,
-        count mismatch)."""
-
-    def clean_descriptions_batch(self, raws: list[str]) -> list[str]:
-        """Back-compat wrapper for #27's description-only callers.
-
-        Builds a minimal ``parsed`` payload from each raw and projects the
-        ``cleaned_description`` field out of the consolidated batch result.
-        Empty inputs are passed through without a model call."""
-        if not raws:
-            return []
-        parsed = [
-            {"description": r, "amount": "", "transaction_type": "", "transaction_date": ""}
-            for r in raws
-        ]
-        results = self.process_transaction_batch(parsed)
-        return [r["cleaned_description"] for r in results]
-
-    def clean_description(self, raw: str) -> str:
-        """Convenience single-item wrapper."""
-        return self.clean_descriptions_batch([raw])[0]
+        """Classify a batch of parsed transactions: merchant (nullable) +
+        category UUIDs + confidence. Returns exactly ``len(parsed)`` results
+        in the same order. Raises ``LLMUnavailableError`` on any unrecoverable
+        failure (connection, timeout, malformed JSON, count mismatch)."""
 
 
 class LlamaCppClient(LLMClient):
@@ -408,12 +369,27 @@ class LlamaCppClient(LLMClient):
                 sub_uuid = str(r["suggested_subcategory_uuid"])
                 # Trust the subcategory, derive the parent — see _SUB_TO_PARENT comment.
                 cat_uuid = _SUB_TO_PARENT.get(sub_uuid, str(r["suggested_category_uuid"]))
+                confidence = float(r.get("confidence", 0.0))
+
+                # Merchant nullability: schema allows null, and we additionally
+                # drop merchant when confidence is below the floor (catches the
+                # noise tier — Mobile/Annual Fee/Asset-Based — even when the
+                # model emits a string for those rows).
+                raw_merchant = r["merchant_name"]
+                if raw_merchant is None:
+                    merchant: Optional[str] = None
+                else:
+                    stripped = str(raw_merchant).strip()
+                    if not stripped or confidence < _MERCHANT_CONFIDENCE_FLOOR:
+                        merchant = None
+                    else:
+                        merchant = stripped
+
                 out.append({
-                    "cleaned_description": str(r["cleaned_description"]).strip(),
-                    "merchant_name": str(r["merchant_name"]).strip(),
+                    "merchant_name": merchant,
                     "suggested_category_uuid": cat_uuid,
                     "suggested_subcategory_uuid": sub_uuid,
-                    "confidence": float(r.get("confidence", 0.0)),
+                    "confidence": confidence,
                 })
             except (KeyError, TypeError, ValueError) as e:
                 logger.error(f"LLM result missing expected fields: {r!r}")
