@@ -138,10 +138,9 @@ def analyze_regular_transactions(
         else:
             duplicate_type = None
 
+        duplicate_info: Optional[Dict[str, Any]] = None
         if duplicate_type is not None:
-            duplicate_info: Dict[str, Any] = {
-                "duplicate_type": duplicate_type,
-            }
+            duplicate_info = {"duplicate_type": duplicate_type}
             if is_db_duplicate:
                 existing_txn = existing_hashes[base_hash]
                 duplicate_info["existing_transaction"] = _serialize_existing_transaction(existing_txn)
@@ -152,6 +151,11 @@ def analyze_regular_transactions(
                 duplicate_info["first_occurrence_position"] = first["position"]
                 duplicate_info["statement_position"] = i
 
+        # Only DB matches (and rows that match both DB + statement) auto-reject
+        # at preview start. Pure within-statement duplicates ship to
+        # ready_to_import with is_duplicate=True so the user can decide per-row,
+        # while still flowing through make_unique hashing at confirm time.
+        if duplicate_type in ("database", "both"):
             rejected.append({
                 "temp_id": temp_id,
                 "review_status": "rejected",
@@ -167,7 +171,9 @@ def analyze_regular_transactions(
         else:
             ready_to_import.append({
                 "temp_id": temp_id,
-                "is_duplicate": False,
+                "is_duplicate": duplicate_type == "within_statement",
+                "duplicate_type": duplicate_type,
+                "duplicate_info": duplicate_info,
                 "parsed_data": parsed_data,
                 "edited_data": None,
                 "base_hash": base_hash,
@@ -261,8 +267,9 @@ def analyze_investment_transactions(
         else:
             duplicate_type = None
 
+        duplicate_info: Optional[Dict[str, Any]] = None
         if duplicate_type is not None:
-            duplicate_info: Dict[str, Any] = {"duplicate_type": duplicate_type}
+            duplicate_info = {"duplicate_type": duplicate_type}
             if is_db_duplicate:
                 existing_txn = existing_hashes[base_hash]
                 duplicate_info["existing_transaction"] = _serialize_existing_investment_transaction(existing_txn)
@@ -273,6 +280,10 @@ def analyze_investment_transactions(
                 duplicate_info["first_occurrence_position"] = first["position"]
                 duplicate_info["statement_position"] = i
 
+        # Same policy as regular transactions: only DB matches auto-reject.
+        # Pure within-statement duplicates (e.g. identical 0-share dividend
+        # lines) flow to ready_to_import flagged so the user decides per-row.
+        if duplicate_type in ("database", "both"):
             rejected.append({
                 "temp_id": temp_id,
                 "review_status": "rejected",
@@ -288,7 +299,9 @@ def analyze_investment_transactions(
         else:
             ready_to_import.append({
                 "temp_id": temp_id,
-                "is_duplicate": False,
+                "is_duplicate": duplicate_type == "within_statement",
+                "duplicate_type": duplicate_type,
+                "duplicate_info": duplicate_info,
                 "parsed_data": parsed_data,
                 "edited_data": None,
                 "base_hash": base_hash,
