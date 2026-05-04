@@ -6,6 +6,7 @@ __temp/
 /output/*
 /processed/*
 /scripts/test*
+/llm_inspect/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -184,6 +185,9 @@ cython_debug/
 
 # Database files
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Claude Code
 .claude/

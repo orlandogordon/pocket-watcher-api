@@ -62,13 +62,18 @@ engine = create_engine(DATABASE_URL, echo=False)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def _parsed_amount(txn):
+    # ParsedTransaction has .amount; ParsedInvestmentTransaction has .total_amount.
+    return txn.amount if hasattr(txn, "amount") else txn.total_amount
+
+
 def _build_result_lookup(parsed_txns, results: list[CleanedResult]) -> dict:
     """Index CleanedResults by (date, amount, raw_description) so we can match
     them back to created TransactionDB rows after the bulk insert filters out
     duplicates and unmapped types."""
     lookup = {}
     for txn, result in zip(parsed_txns, results):
-        key = (txn.transaction_date, txn.amount, txn.description or "")
+        key = (txn.transaction_date, _parsed_amount(txn), txn.description or "")
         lookup[key] = result
     return lookup
 
@@ -125,7 +130,7 @@ def _apply_cleanup_to_created(db, user_id, created_rows, parsed_txns, results: l
                 txn.transaction_date == row.transaction_date
                 and (txn.description or "") == row.description
             ):
-                key = (txn.transaction_date, txn.amount, txn.description or "")
+                key = (txn.transaction_date, _parsed_amount(txn), txn.description or "")
                 result = lookup.get(key)
                 if result is None:
                     continue

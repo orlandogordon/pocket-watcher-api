@@ -169,12 +169,13 @@ def _run_llm_batch(
         try:
             batch_results = client.process_transaction_batch(batch_parsed)
         except LLMUnavailableError as e:
+            # Fall through this batch and try the next — timeouts are usually isolated.
             logger.warning(
-                f"LLM unavailable; falling through raw for "
-                f"{len(unique_raws_in_order) - start} descriptions. {e}"
+                f"LLM unavailable for batch of {len(batch_raws)} descriptions; "
+                f"falling through raw for this batch. {e}"
             )
             llm_failed = True
-            break
+            continue
         for r, res in zip(batch_raws, batch_results):
             result_by_raw[r] = res
 

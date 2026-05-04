@@ -99,6 +99,9 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
 
         if not line or line[0:3] not in DATES:
             continue
+        # Skip date-prefixed non-transaction lines (payment due dates, hotel arrival/departure) — real txn lines end in $X.XX.
+        if "$" not in line:
+            continue
 
         try:
             line_split = line.split()

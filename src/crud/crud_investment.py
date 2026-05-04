@@ -600,7 +600,7 @@ def bulk_create_investment_transactions_from_parsed_data(
                 ).first()
 
                 if existing_job:
-                    logger.warning(f"Backfill job {existing_job.id} already running for account {account_id}")
+                    logger.info(f"Backfill job {existing_job.id} already running for account {account_id}")
                     return created_transactions, skipped_duplicates, existing_job.id
 
                 # Limit backfill to last 10 years

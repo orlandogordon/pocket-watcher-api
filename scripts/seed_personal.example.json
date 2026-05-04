@@ -1,0 +1,62 @@
+{
+  "user": {
+    "email": "you@example.com",
+    "username": "you",
+    "password": "ChangeMe123!",
+    "first_name": "First",
+    "last_name": "Last",
+    "date_of_birth": "1990-01-01"
+  },
+  "accounts": [
+    {
+      "slug": "tdbank-checking-1234",
+      "institution": "tdbank",
+      "account_type": "CHECKING",
+      "account_name": "TD Main Checking",
+      "institution_name": "TD Bank",
+      "last4": "1234",
+      "balance": "0.00"
+    },
+    {
+      "slug": "amex-gold-5678",
+      "institution": "amex",
+      "account_type": "CREDIT_CARD",
+      "account_name": "Amex Gold",
+      "institution_name": "American Express",
+      "last4": "5678",
+      "balance": "0.00"
+    },
+    {
+      "slug": "amzn-synchrony-9012",
+      "institution": "amzn-synchrony",
+      "account_type": "CREDIT_CARD",
+      "account_name": "Amazon Store Card",
+      "institution_name": "Synchrony Bank",
+      "last4": "9012",
+      "balance": "0.00"
+    },
+    {
+      "slug": "carloan-3456",
+      "institution": "tdbank",
+      "account_type": "LOAN",
+      "account_name": "Car Loan",
+      "institution_name": "TD Bank",
+      "last4": "3456",
+      "balance": "-15000.00",
+      "original_principal": "20000.00",
+      "minimum_payment": "350.00",
+      "interest_rate": "0.0525",
+      "interest_rate_type": "FIXED"
+    },
+    {
+      "slug": "schwab-brokerage-7890",
+      "institution": "schwab",
+      "account_type": "INVESTMENT",
+      "account_name": "Schwab Brokerage",
+      "institution_name": "Charles Schwab",
+      "last4": "7890",
+      "balance": "0.00",
+      "initial_cash_balance": "0.00"
+    }
+  ]
+}
