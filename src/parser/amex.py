@@ -49,10 +49,12 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     account_number: Optional[str] = None
     year_map = {}
 
-    text = ''
     with pdfplumber.open(file_source) as pdf:
-        for page in pdf.pages:
-            text += page.extract_text(x_tolerance=2) or ''
+        # Join pages with '\n' so a section banner sitting on a page boundary
+        # (e.g. "Fees" as the last line of page 7) does not get concatenated
+        # onto the first line of the next page ("Date Description Type Amount"),
+        # which would defeat exact-string banner matching below.
+        text = '\n'.join((p.extract_text(x_tolerance=2) or '') for p in pdf.pages)
     lines = text.split('\n')
 
     # First pass to find account number and date range to establish the year
@@ -80,20 +82,28 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = [False] * 5
 
     for line in lines:
-        # Check for section markers
-        if "Payments t Amount" in line or "Payments Amount" in line:
+        stripped = line.strip()
+        # Check for section markers. Multiple Amex layouts in the wild:
+        #   pre-2025:           "Payments t Amount" / "Payments Amount" / "Credits Amount"
+        #   Oct 2024–Jun 2025:  "Payments Details" / "Credits Details"
+        #   2022/2023/2024 with annual membership fee: "Fees - denotes Pay Over Time..."
+        #   2024–2025 with footnote diamond:           "Fees ⧫ - Pay Over Time..."
+        if "Payments t Amount" in line or "Payments Amount" in line or stripped == "Payments Details":
             tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = [True, False, False, False, False]
             continue
-        elif "Credits Amount" in line:
+        elif "Credits Amount" in line or stripped == "Credits Details":
             tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = [False, True, False, False, False]
             continue
-        elif "Total New Charges" in line and "$" in line:
+        elif ("Total New Charges" in line and "$" in line) or stripped == "Cash Advances":
+            # Cash Advances is a separate body section; treat its rows as Purchase
+            # so the credit-card balance update is correct (cash advances increase
+            # balance like purchases).
             tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = [False, False, True, False, False]
             continue
-        elif line.strip() == "Fees":
+        elif stripped == "Fees" or stripped.startswith("Fees -") or stripped.startswith("Fees ⧫"):
             tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = [False, False, False, True, False]
             continue
-        elif "Interest Charged" in line and line.strip() == "Interest Charged":
+        elif "Interest Charged" in line and stripped == "Interest Charged":
             tracking_payments, tracking_credits, tracking_purchases, tracking_fees, tracking_interest = [False, False, False, False, True]
             continue
 
