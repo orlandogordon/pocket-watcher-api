@@ -20,7 +20,7 @@ Run on an empty DB after ``alembic upgrade head``:
 import os
 import sys
 import json
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -29,8 +29,18 @@ PROJECT_ROOT = os.path.join(SCRIPT_DIR, "..")
 sys.path.append(PROJECT_ROOT)
 sys.path.append(SCRIPT_DIR)  # so we can import sibling scripts directly
 
-from src.db.core import session_local, UserDB, AccountDB, AccountType
+from sqlalchemy import func
+
+from src.db.core import (
+    session_local,
+    UserDB,
+    AccountDB,
+    AccountType,
+    TransactionDB,
+    InvestmentTransactionDB,
+)
 from src.crud.crud_user import hash_password
+from src.services.account_snapshot import recalculate_account_snapshots
 
 # Reuse the parser → DB pipeline already used by bulk_upload.py. That module
 # also auto-accepts merchant/category suggestions, which is what we want for
@@ -136,6 +146,45 @@ def _import_statements_for_account(db, statements_dir: str, account_spec: dict,
         process_local_file(db, path, institution, account_id, user_db_id)
 
 
+def _earliest_transaction_date(db, account_id: int):
+    # The HTTP confirm flow runs backfill via the async job_runner. Inline the
+    # same idea here, synchronously, so net-worth history is populated before
+    # the script exits.
+    regular = db.query(func.min(TransactionDB.transaction_date)).filter(
+        TransactionDB.account_id == account_id
+    ).scalar()
+    investment = db.query(func.min(InvestmentTransactionDB.transaction_date)).filter(
+        InvestmentTransactionDB.account_id == account_id
+    ).scalar()
+    candidates = [d for d in (regular, investment) if d is not None]
+    return min(candidates) if candidates else None
+
+
+def _backfill_snapshots(db, slug_to_account_id: dict[str, int]):
+    today = date.today()
+    # Match trigger_backfill_if_needed's 10-year cap.
+    max_lookback = today - timedelta(days=365 * 10)
+
+    for slug, account_id in slug_to_account_id.items():
+        earliest = _earliest_transaction_date(db, account_id)
+        if earliest is None:
+            print(f"  [{slug}] no transactions — skipping snapshot backfill")
+            continue
+        if earliest >= today:
+            print(f"  [{slug}] earliest txn {earliest} is today/future — skipping")
+            continue
+        start = max(earliest, max_lookback)
+        print(f"  [{slug}] backfilling snapshots {start} → {today}")
+        results = recalculate_account_snapshots(
+            db=db,
+            account_id=account_id,
+            start_date=start,
+            end_date=today,
+            reason="seed_personal initial backfill",
+        )
+        print(f"  [{slug}] {results}")
+
+
 def seed_personal(config_path: str = DEFAULT_CONFIG_PATH,
                   statements_dir: str = DEFAULT_STATEMENTS_DIR):
     if not os.path.isfile(config_path):
@@ -176,6 +225,9 @@ def seed_personal(config_path: str = DEFAULT_CONFIG_PATH,
             _import_statements_for_account(
                 db, statements_dir, spec, account_id, user.db_id,
             )
+
+        print("\nBackfilling account value history (net worth)...")
+        _backfill_snapshots(db, slug_to_account_id)
 
         print("\nDone.")
     finally:
