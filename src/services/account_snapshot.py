@@ -940,6 +940,16 @@ def create_all_account_snapshots(
     return snapshots
 
 
+_LIABILITY_TYPES = (AccountType.LOAN, AccountType.CREDIT_CARD)
+
+
+def _signed_balance(account_type: AccountType, balance: Decimal) -> Decimal:
+    """Negate liability balances so they reduce net worth."""
+    if account_type in _LIABILITY_TYPES:
+        return -balance
+    return balance
+
+
 def get_net_worth_history(
     db: Session,
     user_id: int,
@@ -947,44 +957,86 @@ def get_net_worth_history(
     end_date: Optional[date] = None
 ) -> List[Dict]:
     """
-    Get historical net worth data for a user.
-    Returns daily totals aggregated across all accounts.
+    Historical net worth with last-observation-carried-forward.
+
+    Emits one point per calendar day in [start_date, end_date]. For each
+    date, each user account contributes its most recent snapshot on or
+    before that date (looking back past start_date if needed). Accounts
+    with no snapshot on or before a given date do not contribute and are
+    not counted in `accounts_total` for that date.
     """
-    # Loans and credit cards store balance as positive (amount owed),
-    # so negate them for net worth calculation.
-    signed_balance = case(
-        (AccountDB.account_type.in_([AccountType.LOAN, AccountType.CREDIT_CARD]),
-         -AccountValueHistoryDB.balance),
-        else_=AccountValueHistoryDB.balance,
-    )
+    end_date = end_date or date.today()
 
-    query = db.query(
-        AccountValueHistoryDB.value_date,
-        func.sum(signed_balance).label('total_balance'),
-        func.sum(AccountValueHistoryDB.unrealized_gain_loss).label('total_unrealized_gains')
-    ).join(AccountDB).filter(
-        AccountDB.user_id == user_id
-    )
+    accounts = db.query(AccountDB).filter(AccountDB.user_id == user_id).all()
+    if not accounts:
+        return []
 
-    if start_date:
-        query = query.filter(AccountValueHistoryDB.value_date >= start_date)
-    if end_date:
-        query = query.filter(AccountValueHistoryDB.value_date <= end_date)
+    snapshots_by_account: Dict[int, List[AccountValueHistoryDB]] = {}
+    earliest_snapshot: Optional[date] = None
+    for account in accounts:
+        rows = db.query(AccountValueHistoryDB).filter(
+            AccountValueHistoryDB.account_id == account.id,
+            AccountValueHistoryDB.value_date <= end_date,
+        ).order_by(AccountValueHistoryDB.value_date).all()
+        snapshots_by_account[account.id] = rows
+        if rows and (earliest_snapshot is None or rows[0].value_date < earliest_snapshot):
+            earliest_snapshot = rows[0].value_date
 
-    results = query.group_by(
-        AccountValueHistoryDB.value_date
-    ).order_by(
-        AccountValueHistoryDB.value_date
-    ).all()
+    if start_date is None:
+        if earliest_snapshot is None:
+            return []
+        start_date = earliest_snapshot
 
-    return [
-        {
-            'date': row.value_date.isoformat(),
-            'net_worth': float(row.total_balance) if row.total_balance else 0.0,
-            'total_unrealized_gains': float(row.total_unrealized_gains) if row.total_unrealized_gains else None
-        }
-        for row in results
-    ]
+    if start_date > end_date:
+        return []
+
+    # Per-account pointer into its snapshots list. Advance it forward as the
+    # date cursor moves, so each step is O(1) amortized.
+    pointers: Dict[int, int] = {a.id: -1 for a in accounts}
+
+    output: List[Dict] = []
+    cursor = start_date
+    one_day = timedelta(days=1)
+    while cursor <= end_date:
+        total_balance = Decimal("0")
+        total_unrealized = Decimal("0")
+        any_unrealized = False
+        fresh = 0
+        contributing = 0
+        oldest: Optional[date] = None
+
+        for account in accounts:
+            rows = snapshots_by_account[account.id]
+            idx = pointers[account.id]
+            while idx + 1 < len(rows) and rows[idx + 1].value_date <= cursor:
+                idx += 1
+            pointers[account.id] = idx
+
+            if idx < 0:
+                continue
+
+            snap = rows[idx]
+            contributing += 1
+            total_balance += _signed_balance(account.account_type, snap.balance)
+            if snap.unrealized_gain_loss is not None:
+                total_unrealized += snap.unrealized_gain_loss
+                any_unrealized = True
+            if snap.value_date == cursor:
+                fresh += 1
+            if oldest is None or snap.value_date < oldest:
+                oldest = snap.value_date
+
+        output.append({
+            "date": cursor.isoformat(),
+            "net_worth": float(total_balance),
+            "total_unrealized_gains": float(total_unrealized) if any_unrealized else None,
+            "accounts_total": contributing,
+            "accounts_fresh": fresh,
+            "oldest_snapshot_date": oldest if (contributing > 0 and fresh < contributing) else None,
+        })
+        cursor += one_day
+
+    return output
 
 
 def get_account_value_history(
@@ -993,11 +1045,15 @@ def get_account_value_history(
     user_id: int,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None
-) -> List[AccountValueHistoryDB]:
+) -> List[Dict]:
     """
-    Get historical value data for a specific account.
+    Historical value for a single account with LOCF gap-filling.
+
+    Emits one point per calendar day from max(start_date, first_snapshot)
+    through end_date. Each point references the latest snapshot on or
+    before its date; `is_carried_forward` is True when the snapshot's
+    `value_date` is earlier than the point's date.
     """
-    # Verify account ownership
     account = db.query(AccountDB).filter(
         AccountDB.id == account_id,
         AccountDB.user_id == user_id
@@ -1006,13 +1062,45 @@ def get_account_value_history(
     if not account:
         raise ValueError(f"Account {account_id} not found or access denied")
 
-    query = db.query(AccountValueHistoryDB).filter(
-        AccountValueHistoryDB.account_id == account_id
-    )
+    end_date = end_date or date.today()
 
-    if start_date:
-        query = query.filter(AccountValueHistoryDB.value_date >= start_date)
-    if end_date:
-        query = query.filter(AccountValueHistoryDB.value_date <= end_date)
+    rows = db.query(AccountValueHistoryDB).filter(
+        AccountValueHistoryDB.account_id == account_id,
+        AccountValueHistoryDB.value_date <= end_date,
+    ).order_by(AccountValueHistoryDB.value_date).all()
 
-    return query.order_by(AccountValueHistoryDB.value_date).all()
+    if not rows:
+        return []
+
+    first_snapshot_date = rows[0].value_date
+    if start_date is None or start_date < first_snapshot_date:
+        start_date = first_snapshot_date
+
+    if start_date > end_date:
+        return []
+
+    output: List[Dict] = []
+    idx = -1
+    cursor = start_date
+    one_day = timedelta(days=1)
+    while cursor <= end_date:
+        while idx + 1 < len(rows) and rows[idx + 1].value_date <= cursor:
+            idx += 1
+        if idx < 0:
+            cursor += one_day
+            continue
+        snap = rows[idx]
+        output.append({
+            "date": cursor,
+            "balance": snap.balance,
+            "securities_value": snap.securities_value,
+            "cash_balance": snap.cash_balance,
+            "total_cost_basis": snap.total_cost_basis,
+            "unrealized_gain_loss": snap.unrealized_gain_loss,
+            "realized_gain_loss": snap.realized_gain_loss,
+            "is_carried_forward": snap.value_date != cursor,
+            "source_snapshot_uuid": snap.uuid,
+        })
+        cursor += one_day
+
+    return output

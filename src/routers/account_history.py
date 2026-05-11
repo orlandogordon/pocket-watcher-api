@@ -13,7 +13,8 @@ from src.models.account_history import (
     SnapshotUpdateRequest,
     NetWorthHistoryResponse,
     NetWorthDataPoint,
-    AccountValueHistoryResponse
+    AccountValueHistoryResponse,
+    AccountValueHistoryPoint,
 )
 from src.auth.dependencies import get_current_user_id
 
@@ -132,7 +133,7 @@ def get_account_value_history(
         raise HTTPException(status_code=404, detail="Account not found")
 
     try:
-        snapshots = account_snapshot.get_account_value_history(
+        points = account_snapshot.get_account_value_history(
             db=db,
             account_id=account.id,
             user_id=user_id,
@@ -144,7 +145,7 @@ def get_account_value_history(
             account_uuid=account.uuid,
             account_name=account.account_name,
             account_type=account.account_type.value,
-            data=snapshots
+            data=[AccountValueHistoryPoint(**p) for p in points]
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -59,6 +59,9 @@ class NetWorthDataPoint(BaseModel):
     date: str  # ISO format date string
     net_worth: float
     total_unrealized_gains: Optional[float]
+    accounts_total: int
+    accounts_fresh: int
+    oldest_snapshot_date: Optional[date] = None
 
 
 class NetWorthHistoryResponse(BaseModel):
@@ -69,12 +72,31 @@ class NetWorthHistoryResponse(BaseModel):
     total_days: int
 
 
+class AccountValueHistoryPoint(BaseModel):
+    """A point on the per-account value-over-time chart.
+
+    Distinct from AccountSnapshotResponse: a snapshot is a stored row;
+    a chart point is a chart cell that references the latest snapshot
+    on or before its date. `is_carried_forward` is True when the cell's
+    `date` is later than the source snapshot's `value_date`.
+    """
+    date: date
+    balance: Decimal
+    securities_value: Optional[Decimal] = None
+    cash_balance: Optional[Decimal] = None
+    total_cost_basis: Optional[Decimal] = None
+    unrealized_gain_loss: Optional[Decimal] = None
+    realized_gain_loss: Optional[Decimal] = None
+    is_carried_forward: bool
+    source_snapshot_uuid: Optional[UUID] = None
+
+
 class AccountValueHistoryResponse(BaseModel):
     """Response model for account value history"""
     account_uuid: UUID
     account_name: str
     account_type: str
-    data: List[AccountSnapshotResponse]
+    data: List[AccountValueHistoryPoint]
 
 
 class SnapshotBackfillJobResponse(BaseModel):
