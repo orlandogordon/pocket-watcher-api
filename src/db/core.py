@@ -1,6 +1,6 @@
 import os
 from typing import Optional
-from sqlalchemy import create_engine, ForeignKey, Index, UniqueConstraint, Boolean, Column, Integer, String, Text, JSON, DECIMAL, DateTime, Date
+from sqlalchemy import CheckConstraint, create_engine, event, ForeignKey, Index, UniqueConstraint, Boolean, Column, Integer, String, Text, JSON, DECIMAL, DateTime, Date
 from sqlalchemy.types import Enum
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, Mapped, relationship, mapped_column
 from datetime import datetime, date
@@ -505,37 +505,91 @@ class TransactionDB(Base):
 
 class TransactionRelationshipDB(Base):
     __tablename__ = "transaction_relationships"
-    
+
     __table_args__ = (
-        # Query relationships from either direction
         Index("idx_rel_from_transaction", "from_transaction_id"),
         Index("idx_rel_to_transaction", "to_transaction_id"),
+        Index("idx_rel_from_investment_transaction", "from_investment_transaction_id"),
+        Index("idx_rel_to_investment_transaction", "to_investment_transaction_id"),
         Index("idx_rel_type", "relationship_type"),
-        
-        # Prevent duplicate relationships
-        UniqueConstraint("from_transaction_id", "to_transaction_id", "relationship_type", 
-                        name="uq_transaction_relationship"),
+        CheckConstraint(
+            "((from_transaction_id IS NOT NULL) + "
+            "(from_investment_transaction_id IS NOT NULL)) = 1",
+            name="ck_rel_from_exactly_one",
+        ),
+        CheckConstraint(
+            "((to_transaction_id IS NOT NULL) + "
+            "(to_investment_transaction_id IS NOT NULL)) = 1",
+            name="ck_rel_to_exactly_one",
+        ),
     )
 
-    # Primary Key
     relationship_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
 
-    # Foreign Keys
-    from_transaction_id: Mapped[int] = mapped_column(ForeignKey("transactions.db_id"))
-    to_transaction_id: Mapped[int] = mapped_column(ForeignKey("transactions.db_id"))
-    
-    # Relationship Data
+    from_transaction_id: Mapped[Optional[int]] = mapped_column(ForeignKey("transactions.db_id", ondelete="CASCADE"), nullable=True)
+    to_transaction_id: Mapped[Optional[int]] = mapped_column(ForeignKey("transactions.db_id", ondelete="CASCADE"), nullable=True)
+    from_investment_transaction_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("investment_transactions.investment_transaction_id", ondelete="CASCADE"), nullable=True
+    )
+    to_investment_transaction_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("investment_transactions.investment_transaction_id", ondelete="CASCADE"), nullable=True
+    )
+
     relationship_type: Mapped[RelationshipType] = mapped_column(Enum(RelationshipType))
     amount_allocated: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))
     notes: Mapped[Optional[str]] = mapped_column(Text)
-    
-    # Audit Trail
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    # Relationships
     from_transaction = relationship("TransactionDB", foreign_keys=[from_transaction_id], back_populates="relationship_from")
     to_transaction = relationship("TransactionDB", foreign_keys=[to_transaction_id], back_populates="relationship_to")
+    from_investment_transaction = relationship("InvestmentTransactionDB", foreign_keys=[from_investment_transaction_id])
+    to_investment_transaction = relationship("InvestmentTransactionDB", foreign_keys=[to_investment_transaction_id])
+
+
+class DismissedTransferPairDB(Base):
+    __tablename__ = "dismissed_transfer_pairs"
+
+    __table_args__ = (
+        Index("idx_dismissed_pairs_user", "user_id"),
+        Index(
+            "idx_dismissed_pairs_lookup",
+            "user_id",
+            "from_transaction_id",
+            "from_investment_transaction_id",
+            "to_transaction_id",
+            "to_investment_transaction_id",
+        ),
+        CheckConstraint(
+            "((from_transaction_id IS NOT NULL) + "
+            "(from_investment_transaction_id IS NOT NULL)) = 1",
+            name="ck_dismissed_from_exactly_one",
+        ),
+        CheckConstraint(
+            "((to_transaction_id IS NOT NULL) + "
+            "(to_investment_transaction_id IS NOT NULL)) = 1",
+            name="ck_dismissed_to_exactly_one",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id", ondelete="CASCADE"), nullable=False)
+
+    from_transaction_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("transactions.db_id", ondelete="CASCADE"), nullable=True
+    )
+    from_investment_transaction_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("investment_transactions.investment_transaction_id", ondelete="CASCADE"), nullable=True
+    )
+    to_transaction_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("transactions.db_id", ondelete="CASCADE"), nullable=True
+    )
+    to_investment_transaction_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("investment_transactions.investment_transaction_id", ondelete="CASCADE"), nullable=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class TransactionSplitAllocationDB(Base):
@@ -982,6 +1036,23 @@ class ParsedImportDB(Base):
         foreign_keys=[investment_transaction_id],
         back_populates="parsed_imports",
     )
+
+
+import sqlite3
+from sqlalchemy.engine import Engine
+
+
+@event.listens_for(Engine, "connect")
+def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
+    """Enable FK enforcement on every SQLite connection. Pysqlite defaults
+    `PRAGMA foreign_keys` to OFF per-connection, so ON DELETE CASCADE /
+    SET NULL silently no-op without this. Postgres always enforces FKs,
+    so the type check below makes this a no-op there. Bound to the Engine
+    class (not a specific instance) so test engines pick it up too."""
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys = ON")
+        cursor.close()
 
 
 engine = create_engine(DATABASE_URL, echo=os.getenv("SQL_ECHO", "false").lower() == "true")

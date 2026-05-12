@@ -29,6 +29,7 @@ from src.services.duplicate_analyzer import (
     analyze_investment_transactions,
 )
 from src.services.description_cleanup import process_preview_items
+from src.services.transfer_classifier import classify_parsed_transactions
 from src.constants.categories import all_category_uuids
 from src.services.system_tags import get_system_tag
 from src.crud.crud_transaction import (
@@ -322,10 +323,40 @@ async def create_statement_preview(
             except Exception:
                 logger.warning(f"Could not resolve account from last4: {parsed_data.account_info.account_number_last4}")
 
+    # Tier A: reclassify checking/savings outflows that look like payments
+    # to other user-owned accounts (CC, INVESTMENT, LOAN, OTHER) as
+    # TRANSFER_OUT before dedup runs. Returns suggestions keyed by parsed
+    # position; we inject those onto the preview items below.
+    source_account = None
+    if resolved_account_id:
+        source_account = db.query(AccountDB).filter(
+            AccountDB.id == resolved_account_id,
+            AccountDB.user_id == user_id,
+        ).first()
+    user_accounts = db.query(AccountDB).filter(AccountDB.user_id == user_id).all()
+    tier_a_suggestions = classify_parsed_transactions(
+        parsed_data.transactions, source_account, user_accounts
+    )
+
     # Analyze duplicates
     rejected_txns, ready_txns = analyze_regular_transactions(
         parsed_data.transactions, user_id, institution, resolved_account_id, db
     )
+
+    if tier_a_suggestions:
+        partner_lookup = {a.id: a for a in user_accounts}
+        for item in rejected_txns + ready_txns:
+            pos = item.get("statement_position")
+            sug = tier_a_suggestions.get(pos) if pos is not None else None
+            if sug is None or sug.suggested_partner_account_id is None:
+                continue
+            partner = partner_lookup.get(sug.suggested_partner_account_id)
+            item["tier_a_suggestion"] = {
+                "proposed_transaction_type": sug.transaction_type.value,
+                "suggested_partner_account_uuid": str(partner.uuid) if partner else None,
+                "suggested_partner_account_name": partner.account_name if partner else None,
+                "matched_token": sug.matched_token,
+            }
     rejected_inv, ready_inv = analyze_investment_transactions(
         parsed_data.investment_transactions, user_id, institution, resolved_account_id, db
     )

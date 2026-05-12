@@ -148,6 +148,53 @@ def generate_transaction_hash(
     return hashlib.sha256(hash_string.encode()).hexdigest()
 
 
+def update_transaction_type_with_hash(
+    db: Session,
+    txn: TransactionDB,
+    new_type: TransactionType,
+) -> TransactionDB:
+    """Atomically change a transaction's type and recompute its hash.
+
+    `transaction_hash` includes `transaction_type`, so any post-hoc type
+    change must update the hash in lockstep or future imports of the same
+    statement will treat the row as duplicate-but-different. Caller commits.
+
+    Raises ValueError if the recomputed hash collides with a different
+    row (would violate dedup invariants).
+    """
+    if txn.transaction_type == new_type:
+        return txn
+
+    if txn.account is None:
+        raise ValueError(
+            f"Cannot recompute hash for transaction {txn.id}: no account loaded"
+        )
+
+    new_hash = generate_transaction_hash(
+        user_id=txn.user_id,
+        institution_name=txn.account.institution_name,
+        transaction_date=txn.transaction_date,
+        transaction_type_value=new_type.value,
+        amount=txn.amount,
+        description=txn.description,
+    )
+
+    collision = db.query(TransactionDB).filter(
+        TransactionDB.user_id == txn.user_id,
+        TransactionDB.transaction_hash == new_hash,
+        TransactionDB.db_id != txn.db_id,
+    ).first()
+    if collision is not None:
+        raise ValueError(
+            f"Recomputed hash for transaction {txn.id} ({new_type.value}) "
+            f"collides with existing transaction {collision.id}"
+        )
+
+    txn.transaction_type = new_type
+    txn.transaction_hash = new_hash
+    return txn
+
+
 def get_original_transaction_for_duplicate(
     db: Session,
     user_id: int,
