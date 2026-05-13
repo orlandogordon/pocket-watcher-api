@@ -73,6 +73,7 @@ class TestProjectNeedsReview(ProjectionBase):
             transaction_hash=str(uuid4()), source_type=SourceType.MANUAL,
             transaction_date=date(2026, 4, 1), amount=Decimal("12.50"),
             transaction_type=TransactionType.PURCHASE, description="Starbucks",
+            merchant_name="Starbucks Coffee",
         )
         self.session.add(txn)
         self.session.flush()
@@ -92,6 +93,29 @@ class TestProjectNeedsReview(ProjectionBase):
         self.assertEqual(item.actions[0].method, "DELETE")
         self.assertIn(str(txn.id), item.actions[0].href)
         self.assertIn(str(tag.id), item.actions[0].href)
+        # Detail-enrichment fields the frontend inbox table depends on.
+        self.assertEqual(item.details["merchant_name"], "Starbucks Coffee")
+        self.assertEqual(item.details["account_uuid"], str(self.checking.uuid))
+        self.assertEqual(item.details["account_name"], "TD Main Checking")
+
+    def test_merchant_name_null_is_preserved(self):
+        """merchant_name being null is often *why* the row is flagged —
+        the frontend reads null to mean 'no merchant suggested yet'."""
+        ensure_system_tags(self.user.db_id, self.session)
+        tag = get_system_tag(self.user.db_id, self.session, "Needs Review")
+        txn = TransactionDB(
+            id=uuid4(), user_id=self.user.db_id, account_id=self.checking.id,
+            transaction_hash=str(uuid4()), source_type=SourceType.MANUAL,
+            transaction_date=date(2026, 4, 1), amount=Decimal("12.50"),
+            transaction_type=TransactionType.PURCHASE, description="POS DEBIT 8472",
+        )
+        self.session.add(txn)
+        self.session.flush()
+        self.session.add(TransactionTagDB(transaction_id=txn.db_id, tag_id=tag.tag_id))
+        self.session.commit()
+
+        items = project_needs_review(self.session, self.user.db_id)
+        self.assertIsNone(items[0].details["merchant_name"])
 
 
 class TestProjectTransferPairs(ProjectionBase):
@@ -126,6 +150,13 @@ class TestProjectTransferPairs(ProjectionBase):
         self.assertIn(item.confidence, ("HIGH", "MEDIUM"))
         labels = {a.label for a in item.actions}
         self.assertEqual(labels, {"Confirm pair", "Dismiss"})
+        # Detail-enrichment fields the frontend inbox table depends on.
+        self.assertEqual(item.details["out_description"], "ELECTRONICPMT AMEXEPAYMENT")
+        self.assertEqual(item.details["in_description"], "AUTOPAY")
+        self.assertEqual(item.details["out_account_uuid"], str(self.checking.uuid))
+        self.assertEqual(item.details["out_account_name"], "TD Main Checking")
+        self.assertEqual(item.details["in_account_uuid"], str(self.amex.uuid))
+        self.assertEqual(item.details["in_account_name"], "Amex Gold")
 
     def test_confirm_body_includes_reclassify_flags(self):
         """Both sides already typed correctly → both flags are False
@@ -178,6 +209,10 @@ class TestProjectTransferOrphans(ProjectionBase):
         self.assertEqual(item.severity, "informational")
         self.assertEqual(item.subject.primary_uuid, out.id)
         self.assertEqual(item.actions, [])
+        # Detail-enrichment fields the frontend inbox table depends on.
+        self.assertEqual(item.details["transaction_type"], "TRANSFER_OUT")
+        self.assertEqual(item.details["account_uuid"], str(self.checking.uuid))
+        self.assertEqual(item.details["account_name"], "TD Main Checking")
 
 
 class TestProjectSnapshotReview(ProjectionBase):

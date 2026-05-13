@@ -31,9 +31,11 @@ def project_needs_review(db: Session, user_id: int) -> list[AttentionItem]:
     if tag is None:
         return []
 
+    # outerjoin on AccountDB: TransactionDB.account_id is nullable.
     rows = (
-        db.query(TransactionDB, TransactionTagDB)
+        db.query(TransactionDB, TransactionTagDB, AccountDB)
         .join(TransactionTagDB, TransactionTagDB.transaction_id == TransactionDB.db_id)
+        .outerjoin(AccountDB, AccountDB.id == TransactionDB.account_id)
         .filter(
             TransactionDB.user_id == user_id,
             TransactionTagDB.tag_id == tag.tag_id,
@@ -42,7 +44,7 @@ def project_needs_review(db: Session, user_id: int) -> list[AttentionItem]:
     )
 
     items: list[AttentionItem] = []
-    for txn, link in rows:
+    for txn, link, account in rows:
         items.append(AttentionItem(
             id=f"needs_review:{txn.id}",
             kind="needs_review",
@@ -54,7 +56,10 @@ def project_needs_review(db: Session, user_id: int) -> list[AttentionItem]:
                 "transaction_date": txn.transaction_date.isoformat(),
                 "amount": str(txn.amount),
                 "description": txn.description,
+                "merchant_name": txn.merchant_name,
                 "transaction_type": txn.transaction_type.value,
+                "account_uuid": str(account.uuid) if account else None,
+                "account_name": account.account_name if account else None,
             },
             confidence=None,
             created_at=link.created_at,
@@ -89,6 +94,15 @@ def _side_created_at(db: Session, side: TxnSide):
     return row.created_at if row else None
 
 
+def _account_for_side(db: Session, side: TxnSide) -> Optional[AccountDB]:
+    """Look up the AccountDB row backing a TxnSide. Returns None if the
+    side has no account (shouldn't happen in practice — both regular and
+    investment transactions require an account — but we degrade gracefully)."""
+    if side.account_id is None:
+        return None
+    return db.query(AccountDB).filter(AccountDB.id == side.account_id).first()
+
+
 def project_transfer_pairs(db: Session, user_id: int) -> list[AttentionItem]:
     """Wrap find_pair_suggestions into AttentionItem shape. Confidence
     HIGH/MEDIUM maps straight from PairCandidate."""
@@ -102,6 +116,8 @@ def project_transfer_pairs(db: Session, user_id: int) -> list[AttentionItem]:
         created_at = _side_created_at(db, c.out_side) or _side_created_at(db, c.in_side)
         if created_at is None:
             continue
+        out_account = _account_for_side(db, c.out_side)
+        in_account = _account_for_side(db, c.in_side)
         items.append(AttentionItem(
             id=f"transfer_pair:{out_uuid}:{in_uuid}",
             kind="transfer_pair",
@@ -125,6 +141,12 @@ def project_transfer_pairs(db: Session, user_id: int) -> list[AttentionItem]:
                 "date_offset_days": c.date_offset_days,
                 "out_is_investment": c.out_side.is_investment,
                 "in_is_investment": c.in_side.is_investment,
+                "out_description": c.out_side.description,
+                "in_description": c.in_side.description,
+                "out_account_uuid": str(out_account.uuid) if out_account else None,
+                "out_account_name": out_account.account_name if out_account else None,
+                "in_account_uuid": str(in_account.uuid) if in_account else None,
+                "in_account_name": in_account.account_name if in_account else None,
             },
             confidence=c.confidence.value,  # "HIGH" | "MEDIUM"
             created_at=created_at,
@@ -171,6 +193,7 @@ def project_transfer_orphans(db: Session, user_id: int) -> list[AttentionItem]:
         if created_at is None:
             continue
         subject_type = "investment_transaction" if side.is_investment else "transaction"
+        account = _account_for_side(db, side)
         items.append(AttentionItem(
             id=f"transfer_orphan:{uuid_}",
             kind="transfer_orphan",
@@ -186,6 +209,9 @@ def project_transfer_orphans(db: Session, user_id: int) -> list[AttentionItem]:
                 "amount": str(side.amount),
                 "description": side.description,
                 "is_investment": side.is_investment,
+                "transaction_type": side.transaction_type,
+                "account_uuid": str(account.uuid) if account else None,
+                "account_name": account.account_name if account else None,
             },
             confidence=None,
             created_at=created_at,
