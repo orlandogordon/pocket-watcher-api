@@ -17,6 +17,7 @@ from src.db.core import (
 from src.services.account_snapshot import (
     get_net_worth_history,
     get_account_value_history,
+    _format_symbol_for_review,
 )
 
 
@@ -246,6 +247,45 @@ class TestPerAccountLOCF(TestLOCFBase):
 
         self.assertEqual(out[0]["date"], date(2026, 2, 5))
         self.assertEqual(len(out), 3)
+
+
+class TestFormatSymbolForReview(unittest.TestCase):
+    """The snapshot FYI on the data-health inbox renders the
+    review_reason verbatim. For option holdings the OCC symbol
+    (e.g. AAPL250117C00150000) is illegible — the formatter rewrites
+    it as a human-readable contract identifier."""
+
+    def test_stock_symbol_passes_through(self):
+        self.assertEqual(_format_symbol_for_review("AAPL"), "AAPL")
+        self.assertEqual(_format_symbol_for_review("BRK.B"), "BRK.B")
+
+    def test_call_option_formats_with_strike_and_exp(self):
+        # AAPL 2025-01-17 $150 call
+        self.assertEqual(
+            _format_symbol_for_review("AAPL250117C00150000"),
+            "AAPL 2025-01-17 CALL $150",
+        )
+
+    def test_put_option_formats(self):
+        # SPY 2025-06-20 $400 put
+        self.assertEqual(
+            _format_symbol_for_review("SPY___250620P00400000"),
+            "SPY___ 2025-06-20 PUT $400",
+        )
+
+    def test_fractional_strike_strips_trailing_zeros(self):
+        # 152.50 should render as $152.5, not $152.50 or $152.500
+        self.assertEqual(
+            _format_symbol_for_review("AAPL250117C00152500"),
+            "AAPL 2025-01-17 CALL $152.5",
+        )
+
+    def test_malformed_option_symbol_falls_back_to_raw(self):
+        # Long enough to fool is_option_symbol() but parse_option_symbol
+        # returns None — fall back to the original string rather than
+        # crashing the snapshot recalc.
+        bogus = "X" * 15 + "C" + "X" * 8
+        self.assertEqual(_format_symbol_for_review(bogus), bogus)
 
 
 if __name__ == "__main__":

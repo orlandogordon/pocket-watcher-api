@@ -23,10 +23,34 @@ from src.db.core import (
     DebtPaymentDB
 )
 from src.services import price_fetcher
-from src.services.price_fetcher import fetch_bulk_historical_prices, is_option_symbol
+from src.services.price_fetcher import (
+    fetch_bulk_historical_prices,
+    is_option_symbol,
+    parse_option_symbol,
+)
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+def _format_symbol_for_review(symbol: str) -> str:
+    """Convert OCC option symbols into a readable display string for the
+    snapshot review_reason. Stock symbols pass through unchanged.
+
+    Holdings keyed by `txn.api_symbol` for options use the OCC format
+    (e.g. ``AAPL250117C00150000``); surfaced to the user that's
+    illegible. This formats the parsed parts as
+    ``"AAPL 2025-01-17 CALL $150"`` so the snapshot FYI on the inbox
+    identifies the specific contract that's missing pricing data.
+    """
+    if not is_option_symbol(symbol):
+        return symbol
+    parsed = parse_option_symbol(symbol)
+    if parsed is None:
+        return symbol
+    # `:g` strips trailing zeros (150.00 -> 150, 152.50 -> 152.5).
+    strike_str = f"${parsed['strike']:g}"
+    return f"{parsed['underlying']} {parsed['expiration']} {parsed['option_type']} {strike_str}"
 
 
 def trigger_backfill_if_needed(
@@ -673,12 +697,14 @@ def recalculate_account_snapshots(
                 existing_snapshot.recalculation_reason = reason
 
                 if missing_prices:
+                    pretty = [_format_symbol_for_review(s) for s in missing_prices]
                     existing_snapshot.needs_review = True
-                    existing_snapshot.review_reason = f"Missing price data for: {', '.join(missing_prices)}"
+                    existing_snapshot.review_reason = f"Missing price data for: {', '.join(pretty)}"
 
                 results['updated'] += 1
             else:
                 # Create new snapshot
+                pretty_missing = [_format_symbol_for_review(s) for s in missing_prices]
                 new_snapshot = AccountValueHistoryDB(
                     uuid=uuid4(),
                     account_id=account_id,
@@ -691,7 +717,7 @@ def recalculate_account_snapshots(
                     snapshot_source="BACKFILL",
                     recalculation_count=0,
                     needs_review=bool(missing_prices),
-                    review_reason=f"Missing price data for: {', '.join(missing_prices)}" if missing_prices else None
+                    review_reason=f"Missing price data for: {', '.join(pretty_missing)}" if missing_prices else None
                 )
                 db.add(new_snapshot)
                 results['created'] += 1
