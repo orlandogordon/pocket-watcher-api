@@ -22,6 +22,7 @@ from .routers.debts import router as debts_router
 from .routers.uploads import router as uploads_router
 from .routers.account_history import router as account_history_router
 from .routers.transfers import router as transfers_router
+from .routers.data_health import router as data_health_router
 from .services.job_runner import recover_interrupted_jobs
 from .services.system_tags import ensure_system_tags
 from .db.core import get_db, UserDB
@@ -84,6 +85,7 @@ app.include_router(debts_router)
 app.include_router(uploads_router)
 app.include_router(account_history_router)
 app.include_router(transfers_router)
+app.include_router(data_health_router)
 
 # app.state.limiter = limiter
 # app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)

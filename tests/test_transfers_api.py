@@ -21,11 +21,14 @@ from src.db.core import (
     InvestmentTransactionType,
     RelationshipType,
     SourceType,
+    TagDB,
     TransactionDB,
     TransactionRelationshipDB,
+    TransactionTagDB,
     TransactionType,
     UserDB,
 )
+from src.services.system_tags import ensure_system_tags, get_system_tag
 from src.routers.transfers import (
     ConfirmRequest,
     DismissRequest,
@@ -164,6 +167,102 @@ class TestConfirmEndpoint(TransfersAPIBase):
                 user_id=self.user.db_id, db=self.session,
             )
         self.assertEqual(cm.exception.status_code, 404)
+
+    def test_reclassify_strips_needs_review_tag(self):
+        from src.crud.crud_transaction import generate_transaction_hash
+
+        ensure_system_tags(self.user.db_id, self.session)
+        nr_tag = get_system_tag(self.user.db_id, self.session, "Needs Review")
+
+        out = TransactionDB(
+            id=uuid4(), user_id=self.user.db_id, account_id=self.checking.id,
+            transaction_hash=generate_transaction_hash(
+                user_id=self.user.db_id, institution_name=self.checking.institution_name,
+                transaction_date=date(2026, 2, 5), transaction_type_value="PURCHASE",
+                amount=Decimal("100"), description="AMEXEPAYMENT",
+            ),
+            source_type=SourceType.MANUAL,
+            transaction_date=date(2026, 2, 5), amount=Decimal("100"),
+            transaction_type=TransactionType.PURCHASE, description="AMEXEPAYMENT",
+        )
+        in_ = TransactionDB(
+            id=uuid4(), user_id=self.user.db_id, account_id=self.amex.id,
+            transaction_hash=str(uuid4()), source_type=SourceType.MANUAL,
+            transaction_date=date(2026, 2, 4), amount=Decimal("100"),
+            transaction_type=TransactionType.TRANSFER_IN, description="AUTOPAY",
+        )
+        self.session.add_all([out, in_])
+        self.session.flush()
+        self.session.add(TransactionTagDB(transaction_id=out.db_id, tag_id=nr_tag.tag_id))
+        self.session.commit()
+
+        confirm_suggestion(
+            ConfirmRequest(
+                from_transaction_uuid=out.id, to_transaction_uuid=in_.id,
+                reclassify_from=True,
+            ),
+            user_id=self.user.db_id, db=self.session,
+        )
+
+        remaining = self.session.query(TransactionTagDB).filter(
+            TransactionTagDB.transaction_id == out.db_id,
+            TransactionTagDB.tag_id == nr_tag.tag_id,
+        ).count()
+        self.assertEqual(remaining, 0, "Needs Review tag should be stripped after reclassify")
+
+    def test_confirm_without_reclassify_preserves_needs_review_tag(self):
+        ensure_system_tags(self.user.db_id, self.session)
+        nr_tag = get_system_tag(self.user.db_id, self.session, "Needs Review")
+
+        out, in_ = _make_pair(self.session, self.user.db_id, self.checking.id, self.amex.id)
+        self.session.add(TransactionTagDB(transaction_id=out.db_id, tag_id=nr_tag.tag_id))
+        self.session.commit()
+
+        confirm_suggestion(
+            ConfirmRequest(from_transaction_uuid=out.id, to_transaction_uuid=in_.id),
+            user_id=self.user.db_id, db=self.session,
+        )
+
+        remaining = self.session.query(TransactionTagDB).filter(
+            TransactionTagDB.transaction_id == out.db_id,
+            TransactionTagDB.tag_id == nr_tag.tag_id,
+        ).count()
+        self.assertEqual(remaining, 1, "Tag should be preserved when no reclassify happened")
+
+    def test_investment_side_confirm_does_not_crash(self):
+        """Investment transactions don't carry tags. The auto-strip path must
+        skip them cleanly (regular-side guard) rather than fault."""
+        schwab = AccountDB(
+            uuid=uuid4(), user_id=self.user.db_id, account_name="Schwab Brokerage",
+            account_type=AccountType.INVESTMENT, institution_name="Charles Schwab",
+            balance=Decimal("0"),
+        )
+        self.session.add(schwab)
+        self.session.flush()
+
+        out = TransactionDB(
+            id=uuid4(), user_id=self.user.db_id, account_id=self.checking.id,
+            transaction_hash=str(uuid4()), source_type=SourceType.MANUAL,
+            transaction_date=date(2026, 3, 10), amount=Decimal("500"),
+            transaction_type=TransactionType.TRANSFER_OUT,
+            description="SCHWAB BROKERAGE MONEYLINK",
+        )
+        inv_in = InvestmentTransactionDB(
+            id=uuid4(), user_id=self.user.db_id, account_id=schwab.id,
+            transaction_hash=str(uuid4()),
+            transaction_type=InvestmentTransactionType.TRANSFER_IN,
+            total_amount=Decimal("500"),
+            transaction_date=date(2026, 3, 9),
+            description="MoneyLink deposit",
+        )
+        self.session.add_all([out, inv_in])
+        self.session.commit()
+
+        result = confirm_suggestion(
+            ConfirmRequest(from_transaction_uuid=out.id, to_transaction_uuid=inv_in.id),
+            user_id=self.user.db_id, db=self.session,
+        )
+        self.assertIn("relationship_id", result)
 
     def test_409_when_already_linked(self):
         out, in_ = _make_pair(self.session, self.user.db_id, self.checking.id, self.amex.id)

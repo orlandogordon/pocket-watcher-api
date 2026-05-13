@@ -9,7 +9,7 @@ from uuid import uuid5, UUID
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from src.db.core import TagDB
+from src.db.core import TagDB, TransactionTagDB
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -69,3 +69,16 @@ def get_system_tag(user_id: int, db: Session, tag_name: str) -> TagDB | None:
         TagDB.is_system == True,
         TagDB.tag_name == tag_name,
     ).first()
+
+
+def remove_system_tag(db: Session, user_id: int, transaction_id: int, tag_name: str) -> bool:
+    """Remove a system tag from a transaction. Idempotent — returns True iff a
+    row was deleted. Does not commit (caller owns the transaction)."""
+    tag = get_system_tag(user_id, db, tag_name)
+    if tag is None:
+        return False
+    deleted = db.query(TransactionTagDB).filter(
+        TransactionTagDB.transaction_id == transaction_id,
+        TransactionTagDB.tag_id == tag.tag_id,
+    ).delete(synchronize_session=False)
+    return deleted > 0

@@ -25,6 +25,7 @@ from src.db.core import (
     get_db,
 )
 from src.logging_config import get_logger
+from src.services.system_tags import remove_system_tag
 from src.services.transfer_pairing import (
     PairConfidence,
     TxnSide,
@@ -224,8 +225,12 @@ def confirm_suggestion(
 
     if body.reclassify_from and from_reg is not None:
         update_transaction_type_with_hash(db, from_reg, TransactionType.TRANSFER_OUT)
+        # A confirmed transfer's intent is captured by the type; the
+        # category-driven Needs Review tag no longer applies.
+        remove_system_tag(db, user_id, from_reg.db_id, "Needs Review")
     if body.reclassify_to and to_reg is not None:
         update_transaction_type_with_hash(db, to_reg, TransactionType.TRANSFER_IN)
+        remove_system_tag(db, user_id, to_reg.db_id, "Needs Review")
 
     from_side = _side_from_resolved(from_reg, from_inv)
     to_side = _side_from_resolved(to_reg, to_inv)
