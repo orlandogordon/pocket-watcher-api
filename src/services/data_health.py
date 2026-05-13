@@ -136,6 +136,12 @@ def project_transfer_pairs(db: Session, user_id: int) -> list[AttentionItem]:
                     body={
                         "from_transaction_uuid": str(out_uuid),
                         "to_transaction_uuid": str(in_uuid),
+                        # Bake the reclassify decision into the body so the
+                        # inbox can fire the action verbatim. If a side is
+                        # already the expected transfer type, this is a
+                        # no-op flag — confirm becomes a pure OFFSETS link.
+                        "reclassify_from": c.out_side.transaction_type != "TRANSFER_OUT",
+                        "reclassify_to": c.in_side.transaction_type != "TRANSFER_IN",
                     },
                 ),
                 AttentionAction(

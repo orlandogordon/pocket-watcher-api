@@ -127,6 +127,33 @@ class TestProjectTransferPairs(ProjectionBase):
         labels = {a.label for a in item.actions}
         self.assertEqual(labels, {"Confirm pair", "Dismiss"})
 
+    def test_confirm_body_includes_reclassify_flags(self):
+        """Both sides already typed correctly → both flags are False
+        (confirm is a pure OFFSETS link, no type change)."""
+        out = TransactionDB(
+            id=uuid4(), user_id=self.user.db_id, account_id=self.checking.id,
+            transaction_hash=str(uuid4()), source_type=SourceType.MANUAL,
+            transaction_date=date(2026, 2, 5), amount=Decimal("100"),
+            transaction_type=TransactionType.TRANSFER_OUT, description="AMEX",
+        )
+        in_ = TransactionDB(
+            id=uuid4(), user_id=self.user.db_id, account_id=self.amex.id,
+            transaction_hash=str(uuid4()), source_type=SourceType.MANUAL,
+            transaction_date=date(2026, 2, 4), amount=Decimal("100"),
+            transaction_type=TransactionType.TRANSFER_IN, description="AUTOPAY",
+        )
+        self.session.add_all([out, in_])
+        self.session.commit()
+
+        items = project_transfer_pairs(self.session, self.user.db_id)
+        confirm = next(a for a in items[0].actions if a.label == "Confirm pair")
+        self.assertEqual(confirm.body["reclassify_from"], False)
+        self.assertEqual(confirm.body["reclassify_to"], False)
+        # Dismiss action does not carry reclassify flags.
+        dismiss = next(a for a in items[0].actions if a.label == "Dismiss")
+        self.assertNotIn("reclassify_from", dismiss.body)
+        self.assertNotIn("reclassify_to", dismiss.body)
+
 
 class TestProjectTransferOrphans(ProjectionBase):
     def test_empty(self):

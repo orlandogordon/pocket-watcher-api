@@ -54,6 +54,11 @@ class TxnSide:
     transaction_date: date
     amount: Decimal
     description: Optional[str]
+    # Stringly-typed (enum.value) so this dataclass doesn't depend on
+    # which enum (regular vs investment) the side came from. Default
+    # None for constructor-call-site compatibility; populated by the
+    # two _load_unpaired_* helpers.
+    transaction_type: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +108,7 @@ def _load_unpaired_regular(
             transaction_date=r.transaction_date,
             amount=r.amount,
             description=r.description,
+            transaction_type=r.transaction_type.value,
         )
         for r in rows
     ]
@@ -141,6 +147,7 @@ def _load_unpaired_investment(
             transaction_date=r.transaction_date,
             amount=r.total_amount,
             description=r.description,
+            transaction_type=r.transaction_type.value,
         )
         for r in rows
     ]
