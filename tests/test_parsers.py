@@ -134,5 +134,143 @@ class TestAmznSyfParserIntegration(unittest.TestCase):
                     f"Found raw 'Payment' type — should be TRANSFER_IN")
 
 
+class TestVenmoHelpers(unittest.TestCase):
+    def test_parse_amount_signed(self):
+        from src.parser.venmo import _parse_amount
+        from decimal import Decimal
+        self.assertEqual(_parse_amount("+ $45.00"), Decimal("45.00"))
+        self.assertEqual(_parse_amount("- $45.00"), Decimal("-45.00"))
+        self.assertEqual(_parse_amount("- $1,612.62"), Decimal("-1612.62"))
+
+    def test_balance_affecting_inflow(self):
+        from src.parser.venmo import _is_balance_affecting
+        # Payment received: funding source blank, destination = Venmo balance.
+        self.assertTrue(_is_balance_affecting("", "Venmo balance"))
+
+    def test_balance_affecting_cashout(self):
+        from src.parser.venmo import _is_balance_affecting
+        # Standard Transfer: funding blank, destination = bank.
+        self.assertTrue(_is_balance_affecting("", "TD BANK, NA *4636"))
+
+    def test_balance_affecting_skips_external_funded(self):
+        from src.parser.venmo import _is_balance_affecting
+        # Payment sent via Visa: external funding, destination blank.
+        self.assertFalse(_is_balance_affecting("Visa *1312", ""))
+        # Charge paid via Amex Send: external funding, destination blank.
+        self.assertFalse(_is_balance_affecting("Amex Send Account", ""))
+        # Merchant Transaction via TD Bank checking: external funding.
+        self.assertFalse(
+            _is_balance_affecting("TD BANK, NA Personal Checking *4636", "")
+        )
+
+    def test_classify_payment(self):
+        from src.parser.venmo import _classify
+        from decimal import Decimal
+        self.assertEqual(_classify("Payment", Decimal("45")), "DEPOSIT")
+        self.assertEqual(_classify("Payment", Decimal("-45")), "PURCHASE")
+
+    def test_classify_standard_transfer_is_cashout(self):
+        from src.parser.venmo import _classify
+        from decimal import Decimal
+        self.assertEqual(_classify("Standard Transfer", Decimal("-100")), "TRANSFER_OUT")
+
+    def test_classify_top_up(self):
+        from src.parser.venmo import _classify
+        from decimal import Decimal
+        self.assertEqual(_classify("Top Up", Decimal("50")), "TRANSFER_IN")
+        self.assertEqual(_classify("Add money", Decimal("50")), "TRANSFER_IN")
+
+    def test_classify_instant_transfer_is_cashout(self):
+        from src.parser.venmo import _classify
+        from decimal import Decimal
+        # Instant Transfer is a cashout variant (with fee) — same direction.
+        self.assertEqual(_classify("Instant Transfer", Decimal("-50")), "TRANSFER_OUT")
+
+    def test_classify_card_payment_follows_sign(self):
+        from src.parser.venmo import _classify
+        from decimal import Decimal
+        # Venmo Mastercard refund/reversal: credits into Venmo balance.
+        self.assertEqual(_classify("Card Payment", Decimal("100")), "DEPOSIT")
+
+    def test_classify_unknown_returns_none(self):
+        from src.parser.venmo import _classify
+        from decimal import Decimal
+        self.assertIsNone(_classify("Mystery Type", Decimal("10")))
+
+
+class TestVenmoParserIntegration(unittest.TestCase):
+    def test_jan_2023_reconciles_to_zero(self):
+        """Beginning balance $180, ending balance $0 — net change must be -$180."""
+        from src.parser.venmo import parse_csv
+        from decimal import Decimal
+        csv_path = INPUT_DIR / "venmo" / "VenmoStatement_January_2023.csv"
+        if not csv_path.exists():
+            self.skipTest("Venmo Jan 2023 fixture missing")
+        data = parse_csv(csv_path)
+        net = Decimal("0")
+        for t in data.transactions:
+            if t.transaction_type in ("DEPOSIT", "TRANSFER_IN"):
+                net += t.amount
+            else:
+                net -= t.amount
+        self.assertEqual(net, Decimal("-180.00"))
+
+    def test_feb_2025_reconciles_to_four(self):
+        """Beginning balance $0, ending balance $4 — net change must be +$4."""
+        from src.parser.venmo import parse_csv
+        from decimal import Decimal
+        csv_path = INPUT_DIR / "venmo" / "VenmoStatement_February_2025.csv"
+        if not csv_path.exists():
+            self.skipTest("Venmo Feb 2025 fixture missing")
+        data = parse_csv(csv_path)
+        net = Decimal("0")
+        for t in data.transactions:
+            if t.transaction_type in ("DEPOSIT", "TRANSFER_IN"):
+                net += t.amount
+            else:
+                net -= t.amount
+        self.assertEqual(net, Decimal("4.00"))
+
+    def test_skips_external_funded_rows(self):
+        """Jan 2023 has 14 raw rows, 9 of which are funded by Visa *1312.
+        Only 5 deposits + 1 cashout should be emitted (= 6 transactions)."""
+        from src.parser.venmo import parse_csv
+        csv_path = INPUT_DIR / "venmo" / "VenmoStatement_January_2023.csv"
+        if not csv_path.exists():
+            self.skipTest("Venmo Jan 2023 fixture missing")
+        data = parse_csv(csv_path)
+        self.assertEqual(len(data.transactions), 6)
+
+    def test_full_year_fixtures_reconcile(self):
+        """Reconcile every full-year + monthly fixture against the
+        Beginning/Ending balance pair reported by Venmo itself."""
+        from src.parser.venmo import parse_csv
+        from decimal import Decimal
+        import csv
+
+        expected = {
+            "venmo - 2020.csv": (Decimal("0.00"), Decimal("0.00")),
+            "venmo - 2021.csv": (Decimal("0.00"), Decimal("15.00")),
+            "venmo - 2022.csv": (Decimal("15.00"), Decimal("180.00")),
+            "VenmoStatement_January_2023.csv": (Decimal("180.00"), Decimal("0.00")),
+            "VenmoStatement_February_2025.csv": (Decimal("0.00"), Decimal("4.00")),
+        }
+        for fname, (begin, end) in expected.items():
+            csv_path = INPUT_DIR / "venmo" / fname
+            if not csv_path.exists():
+                continue
+            data = parse_csv(csv_path)
+            net = Decimal("0")
+            for t in data.transactions:
+                if t.transaction_type in ("DEPOSIT", "TRANSFER_IN"):
+                    net += t.amount
+                else:
+                    net -= t.amount
+            self.assertEqual(
+                net, end - begin,
+                f"{fname}: net change {net} does not reconcile to {end - begin}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
