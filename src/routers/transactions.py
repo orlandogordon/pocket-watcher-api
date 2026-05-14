@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from datetime import date
 from decimal import Decimal
 from uuid import UUID
-from src.db.core import NotFoundError, get_db
+from src.db.core import AccountType, NotFoundError, get_db
 from src.models.transaction import (
     TransactionCreate, TransactionUpdate, TransactionResponse, TransactionImport,
     TransactionRelationshipCreateByUUID, TransactionRelationshipUpdate, TransactionRelationship,
@@ -52,6 +52,19 @@ def _parse_uuid(value: str) -> UUID:
         return UUID(value)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+
+def _reject_if_investment_account(account) -> None:
+    """Block regular TransactionDB writes targeted at an INVESTMENT account.
+    Use POST /investment-transactions/ for those instead."""
+    if account.account_type == AccountType.INVESTMENT:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Regular transactions are not allowed on investment accounts. "
+                "Use POST /investment-transactions/ instead."
+            ),
+        )
 
 
 def _build_filters(
@@ -222,6 +235,7 @@ def create_transaction(request: Request, transaction: TransactionCreate, db: Ses
         account = read_db_account_by_uuid(db, transaction.account_uuid, user_id)
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
+        _reject_if_investment_account(account)
         account_id = account.id
 
     category_id = None
@@ -261,6 +275,7 @@ def bulk_update_transactions(request: Request, bulk_update_data: TransactionBulk
         account = read_db_account_by_uuid(db, bulk_update_data.account_uuid, user_id)
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
+        _reject_if_investment_account(account)
         update_payload["account_id"] = account.id
     if bulk_update_data.category_uuid is not None:
         cat = read_db_category_by_uuid(db, bulk_update_data.category_uuid)
@@ -297,6 +312,7 @@ def create_transactions(request: Request, transaction_import: TransactionImport,
     account = read_db_account_by_uuid(db, transaction_import.account_uuid, user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    _reject_if_investment_account(account)
 
     try:
         created_transactions = bulk_create_transactions(db, user_id, transaction_import, account_id=account.id)
@@ -329,6 +345,7 @@ def update_transaction(request: Request, transaction_uuid: str, transaction: Tra
             account = read_db_account_by_uuid(db, transaction.account_uuid, user_id)
             if not account:
                 raise HTTPException(status_code=404, detail="Account not found")
+            _reject_if_investment_account(account)
             account_id = account.id
         else:
             clear_account = True

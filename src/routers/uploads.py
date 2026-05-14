@@ -800,6 +800,23 @@ async def confirm_statement_import(
             AccountDB.id == account_id, AccountDB.user_id == user_id
         ).first()
 
+    # Guard: regular TransactionDB rows must not land on an INVESTMENT
+    # account (mirrors the four /transactions/* router guards). The
+    # investment_transactions queue is handled separately and is
+    # legitimate on an INVESTMENT account.
+    if (
+        account
+        and account.account_type == AccountType.INVESTMENT
+        and session["ready_to_import"]["transactions"]
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Regular transactions are not allowed on investment accounts. "
+                "Use POST /investment-transactions/ instead."
+            ),
+        )
+
     created_txns = []
     created_inv = []
     duplicates_imported = 0
