@@ -16,6 +16,7 @@ from src.db.core import (
     AccountType,
     AccountValueHistoryDB,
     Base,
+    CategoryDB,
     SourceType,
     TransactionDB,
     TransactionTagDB,
@@ -23,6 +24,7 @@ from src.db.core import (
     UserDB,
 )
 from src.routers.data_health import count_attention_items, list_attention_items
+from src.services.data_health import project_needs_review
 from src.services.system_tags import ensure_system_tags, get_system_tag
 
 
@@ -172,6 +174,84 @@ class TestCountAttentionItems(DataHealthAPIBase):
         self.assertEqual(resp.by_kind["transfer_orphan"], 1)
         self.assertEqual(resp.by_kind["snapshot_review"], 1)
         self.assertEqual(resp.total, 4)
+
+
+class TestNeedsReviewDetails(DataHealthAPIBase):
+    """Verify the five enriched fields (category_uuid, category_name,
+    subcategory_uuid, subcategory_name, comments) come through correctly
+    for both populated and uncategorized needs_review rows."""
+
+    def _add_needs_review_txn(self, *, category_id=None, subcategory_id=None,
+                              comments=None, description="x"):
+        nr_tag = get_system_tag(self.user.db_id, self.session, "Needs Review")
+        txn = TransactionDB(
+            id=uuid4(), user_id=self.user.db_id, account_id=self.checking.id,
+            transaction_hash=str(uuid4()), source_type=SourceType.MANUAL,
+            transaction_date=date(2026, 4, 1), amount=Decimal("10"),
+            transaction_type=TransactionType.PURCHASE, description=description,
+            category_id=category_id, subcategory_id=subcategory_id,
+            comments=comments,
+            created_at=datetime(2026, 4, 1, 12),
+        )
+        self.session.add(txn)
+        self.session.flush()
+        self.session.add(TransactionTagDB(
+            transaction_id=txn.db_id, tag_id=nr_tag.tag_id,
+            created_at=datetime(2026, 4, 1, 12),
+        ))
+        self.session.commit()
+        return txn
+
+    def setUp(self):
+        super().setUp()
+        ensure_system_tags(self.user.db_id, self.session)
+        # Two categories: parent ("Food") with a child subcategory ("Coffee").
+        food = CategoryDB(uuid=uuid4(), name="Food")
+        self.session.add(food); self.session.flush()
+        coffee = CategoryDB(uuid=uuid4(), name="Coffee", parent_category_id=food.id)
+        self.session.add(coffee); self.session.flush()
+        self.session.commit()
+        self.food = food
+        self.coffee = coffee
+
+    def test_uncategorized_row_emits_nulls(self):
+        self._add_needs_review_txn(description="bare")
+        items = project_needs_review(self.session, self.user.db_id)
+        self.assertEqual(len(items), 1)
+        d = items[0].details
+        self.assertIsNone(d["category_uuid"])
+        self.assertIsNone(d["category_name"])
+        self.assertIsNone(d["subcategory_uuid"])
+        self.assertIsNone(d["subcategory_name"])
+        self.assertIsNone(d["comments"])
+
+    def test_fully_categorized_row_emits_real_values(self):
+        self._add_needs_review_txn(
+            category_id=self.food.id,
+            subcategory_id=self.coffee.id,
+            comments="business expense — reimburse",
+            description="loaded",
+        )
+        items = project_needs_review(self.session, self.user.db_id)
+        self.assertEqual(len(items), 1)
+        d = items[0].details
+        self.assertEqual(d["category_uuid"], str(self.food.uuid))
+        self.assertEqual(d["category_name"], "Food")
+        self.assertEqual(d["subcategory_uuid"], str(self.coffee.uuid))
+        self.assertEqual(d["subcategory_name"], "Coffee")
+        self.assertEqual(d["comments"], "business expense — reimburse")
+
+    def test_category_only_no_subcategory(self):
+        self._add_needs_review_txn(
+            category_id=self.food.id,
+            comments=None,
+            description="parent only",
+        )
+        items = project_needs_review(self.session, self.user.db_id)
+        d = items[0].details
+        self.assertEqual(d["category_name"], "Food")
+        self.assertIsNone(d["subcategory_uuid"])
+        self.assertIsNone(d["subcategory_name"])
 
 
 if __name__ == "__main__":

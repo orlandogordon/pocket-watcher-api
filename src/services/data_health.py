@@ -9,11 +9,12 @@ See `Backend Todos/completed/43-data-health-unification.md`.
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from src.db.core import (
     AccountDB,
     AccountValueHistoryDB,
+    CategoryDB,
     InvestmentTransactionDB,
     TagDB,
     TransactionDB,
@@ -32,10 +33,17 @@ def project_needs_review(db: Session, user_id: int) -> list[AttentionItem]:
         return []
 
     # outerjoin on AccountDB: TransactionDB.account_id is nullable.
+    # Aliased CategoryDB twice — needs_review rows are typically
+    # uncategorized (that's the whole reason they're flagged), so both
+    # joins are outer and either side may be NULL.
+    CategoryAlias = aliased(CategoryDB)
+    SubcategoryAlias = aliased(CategoryDB)
     rows = (
-        db.query(TransactionDB, TransactionTagDB, AccountDB)
+        db.query(TransactionDB, TransactionTagDB, AccountDB, CategoryAlias, SubcategoryAlias)
         .join(TransactionTagDB, TransactionTagDB.transaction_id == TransactionDB.db_id)
         .outerjoin(AccountDB, AccountDB.id == TransactionDB.account_id)
+        .outerjoin(CategoryAlias, CategoryAlias.id == TransactionDB.category_id)
+        .outerjoin(SubcategoryAlias, SubcategoryAlias.id == TransactionDB.subcategory_id)
         .filter(
             TransactionDB.user_id == user_id,
             TransactionTagDB.tag_id == tag.tag_id,
@@ -44,7 +52,7 @@ def project_needs_review(db: Session, user_id: int) -> list[AttentionItem]:
     )
 
     items: list[AttentionItem] = []
-    for txn, link, account in rows:
+    for txn, link, account, category, subcategory in rows:
         items.append(AttentionItem(
             id=f"needs_review:{txn.id}",
             kind="needs_review",
@@ -60,6 +68,11 @@ def project_needs_review(db: Session, user_id: int) -> list[AttentionItem]:
                 "transaction_type": txn.transaction_type.value,
                 "account_uuid": str(account.uuid) if account else None,
                 "account_name": account.account_name if account else None,
+                "category_uuid": str(category.uuid) if category else None,
+                "category_name": category.name if category else None,
+                "subcategory_uuid": str(subcategory.uuid) if subcategory else None,
+                "subcategory_name": subcategory.name if subcategory else None,
+                "comments": txn.comments,
             },
             confidence=None,
             created_at=link.created_at,
