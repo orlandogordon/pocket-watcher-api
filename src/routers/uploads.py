@@ -1038,7 +1038,11 @@ async def confirm_statement_import(
         # Tag rows whose final state has no category or no merchant — covers
         # both the preview path (user left it blank) and the bulk path (LLM
         # nulls survive untouched). #34 — Option A: derived from final state.
-        if needs_review_tag and (category_id_val is None or not merchant_name_val):
+        # Transfers are exempt: TRANSFER_IN/OUT intentionally have no category
+        # (they're balance-neutral movements, not income/expense), so the
+        # category-null heuristic would mis-flag every transfer.
+        is_transfer = txn_type_enum in (TransactionType.TRANSFER_IN, TransactionType.TRANSFER_OUT)
+        if needs_review_tag and not is_transfer and (category_id_val is None or not merchant_name_val):
             tag_ids.append(needs_review_tag.tag_id)
         if tag_ids:
             pending_tag_associations.append((db_txn, tag_ids))
