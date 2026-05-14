@@ -165,6 +165,13 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             elif tracking_interest: transaction_type = "Interest"
 
             if transaction_type:
+                # Drop $0 interest-section rows: recurring monthly
+                # "INTEREST CHARGE ON PURCHASES = 0.00" notices that
+                # appear when no interest accrued on a 0%-promo balance.
+                # Pure noise — no money moved. #48 Phase 1.
+                if transaction_type == "Interest" and amount == 0:
+                    i += 1
+                    continue
                 parsed_transactions.append(
                     ParsedTransaction(
                         transaction_date=parsed_date,
