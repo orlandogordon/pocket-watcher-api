@@ -28,12 +28,17 @@ class AccountCreate(BaseModel):
     institution_name: str = Field(..., min_length=1, max_length=255, description="Financial institution name")
     account_number_last4: Optional[str] = Field(None, min_length=4, max_length=4, description="Last 4 digits of account number")
     balance: Decimal = Field(default=Decimal('0.00'), description="Initial account balance")
-    
+
     # Loan-specific fields
     interest_rate: Optional[Decimal] = Field(None, ge=0, le=1, description="Interest rate (0.0525 for 5.25%)")
     interest_rate_type: Optional[InterestRateTypeEnum] = Field(None, description="Fixed or variable interest rate")
     original_principal: Optional[Decimal] = Field(None, ge=0, description="Original loan principal amount")
     minimum_payment: Optional[Decimal] = Field(None, ge=0, description="Minimum monthly payment")
+
+    match_aliases: Optional[List[str]] = Field(
+        None,
+        description="Extra match strings for the transfer classifier (e.g. 'AMZ_STORECRD' for an Amazon Store Card account)",
+    )
 
     comments: Optional[str] = Field(None, max_length=1000, description="Optional comments about the account")
 
@@ -74,6 +79,10 @@ class AccountUpdate(BaseModel):
     interest_rate_type: Optional[InterestRateTypeEnum] = None
     original_principal: Optional[Decimal] = Field(None, ge=0)
     minimum_payment: Optional[Decimal] = Field(None, ge=0)
+    match_aliases: Optional[List[str]] = Field(
+        None,
+        description="Extra match strings for the transfer classifier (e.g. 'AMZ_STORECRD' for an Amazon Store Card account)",
+    )
     comments: Optional[str] = Field(None, max_length=1000)
 
     @field_validator('account_name')
@@ -110,6 +119,7 @@ class AccountResponse(BaseModel):
     interest_rate_type: Optional[str]
     original_principal: Optional[Decimal]
     minimum_payment: Optional[Decimal]
+    match_aliases: Optional[List[str]] = None
     comments: Optional[str]
     created_at: datetime
     updated_at: datetime

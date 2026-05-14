@@ -712,6 +712,13 @@ class AccountDB(Base):
     balance: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), default=0.00)
     balance_last_updated: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
+    # Transfer classifier hints — user-supplied alternative match strings.
+    # Used when a description on another account's statement names this
+    # account via an abbreviation that doesn't substring-match the
+    # account_name or institution_name (e.g. 'AMZ_STORECRD' for an
+    # "Amazon Store Card" Synchrony account). See transfer_classifier.py.
+    match_aliases: Mapped[Optional[list[str]]] = mapped_column(JSON)
+
     # Optional Metadata
     comments: Mapped[Optional[str]] = mapped_column(Text)
 

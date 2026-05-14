@@ -5,37 +5,75 @@ bulk-upload path to flag checking outflows that look like payments to
 another user-owned account (CC, INVESTMENT, LOAN, OTHER) and propose a
 TRANSFER_OUT reclassification with a suggested partner account.
 
-The matching signal is institution/account tokens appearing in the
-description string (e.g. "AMEXEPAYMENT" -> Amex Gold account). A P2P
-denylist short-circuits descriptions that name a P2P rail (VENMO, ZELLE,
-CASHAPP, PAYPAL), since those are real expense even when the user keeps
-the rail as an account.
+Matching signals (in priority order):
+1. Per-account `match_aliases` — user-supplied alternative match strings
+   (e.g. 'AMZ_STORECRD' for an Amazon Store Card account, since TD
+   statements use that abbreviation rather than the full name).
+2. Account name / institution as a single normalized string
+   (e.g. 'AMERICANEXPRESS', 'SCHWABBROKERAGE').
+3. Per-word tokens from name + institution (e.g. 'AMEX', 'SCHWAB'),
+   with English-common stopwords stripped to avoid false positives on
+   generic merchant words like 'STORE' or 'EXPRESS'.
+4. `account_number_last4`, but only when surrounded by non-digit
+   characters so it can't accidentally match a substring of a longer
+   ID/reference number.
+
+Card-mask digits (e.g. `*****30089881312`) are stripped from the
+description before matching, since they carry no transfer signal and
+would otherwise produce digit-substring false positives.
+
+Originally Venmo / Cash App were on a hard denylist because no such
+accounts existed in the system — once added (phase 2 step 1+2 of #49),
+they were removed from the denylist so VENMO* / CASHAPP* descriptions
+can pair to the new accounts.
 """
+import re
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
 from src.db.core import AccountDB, AccountType, TransactionType
 
 
-P2P_DENYLIST: frozenset[str] = frozenset({
-    "VENMO",
-    "ZELLE",
-    "CASHAPP",
-    "CASH APP",
-    "PAYPAL",
-})
+# Card-mask: any run of '*' followed by digits (e.g. '*****30089881312',
+# '****03991459200'). Carries no transfer signal — purely a card identifier
+# emitted by some statement formats. Strip before normalization to avoid
+# accidental digit-substring matches against account last4s.
+_CARD_MASK_RE = re.compile(r"\*+\d+")
 
 
 # Words that, on their own, are too generic to be a useful match signal.
-# These get dropped from the per-word token set; full-string and
-# space-stripped tokens still include them.
+# Dropped from the per-word token set; the full-string normalized name
+# (e.g. 'AMERICANEXPRESS', 'AMAZONSTORECARD') still includes them.
+#
+# Most additions here are observed false-positive sources from live data:
+# 'STORE' matched DERMSTORECOM/WALGREENSSTORE/YCCSTORE; 'EXPRESS' matched
+# EXPRESSCOM/HOLIDAYINNEXPRESS; 'AMAZON' matched AMAZONCOM/AMAZONPHOTOD;
+# 'AMERICAN' / 'CHARLES' / 'BANK' are defensive — too common.
 _STOPWORDS: frozenset[str] = frozenset({
+    # Account-shape words.
     "BANK", "CARD", "ACCOUNT", "ACCT", "CHECKING", "SAVINGS",
     "BROKERAGE", "INVESTMENT", "INVESTMENTS", "LOAN", "CREDIT",
+    # Color / trim adjectives.
     "GOLD", "PLATINUM", "BLUE", "GREEN", "SILVER",
+    # English connectors.
     "THE", "AND", "FOR", "WITH",
+    # Position / role words.
     "MAIN", "PRIMARY", "JOINT",
+    # Generic merchant-name overlap (sourced from observed false
+    # positives — extend as new ones surface).
+    "STORE", "EXPRESS", "AMAZON", "AMERICAN", "CHARLES",
 })
+
+
+# P2P rails that don't have a corresponding user-owned account in the
+# system. Descriptions containing these terms get a hard skip — they
+# can't be transfers to a user account because the user has no such
+# account. Venmo and Cash App were originally on this list; they came
+# off once Phase 2 #49 added account onboarding for both.
+P2P_DENYLIST: frozenset[str] = frozenset({
+    "PAYPAL",
+})
+
 
 _MIN_TOKEN_LEN = 3
 
@@ -47,9 +85,14 @@ class ClassificationResult:
     matched_token: Optional[str]
 
 
+def _strip_card_mask(text: str) -> str:
+    return _CARD_MASK_RE.sub("", text)
+
+
 def _normalize(text: str) -> str:
-    """Uppercase + strip whitespace for substring matching."""
-    return "".join(text.upper().split())
+    """Strip card-mask noise, uppercase, and remove whitespace for
+    substring matching."""
+    return "".join(_strip_card_mask(text).upper().split())
 
 
 def build_account_tokens(account: AccountDB) -> set[str]:
@@ -61,6 +104,11 @@ def build_account_tokens(account: AccountDB) -> set[str]:
     `_STOPWORDS` are dropped; multi-word phrases are kept regardless so
     name like "Amex Gold" still contributes "AMEXGOLD" even though "GOLD"
     alone would be filtered.
+
+    User-supplied `match_aliases` (Phase 2 of #49) bypass the stopword
+    filter — they're the user's explicit answer to "what does the bank
+    call this account on outgoing payment descriptions?" so they should
+    match exactly as given.
     """
     tokens: set[str] = set()
 
@@ -77,6 +125,11 @@ def build_account_tokens(account: AccountDB) -> set[str]:
         if last4:
             tokens.add(last4)
 
+    for alias in (getattr(account, "match_aliases", None) or []):
+        normalized_alias = _normalize(alias)
+        if normalized_alias:
+            tokens.add(normalized_alias)
+
     return tokens
 
 
@@ -85,6 +138,16 @@ def _description_matches_denylist(normalized_description: str) -> bool:
         if _normalize(term) in normalized_description:
             return True
     return False
+
+
+def _token_matches(token: str, normalized_description: str) -> bool:
+    """Substring match, except for tokens that are exactly 4 digits — those
+    are treated as account last4 and require digit-boundary on both sides
+    so a card-mask collision (e.g. '...91459200' matching '9145') can't
+    flip the classification."""
+    if token.isdigit() and len(token) == 4:
+        return bool(re.search(rf"(?<!\d){re.escape(token)}(?!\d)", normalized_description))
+    return token in normalized_description
 
 
 def classify_outflow(
@@ -123,7 +186,7 @@ def classify_outflow(
 
         longest_match: Optional[str] = None
         for token in build_account_tokens(account):
-            if token in norm and (longest_match is None or len(token) > len(longest_match)):
+            if _token_matches(token, norm) and (longest_match is None or len(token) > len(longest_match)):
                 longest_match = token
 
         if longest_match is not None and (
