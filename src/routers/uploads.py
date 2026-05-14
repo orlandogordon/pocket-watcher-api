@@ -64,6 +64,36 @@ router = APIRouter(
 )
 
 
+# Union of all fields the user is allowed to edit in a preview session.
+# Anything outside this set is rejected — in particular, server-internal
+# int IDs (account_id, category_id, subcategory_id) must never be set by
+# the client because they bypass the UUID-resolution path and the
+# INVESTMENT-account write guard. See backend todo #36.
+ALLOWED_EDITED_DATA_KEYS: frozenset[str] = frozenset({
+    # Regular-transaction editable fields
+    "description", "merchant_name", "category_uuid", "subcategory_uuid",
+    "comments", "tag_uuids", "transaction_type", "amount",
+    "transaction_date",
+    # Investment-transaction editable fields
+    "symbol", "quantity", "price_per_share", "api_symbol",
+    "total_amount", "security_type",
+})
+
+
+def _validate_edited_data(edited: Dict) -> None:
+    """Reject any edited_data key not in ALLOWED_EDITED_DATA_KEYS. The
+    union allowlist deliberately includes both regular and investment
+    fields — editing an investment-only field on a regular row is a
+    harmless no-op at confirm time, but accepting internal int IDs
+    (account_id, etc.) bypasses safety guards."""
+    rejected = sorted(k for k in edited.keys() if k not in ALLOWED_EDITED_DATA_KEYS)
+    if rejected:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Disallowed edited_data keys: {', '.join(rejected)}",
+        )
+
+
 @router.get("/jobs")
 def list_upload_jobs(
     skip: int = Query(0, ge=0),
@@ -723,6 +753,7 @@ async def edit_transaction(
     r: redis.Redis = Depends(get_redis_dependency),
 ):
     """Edit a transaction in ready_to_import or rejected."""
+    _validate_edited_data(request.edited_data)
     session = get_preview_session(r, session_id, user_id)
     if not session:
         raise HTTPException(404, "Preview session not found or expired")
@@ -748,6 +779,7 @@ async def bulk_edit_transactions(
     r: redis.Redis = Depends(get_redis_dependency),
 ):
     """Bulk edit multiple transactions in ready_to_import or rejected."""
+    _validate_edited_data(request.edited_data)
     session = get_preview_session(r, session_id, user_id)
     if not session:
         raise HTTPException(404, "Preview session not found or expired")
@@ -899,7 +931,6 @@ async def confirm_statement_import(
             skipped_unmapped += 1
             continue
 
-        effective_account_id = final_data.get("account_id") or account_id
         txn_date = date.fromisoformat(str(final_data["transaction_date"]))
 
         # Build hash from ORIGINAL parsed data so duplicate detection matches
@@ -972,7 +1003,7 @@ async def confirm_statement_import(
         db_txn = TransactionDB(
             id=uuid4(),
             user_id=user_id,
-            account_id=effective_account_id,
+            account_id=account_id,
             category_id=category_id_val,
             subcategory_id=subcategory_id_val,
             transaction_hash=txn_hash,
@@ -1059,12 +1090,10 @@ async def confirm_statement_import(
             inv_price = Decimal(str(final_data["price_per_share"])) if final_data.get("price_per_share") else None
             inv_api_symbol = final_data.get("api_symbol")
 
-        effective_account_id = final_data.get("account_id") or account_id
-
         db_inv = InvestmentTransactionDB(
             id=uuid4(),
             user_id=user_id,
-            account_id=effective_account_id,
+            account_id=account_id,
             holding_id=None,
             transaction_hash=inv_hash,
             transaction_type=txn_type_enum,
