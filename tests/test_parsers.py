@@ -272,5 +272,99 @@ class TestVenmoParserIntegration(unittest.TestCase):
             )
 
 
+class TestCashAppHelpers(unittest.TestCase):
+    def test_parse_amount_signed(self):
+        from src.parser.cashapp import _parse_amount
+        from decimal import Decimal
+        self.assertEqual(_parse_amount("$535.00"), Decimal("535.00"))
+        self.assertEqual(_parse_amount("-$60.00"), Decimal("-60.00"))
+
+    def test_parse_date_drops_time_and_tz(self):
+        from src.parser.cashapp import _parse_date
+        from datetime import date
+        self.assertEqual(_parse_date("2024-11-05 00:59:46 EST"), date(2024, 11, 5))
+        self.assertEqual(_parse_date("2023-01-04 13:30:23 EDT"), date(2023, 1, 4))
+
+    def test_balance_affecting_p2p_cash_balance(self):
+        from src.parser.cashapp import _is_balance_affecting
+        self.assertTrue(_is_balance_affecting("P2P", "Cash Balance"))
+
+    def test_balance_affecting_withdrawal_always_included(self):
+        from src.parser.cashapp import _is_balance_affecting
+        # Withdrawal: Account is destination bank, balance still affected.
+        self.assertTrue(_is_balance_affecting("Withdrawal", "TD Bank"))
+
+    def test_balance_affecting_skips_external_p2p(self):
+        from src.parser.cashapp import _is_balance_affecting
+        self.assertFalse(_is_balance_affecting("P2P", "TD Bank"))
+
+    def test_classify_p2p(self):
+        from src.parser.cashapp import _classify
+        from decimal import Decimal
+        self.assertEqual(_classify("P2P", Decimal("100")), "DEPOSIT")
+        self.assertEqual(_classify("P2P", Decimal("-20")), "PURCHASE")
+
+    def test_classify_withdrawal_is_cashout(self):
+        from src.parser.cashapp import _classify
+        from decimal import Decimal
+        self.assertEqual(_classify("Withdrawal", Decimal("-150")), "TRANSFER_OUT")
+
+    def test_classify_unknown_returns_none(self):
+        from src.parser.cashapp import _classify
+        from decimal import Decimal
+        self.assertIsNone(_classify("Bitcoin Purchase", Decimal("50")))
+
+    def test_description_strips_boilerplate_note(self):
+        from src.parser.cashapp import _build_description
+        # "$535 Payment From Chris Provel" is auto-generated boilerplate;
+        # description should fall back to just the Name column.
+        self.assertEqual(
+            _build_description("P2P", "$535 Payment From Chris Provel", "Chris Provel", "Cash Balance"),
+            "Chris Provel",
+        )
+
+    def test_description_keeps_user_supplied_note(self):
+        from src.parser.cashapp import _build_description
+        # User-supplied memo (an emoji, a freeform string) should be kept.
+        self.assertEqual(
+            _build_description("P2P", "Uber home", "Matt Mihm", "Cash Balance"),
+            "Matt Mihm: Uber home",
+        )
+
+    def test_description_withdrawal_uses_account(self):
+        from src.parser.cashapp import _build_description
+        self.assertEqual(
+            _build_description("Withdrawal", "Cash Out", "", "TD Bank"),
+            "Cash out to TD Bank",
+        )
+
+
+class TestCashAppParserIntegration(unittest.TestCase):
+    def test_fixture_skips_external_and_system_rows(self):
+        """Sample fixture has 36 raw rows: 12 balance-P2P + 8 withdrawals
+        = 20 emitted; 14 externally-funded P2P + 2 Account Notifications
+        skipped."""
+        from src.parser.cashapp import parse_csv
+        csv_path = INPUT_DIR / "cashapp" / "cash_app_report_1778789548189.csv"
+        if not csv_path.exists():
+            self.skipTest("Cash App fixture missing")
+        data = parse_csv(csv_path)
+        self.assertEqual(len(data.transactions), 20)
+
+    def test_fixture_type_breakdown(self):
+        """Of the 20 emitted: 8 cashouts, 10 deposits, 2 purchases
+        (Matt Mihm tally hose $20 + Uber home $30)."""
+        from src.parser.cashapp import parse_csv
+        from collections import Counter
+        csv_path = INPUT_DIR / "cashapp" / "cash_app_report_1778789548189.csv"
+        if not csv_path.exists():
+            self.skipTest("Cash App fixture missing")
+        data = parse_csv(csv_path)
+        counts = Counter(t.transaction_type for t in data.transactions)
+        self.assertEqual(counts["TRANSFER_OUT"], 8)
+        self.assertEqual(counts["DEPOSIT"], 10)
+        self.assertEqual(counts["PURCHASE"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()

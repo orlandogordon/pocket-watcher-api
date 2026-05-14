@@ -6,6 +6,7 @@ from src.parser import (
     tdameritrade,
     ameriprise,
     venmo,
+    cashapp,
     # empower and fidelity are not ready yet
 )
 
@@ -19,4 +20,5 @@ PARSER_MAPPING = {
     "tdameritrade": tdameritrade,
     "ameriprise": ameriprise,
     "venmo": venmo,
+    "cashapp": cashapp,
 }
