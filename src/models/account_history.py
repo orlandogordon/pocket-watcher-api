@@ -69,7 +69,7 @@ class NetWorthHistoryResponse(BaseModel):
     data: List[NetWorthDataPoint]
     start_date: Optional[date]
     end_date: Optional[date]
-    total_days: int
+    total_points: int
 
 
 class AccountValueHistoryPoint(BaseModel):

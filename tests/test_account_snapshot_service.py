@@ -249,6 +249,91 @@ class TestPerAccountLOCF(TestLOCFBase):
         self.assertEqual(len(out), 3)
 
 
+class TestMonthlyDownsample(TestLOCFBase):
+    """Above the 365-day threshold the daily LOCF series is reduced
+    to one point per calendar month, keeping the last day of the
+    bucket. See backend todo #41."""
+
+    def test_no_downsample_at_exactly_365_days(self):
+        """365-day span is the boundary — stays daily (threshold is > 365)."""
+        a = _make_account(self.session, self.user.db_id, "A", AccountType.CHECKING)
+        _add_snapshot(self.session, a.id, date(2024, 1, 1), 100)
+
+        out = get_net_worth_history(
+            self.session, self.user.db_id,
+            start_date=date(2024, 1, 1), end_date=date(2024, 12, 31),
+        )
+        self.assertEqual((date(2024, 12, 31) - date(2024, 1, 1)).days, 365)
+        self.assertEqual(len(out), 366)  # both endpoints inclusive
+
+    def test_downsample_above_365_days(self):
+        """18-month span → 18 monthly buckets, last day of each month
+        within the range."""
+        a = _make_account(self.session, self.user.db_id, "A", AccountType.CHECKING)
+        _add_snapshot(self.session, a.id, date(2024, 1, 1), 100)
+
+        out = get_net_worth_history(
+            self.session, self.user.db_id,
+            start_date=date(2024, 1, 1), end_date=date(2025, 6, 30),
+        )
+        # Jan 2024 .. Jun 2025 = 18 months.
+        self.assertEqual(len(out), 18)
+        # Each kept point is the last day of its month.
+        # Jan 2024 → Jan 31 2024; Feb 2024 → Feb 29 2024 (leap); etc.
+        self.assertEqual(out[0]["date"], "2024-01-31")
+        self.assertEqual(out[1]["date"], "2024-02-29")
+        self.assertEqual(out[-1]["date"], "2025-06-30")
+
+    def test_last_of_month_reducer_picks_last_snapshot(self):
+        """Snapshots on Jan 5/20/31; the Jan bucket reflects Jan 31's
+        balance, not the earlier-in-month values."""
+        a = _make_account(self.session, self.user.db_id, "A", AccountType.CHECKING)
+        _add_snapshot(self.session, a.id, date(2024, 1, 5), 100)
+        _add_snapshot(self.session, a.id, date(2024, 1, 20), 200)
+        _add_snapshot(self.session, a.id, date(2024, 1, 31), 350)
+
+        out = get_net_worth_history(
+            self.session, self.user.db_id,
+            start_date=date(2024, 1, 1), end_date=date(2025, 6, 30),
+        )
+        jan = next(p for p in out if p["date"].startswith("2024-01"))
+        self.assertEqual(jan["date"], "2024-01-31")
+        self.assertEqual(jan["net_worth"], 350.0)
+
+    def test_freshness_fields_come_from_kept_point(self):
+        """If the kept day (last of month) is carried-forward, the
+        bucket should reflect carried-forward freshness — not roll up
+        across the bucket."""
+        a = _make_account(self.session, self.user.db_id, "A", AccountType.CHECKING)
+        _add_snapshot(self.session, a.id, date(2024, 1, 15), 100)
+        # No snapshot Jan 16..31, so Jan 31 is carried-forward.
+
+        out = get_net_worth_history(
+            self.session, self.user.db_id,
+            start_date=date(2024, 1, 1), end_date=date(2025, 6, 30),
+        )
+        jan = next(p for p in out if p["date"].startswith("2024-01"))
+        self.assertEqual(jan["date"], "2024-01-31")
+        self.assertEqual(jan["accounts_total"], 1)
+        self.assertEqual(jan["accounts_fresh"], 0)
+        self.assertEqual(jan["oldest_snapshot_date"], date(2024, 1, 15))
+
+    def test_per_account_is_carried_forward_from_kept_point(self):
+        """get_account_value_history's bucketed point inherits the
+        kept day's is_carried_forward flag."""
+        a = _make_account(self.session, self.user.db_id, "A", AccountType.CHECKING)
+        _add_snapshot(self.session, a.id, date(2024, 1, 15), 100)
+
+        out = get_account_value_history(
+            self.session, a.id, self.user.db_id,
+            start_date=date(2024, 1, 1), end_date=date(2025, 6, 30),
+        )
+        jan = next(p for p in out if p["date"].month == 1 and p["date"].year == 2024)
+        self.assertEqual(jan["date"], date(2024, 1, 31))
+        self.assertEqual(jan["balance"], Decimal("100"))
+        self.assertTrue(jan["is_carried_forward"])
+
+
 class TestFormatSymbolForReview(unittest.TestCase):
     """The snapshot FYI on the data-health inbox renders the
     review_reason verbatim. For option holdings the OCC symbol

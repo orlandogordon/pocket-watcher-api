@@ -976,6 +976,30 @@ def _signed_balance(account_type: AccountType, balance: Decimal) -> Decimal:
     return balance
 
 
+_LONG_RANGE_THRESHOLD_DAYS = 365
+
+
+def _downsample_monthly_if_long_range(
+    points: List[Dict], start_date: date, end_date: date
+) -> List[Dict]:
+    """Reduce a date-ordered daily series to one point per calendar month
+    (last point of each month) when the range spans more than a year.
+    Below the threshold the input is returned unchanged.
+
+    Handles both `date` and ISO-string `"date"` field values, since the
+    two history endpoints differ on that representation.
+    """
+    if (end_date - start_date).days <= _LONG_RANGE_THRESHOLD_DAYS:
+        return points
+    by_month: Dict[tuple, Dict] = {}
+    for p in points:
+        d = p["date"]
+        if isinstance(d, str):
+            d = date.fromisoformat(d)
+        by_month[(d.year, d.month)] = p
+    return list(by_month.values())
+
+
 def get_net_worth_history(
     db: Session,
     user_id: int,
@@ -1062,7 +1086,7 @@ def get_net_worth_history(
         })
         cursor += one_day
 
-    return output
+    return _downsample_monthly_if_long_range(output, start_date, end_date)
 
 
 def get_account_value_history(
@@ -1129,4 +1153,4 @@ def get_account_value_history(
         })
         cursor += one_day
 
-    return output
+    return _downsample_monthly_if_long_range(output, start_date, end_date)

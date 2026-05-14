@@ -108,7 +108,7 @@ def get_net_worth_history(
         data=[NetWorthDataPoint(**dp) for dp in data_points],
         start_date=start_date,
         end_date=end_date,
-        total_days=len(data_points)
+        total_points=len(data_points)
     )
 
 
