@@ -267,6 +267,14 @@ def read_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int) -> Op
     ).first()
 
 
+def read_db_accounts_by_uuids(db: Session, uuids: List[UUID], user_id: int) -> List[AccountDB]:
+    """Read multiple accounts by UUIDs, filtered by user ownership."""
+    return db.query(AccountDB).filter(
+        AccountDB.uuid.in_(uuids),
+        AccountDB.user_id == user_id
+    ).all()
+
+
 def update_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int, account_updates: AccountUpdate) -> AccountDB:
     """Update an existing account by UUID."""
     db_account = db.query(AccountDB).filter(

@@ -36,7 +36,7 @@ from src.crud.crud_transaction import (
     read_amortization_schedule,
     delete_amortization_schedule,
 )
-from src.crud.crud_account import read_db_account_by_uuid
+from src.crud.crud_account import read_db_account_by_uuid, read_db_accounts_by_uuids
 from src.crud.crud_category import read_db_category_by_uuid, read_db_categories_by_uuids
 from src.crud.crud_tag import read_db_tag_by_uuid, read_db_tags_by_uuids
 from src.auth.dependencies import get_current_user_id
@@ -57,11 +57,11 @@ def _parse_uuid(value: str) -> UUID:
 def _build_filters(
     db: Session,
     user_id: int,
-    account_uuid: Optional[str],
+    account_uuids: Optional[List[str]],
     category_uuids: Optional[List[str]],
     subcategory_uuids: Optional[List[str]],
     tag_uuids: Optional[List[str]],
-    transaction_type: Optional[TransactionTypeEnum],
+    transaction_types: Optional[List[TransactionTypeEnum]],
     merchant_name: Optional[str],
     date_from: Optional[date],
     date_to: Optional[date],
@@ -70,12 +70,15 @@ def _build_filters(
     description_search: Optional[str],
 ) -> TransactionFilter:
     """Build a TransactionFilter, resolving UUIDs to int IDs."""
-    account_id = None
-    if account_uuid:
-        account = read_db_account_by_uuid(db, _parse_uuid(account_uuid), user_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Account not found")
-        account_id = account.id
+    account_ids = None
+    if account_uuids:
+        parsed = [_parse_uuid(u) for u in account_uuids]
+        accounts = read_db_accounts_by_uuids(db, parsed, user_id)
+        if len(accounts) != len(parsed):
+            found = {a.uuid for a in accounts}
+            missing = [str(u) for u in parsed if u not in found]
+            raise HTTPException(status_code=404, detail=f"Accounts not found: {', '.join(missing)}")
+        account_ids = [a.id for a in accounts]
 
     category_ids = None
     if category_uuids:
@@ -108,11 +111,11 @@ def _build_filters(
         tag_ids = [t.tag_id for t in tags]
 
     return TransactionFilter(
-        account_id=account_id,
+        account_ids=account_ids,
         category_ids=category_ids,
         subcategory_ids=subcategory_ids,
         tag_ids=tag_ids,
-        transaction_type=transaction_type,
+        transaction_types=transaction_types,
         merchant_name=merchant_name,
         date_from=date_from,
         date_to=date_to,
@@ -127,11 +130,11 @@ def list_transactions(
     request: Request,
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
-    account_uuid: Optional[str] = Query(None),
+    account_uuid: Optional[List[str]] = Query(None),
     category_uuid: Optional[List[str]] = Query(None),
     subcategory_uuid: Optional[List[str]] = Query(None),
     tag_uuid: Optional[List[str]] = Query(None),
-    transaction_type: Optional[TransactionTypeEnum] = Query(None),
+    transaction_type: Optional[List[TransactionTypeEnum]] = Query(None),
     merchant_name: Optional[str] = Query(None),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
@@ -159,11 +162,11 @@ def list_transactions(
 @router.get("/stats", response_model=TransactionStats)
 def transaction_stats(
     request: Request,
-    account_uuid: Optional[str] = Query(None),
+    account_uuid: Optional[List[str]] = Query(None),
     category_uuid: Optional[List[str]] = Query(None),
     subcategory_uuid: Optional[List[str]] = Query(None),
     tag_uuid: Optional[List[str]] = Query(None),
-    transaction_type: Optional[TransactionTypeEnum] = Query(None),
+    transaction_type: Optional[List[TransactionTypeEnum]] = Query(None),
     merchant_name: Optional[str] = Query(None),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),

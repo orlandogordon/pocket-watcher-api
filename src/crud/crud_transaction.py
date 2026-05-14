@@ -450,12 +450,14 @@ def _apply_transaction_filters(query, filters: TransactionFilter):
     Shared by read_db_transactions, get_transaction_stats, and get_transactions_count
     so the filtering logic is defined in exactly one place.
     """
-    if filters.account_id:
-        query = query.filter(TransactionDB.account_id == filters.account_id)
     if filters.account_ids:
         query = query.filter(TransactionDB.account_id.in_(filters.account_ids))
-    if filters.transaction_type:
-        query = query.filter(TransactionDB.transaction_type == TransactionType(filters.transaction_type.value))
+    if filters.transaction_types:
+        query = query.filter(
+            TransactionDB.transaction_type.in_(
+                [TransactionType(t.value) for t in filters.transaction_types]
+            )
+        )
     if filters.category_ids:
         split_cat_exists = exists(
             select(TransactionSplitAllocationDB.allocation_id).where(

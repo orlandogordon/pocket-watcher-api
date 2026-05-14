@@ -209,9 +209,8 @@ class TransactionImport(BaseModel):
 
 class TransactionFilter(BaseModel):
     """Filter parameters for transaction queries"""
-    account_id: Optional[int] = None
     account_ids: Optional[List[int]] = None
-    transaction_type: Optional[TransactionTypeEnum] = None
+    transaction_types: Optional[List[TransactionTypeEnum]] = None
     category_ids: Optional[List[int]] = None
     subcategory_ids: Optional[List[int]] = None
     tag_ids: Optional[List[int]] = None
