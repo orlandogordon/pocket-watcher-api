@@ -14,6 +14,20 @@ logger = get_logger(__name__)
 # A list of month prefixes to identify transaction lines
 DATES = ['01/', '02/', '03/', '04/', '05/', '06/', '07/', '08/', '09/', '10/', '11/', '12/']
 
+def _clean_description(description: str) -> str:
+    """Strip Amex-specific noise from a parsed description:
+
+    - `AplPay ` prefix — Apple Pay tag. Without stripping, merchant extraction
+      downstream resolves to "Aplpay" instead of the actual merchant, which
+      is worse than no merchant at all because the LLM gets misleading input.
+    - ` Pay Over Time` suffix — added when the user enables Pay-Over-Time on
+      the charge. Pure UI/LLM noise; doesn't change the underlying merchant.
+    """
+    description = description.removeprefix("AplPay ")
+    description = description.removesuffix(" Pay Over Time")
+    return description
+
+
 def _map_transaction_type(line: str, keywords: dict) -> List[bool]:
     """Determines the type of transactions being tracked based on section headers."""
     if line.startswith(keywords['payments']):
@@ -122,7 +136,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
 
             amount_str = line_split[-1].replace("$", "").replace(",", "").replace("⧫", "").replace("â§«", "")
             amount = abs(Decimal(amount_str))
-            description = " ".join(line_split[1:-1])
+            description = _clean_description(" ".join(line_split[1:-1]))
 
             transaction_type = ""
             if tracking_payments: transaction_type = "TRANSFER_IN"
@@ -166,7 +180,7 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     for row in reader:
         try:
             date = datetime.strptime(row[0], "%m/%d/%Y").date()
-            description = row[1]
+            description = _clean_description(row[1])
             amount = Decimal(row[2])
 
             transaction_type = 'Credit' if amount < 0 else 'Purchase'
