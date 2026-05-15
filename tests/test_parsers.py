@@ -1,4 +1,5 @@
 """Tests for parser TRANSFER_IN/TRANSFER_OUT output."""
+import re
 import unittest
 from pathlib import Path
 
@@ -364,6 +365,247 @@ class TestCashAppParserIntegration(unittest.TestCase):
         self.assertEqual(counts["TRANSFER_OUT"], 8)
         self.assertEqual(counts["DEPOSIT"], 10)
         self.assertEqual(counts["PURCHASE"], 2)
+
+
+class TestTdbankCleanDescription(unittest.TestCase):
+    """#50 — TD compound-prefix description cleanup."""
+
+    def test_debit_card_purchase_strips_prefix_keeps_merchant(self):
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description(
+                "DEBITCARDPURCHASE,*****30081855819,AUT100920VISADDAPUR MICROSOFTXBOX MSBILLINFO *WA"
+            ),
+            "MICROSOFTXBOX MSBILLINFO *WA",
+        )
+
+    def test_debit_card_credit_handles_no_space_before_state(self):
+        """The *<ST> tag isn't always preceded by a space — preserve as-is."""
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description(
+                "DEBITCARDCREDIT,*****30081855819,AUT101720VISADDAREF AMZNMKTPUS AMZNCOMBILL*WA"
+            ),
+            "AMZNMKTPUS AMZNCOMBILL*WA",
+        )
+
+    def test_td_atm_debit(self):
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description(
+                "TDATMDEBIT,*****30089881312,AUT061221DDAWITHDRAW 1840OLDMILLROAD WALL TOWNSHIP*NJ"
+            ),
+            "1840OLDMILLROAD WALL TOWNSHIP*NJ",
+        )
+
+    def test_non_td_atm_debit(self):
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description(
+                "NONTDATMDEBIT,*****30081855819,AUT101820DDAWITHDRAW 1725HOOPERAVE TOMSRIVER *NJ"
+            ),
+            "1725HOOPERAVE TOMSRIVER *NJ",
+        )
+
+    def test_atm_cash_deposit_uses_space_separator(self):
+        """ATMCASHDEPOSIT uses a space between card and AUT, not a comma."""
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description(
+                "ATMCASHDEPOSIT,*****30089881312 AUT022021ATMCASHDEPOSIT 849FISCHERBLVD TOMSRIVER *NJ"
+            ),
+            "849FISCHERBLVD TOMSRIVER *NJ",
+        )
+
+    def test_visa_transfer_keeps_processor(self):
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description(
+                "VISATRANSFER,*****30081855819,AUT010421VISATRANSFER CASHAPPCASHOUT VISADIRECT *CA"
+            ),
+            "CASHAPPCASHOUT VISADIRECT *CA",
+        )
+
+    def test_zelle_sent(self):
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description("TDZELLESENT, 214000K0D2LSZelleTRONGHIENGUYEN"),
+            "Zelle: TRONGHIENGUYEN",
+        )
+
+    def test_zelle_received(self):
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description("TDZELLERECEIVED, 223900E0E6JDZelleLINDADRIVERS"),
+            "Zelle: LINDADRIVERS",
+        )
+
+    def test_zelle_with_space_before_zelle_keyword(self):
+        """Some TD statements have a space between the token and 'Zelle'."""
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description("TDZELLESENT, 505300G020QW ZelleMATTHEWMIHM"),
+            "Zelle: MATTHEWMIHM",
+        )
+
+    def test_already_clean_description_unchanged(self):
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description("TARGET BRICK NJ"),
+            "TARGET BRICK NJ",
+        )
+
+    def test_unknown_prefix_unchanged(self):
+        """Patterns we don't handle must pass through verbatim."""
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description("ELECTRONICPMT-WEB CHASE PAYMENT"),
+            "ELECTRONICPMT-WEB CHASE PAYMENT",
+        )
+
+    def test_compound_prefix_mid_string_not_stripped(self):
+        """Only matches at the start. A merchant name that happens to contain
+        DEBITCARDPURCHASE inside it must not be touched."""
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description("STORE WITH DEBITCARDPURCHASE IN NAME"),
+            "STORE WITH DEBITCARDPURCHASE IN NAME",
+        )
+
+    def test_dbcrdpurap_ap_variant(self):
+        """Apple Pay debit card purchase variant — different prefix word,
+        same compound shape, has AP suffix in the middle token."""
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description(
+                "DBCRDPURAP,*****30089881312,AUT100723VISADDAPURAP COSTCOGAS 0739 BRICK *NJ"
+            ),
+            "COSTCOGAS 0739 BRICK *NJ",
+        )
+
+    def test_debitpos_variant(self):
+        """DDAPURCHASE flavor (vs VISADDAPUR for card-network purchases)."""
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description(
+                "DEBITPOS,*****30081855819,AUT101820DDAPURCHASE WAWA 937 TOMSRIVER *NJ"
+            ),
+            "WAWA 937 TOMSRIVER *NJ",
+        )
+
+    def test_tdatmdebitap_with_trailing_ap_token(self):
+        """TDATMDEBITAP has an extra ` AP` token between the AUT chunk and
+        the address — it must be consumed by the regex, not leak into the
+        cleaned merchant."""
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description(
+                "TDATMDEBITAP,*****30089881312,AUT122524DDAWITHDRAW AP 1101HOOPERAVENUE TOMSRIVER *NJ"
+            ),
+            "1101HOOPERAVENUE TOMSRIVER *NJ",
+        )
+
+    def test_poscredit_refund_variant(self):
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description(
+                "POSCREDIT,*****30089881312,AUT061621DDAPURCHREF GNC 730310BRICKPLA BRICK *NJ"
+            ),
+            "GNC 730310BRICKPLA BRICK *NJ",
+        )
+
+    def test_ach_deposit_strips_prefix_keeps_account_suffix(self):
+        """ACH family: strip the type prefix but keep the trailing
+        ****<digits> reference — useful for matching recurring billing."""
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description(
+                "ACHDEPOSIT,WILLIS NORTHAMEPAYROLL*BM***000120888"
+            ),
+            "WILLIS NORTHAMEPAYROLL*BM***000120888",
+        )
+
+    def test_ach_debit(self):
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description("ACHDEBIT,CRUNCHFITCLUBFEES****300238869"),
+            "CRUNCHFITCLUBFEES****300238869",
+        )
+
+    def test_ach_iat_debit(self):
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description("ACHIATDEBIT,TSBRETURNSLTDIATPAYPAL****339246657"),
+            "TSBRETURNSLTDIATPAYPAL****339246657",
+        )
+
+    def test_electronicpmt_web_strips_prefix_and_space(self):
+        """ELECTRONICPMT-WEB has a comma + space delimiter, not just comma."""
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description(
+                "ELECTRONICPMT-WEB, AMZ_STORECRD_PMTPAYMENT****78116246568"
+            ),
+            "AMZ_STORECRD_PMTPAYMENT****78116246568",
+        )
+
+    def test_realtimepymt(self):
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description("REALTIMEPYMT, VENMO"),
+            "VENMO",
+        )
+
+    def test_ccddeposit(self):
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description("CCDDEPOSIT,EBAYINCJBYJVCDUPAYMENTSA3OWE1HQISDLSBM"),
+            "EBAYINCJBYJVCDUPAYMENTSA3OWE1HQISDLSBM",
+        )
+
+    def test_zelle_without_token_unchanged(self):
+        """If the Zelle pattern doesn't match (e.g. missing the alphanum token),
+        leave it raw rather than emit a malformed cleanup."""
+        from src.parser.tdbank import _clean_description
+        self.assertEqual(
+            _clean_description("TDZELLESENT,plain text"),
+            "TDZELLESENT,plain text",
+        )
+
+
+class TestTdbankParserIntegration(unittest.TestCase):
+    """End-to-end: real TD PDFs should produce no descriptions still
+    matching the airtight 'polluted' signal after parsing."""
+
+    # The compound shape: <TYPE>,*****<digits>[, ]AUT<6digits> — this is
+    # TD-internal noise that no organic merchant name would ever match.
+    AUT_COMPOUND_RE = re.compile(r"^[A-Z]+,\*+\d+[, ]AUT\d{6}")
+    ZELLE_RAW_RE = re.compile(r"^TDZELLE(?:SENT|RECEIVED),")
+    ACH_ELECTRONIC_RE = re.compile(
+        r"^(?:ACHDEPOSIT|ACHDEBIT|ACHIATDEBIT|CCDDEPOSIT|"
+        r"ELECTRONICPMT-WEB|RTPRCVD|REALTIMEPYMT),"
+    )
+
+    def test_no_polluted_descriptions_after_parse(self):
+        pdf_files = list(INPUT_DIR.glob("tdbank/*.pdf"))
+        if not pdf_files:
+            self.skipTest("No TD Bank PDF files in input/tdbank/")
+        from src.parser.tdbank import parse_statement
+        for pdf_file in pdf_files:
+            data = parse_statement(str(pdf_file))
+            for txn in data.transactions:
+                self.assertIsNone(
+                    self.AUT_COMPOUND_RE.match(txn.description),
+                    f"{pdf_file.name}: AUT-compound prefix not stripped: {txn.description!r}",
+                )
+                self.assertIsNone(
+                    self.ZELLE_RAW_RE.match(txn.description),
+                    f"{pdf_file.name}: raw Zelle prefix not stripped: {txn.description!r}",
+                )
+                self.assertIsNone(
+                    self.ACH_ELECTRONIC_RE.match(txn.description),
+                    f"{pdf_file.name}: ACH/electronic prefix not stripped: {txn.description!r}",
+                )
 
 
 if __name__ == "__main__":

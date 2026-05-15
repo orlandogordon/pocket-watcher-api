@@ -14,9 +14,70 @@ logger = get_logger(__name__)
 
 
 DATES = {
-    'Jan': '01/', 'Feb': '02/', 'Mar': '03/', 'Apr': '04/', 'May': '05/', 'Jun': '06/', 
+    'Jan': '01/', 'Feb': '02/', 'Mar': '03/', 'Apr': '04/', 'May': '05/', 'Jun': '06/',
     'Jul': '07/', 'Aug': '08/', 'Sep': '09/', 'Oct': '10/', 'Nov': '11/', 'Dec': '12/'
 }
+
+
+# Compound debit / ATM family. TD wraps the merchant in a type prefix +
+# masked card + auth code; everything before the merchant is bank-internal
+# noise that pollutes merchant extraction and LLM categorization input.
+# Example raw forms:
+#   DEBITCARDPURCHASE,*****30081855819,AUT100920VISADDAPUR MICROSOFTXBOX MSBILLINFO *WA
+#   ATMCASHDEPOSIT,*****30089881312 AUT022021ATMCASHDEPOSIT 849FISCHERBLVD TOMSRIVER *NJ
+#   TDATMDEBITAP,*****30089881312,AUT122524DDAWITHDRAW AP 1101HOOPERAVENUE TOMSRIVER *NJ
+# Cleaned (capture group): MICROSOFTXBOX MSBILLINFO *WA
+#
+# Notes on the regex:
+# - Type prefix is `[A-Z]+` rather than enumerated — TD has many variants
+#   (DEBITCARDPURCHASE, DBCRDPURAP, DEBITPOS, POSCREDIT, TDATMDEBITAP, ...)
+#   and new ones appear over time. The airtight "polluted" signal is the
+#   `,*****<digits>[, ]AUT<6digits>` middle, not any specific prefix word.
+# - Separator between card and AUT is comma for most, space for the ATM*
+#   family.
+# - Optional ` AP` after the middle token covers Apple Pay variants like
+#   `DDAWITHDRAW AP <merchant>`.
+_COMPOUND_DEBIT_RE = re.compile(
+    r"^[A-Z]+,\*+\d+[, ]AUT\d{6}[A-Z]+(?:\s+AP)? (.+)$"
+)
+
+# ACH / electronic-payment family. Different shape from the AUT-compound
+# family — no card mask, no auth code, just `<TYPE>,<merchant>`. The
+# trailing masked account / txn-id is often a recurring-billing reference
+# that helps match same-merchant rows, so it's preserved.
+# Example raw: ACHDEBIT,CRUNCHFITCLUBFEES****300238869
+# Cleaned:     CRUNCHFITCLUBFEES****300238869
+_ACH_ELECTRONIC_RE = re.compile(
+    r"^(?:ACHDEPOSIT|ACHDEBIT|ACHIATDEBIT|CCDDEPOSIT|"
+    r"ELECTRONICPMT-WEB|RTPRCVD|REALTIMEPYMT),\s*(.+)$"
+)
+
+# Zelle: TD prefixes a transaction id + literal "Zelle" + counterparty name.
+# Direction (sent/received) is captured in transaction_type elsewhere.
+# The token-to-"Zelle" boundary is sometimes a space, sometimes adjacent.
+# Example raw: TDZELLESENT, 214000K0D2LSZelleTRONGHIENGUYEN
+#         or:  TDZELLESENT, 505300G020QW ZelleMATTHEWMIHM
+# Cleaned: Zelle: TRONGHIENGUYEN
+_ZELLE_RE = re.compile(r"^TDZELLE(?:SENT|RECEIVED),\s*[A-Z0-9]+\s*Zelle(.+)$")
+
+
+def _clean_description(description: str) -> str:
+    """Strip TD-specific compound prefixes from a parsed description.
+
+    Preserves the merchant + location + state suffix; drops only the
+    type/card-mask/auth prefix that downstream consumers don't need
+    (the row's transaction_type carries the type info already).
+    """
+    m = _COMPOUND_DEBIT_RE.match(description)
+    if m:
+        return m.group(1)
+    m = _ACH_ELECTRONIC_RE.match(description)
+    if m:
+        return m.group(1)
+    m = _ZELLE_RE.match(description)
+    if m:
+        return f"Zelle: {m.group(1)}"
+    return description
 
 def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses a TD Bank PDF statement from a file path or in-memory stream."""
@@ -226,7 +287,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 transactions.append(
                     ParsedTransaction(
                         transaction_date=parsed_date,
-                        description=description.replace('\n', ' ').strip(),
+                        description=_clean_description(description.replace('\n', ' ').strip()),
                         amount=amount,
                         transaction_type="Deposit"
                     )
@@ -285,7 +346,7 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 transactions.append(
                     ParsedTransaction(
                         transaction_date=parsed_date,
-                        description=description.replace('\n', ' ').strip(),
+                        description=_clean_description(description.replace('\n', ' ').strip()),
                         amount=amount,
                         transaction_type="Purchase"
                     )
