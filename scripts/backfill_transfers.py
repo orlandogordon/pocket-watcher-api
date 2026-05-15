@@ -1,8 +1,7 @@
 """One-shot: backfill TRANSFER_OUT classification + OFFSETS pairing
 across all users.
 
-What it does, in order:
-
+Forward pass (#39):
 1. Backup test.db -> test.db.bak.<timestamp>.
 2. For each user, load all non-source accounts (currently excludes LOAN
    per todo #39 — flipped on once todo #40 lands).
@@ -11,10 +10,20 @@ What it does, in order:
    type to TRANSFER_OUT and recompute `transaction_hash` atomically.
 4. Run the Tier B pairing pass; for unique-closest-date Tier-A-confirmed
    pairs, auto-create an OFFSETS relationship.
-5. For each checking/savings account that had any row reclassified, call
-   `recalculate_non_investment_snapshots` over the affected date range so
-   snapshot history matches the new types.
-6. --dry-run prints the candidate set without writing.
+
+Reverse pass (#51):
+5. Iterate every TRANSFER_OUT row on the user's CHECKING/SAVINGS
+   accounts; re-run the classifier. If it now returns PURCHASE
+   (e.g. card-mask false positive that survived #39 because the old
+   classifier didn't strip card masks, or stopword-tightening since #49),
+   downgrade the row to PURCHASE with hash recompute. Conservative
+   policy on the partner row: if an OFFSETS relationship exists, delete
+   it but leave the partner row's type alone — the partner was likely
+   set independently by its own parser (e.g. Amex "PAYMENT" -> TRANSFER_IN).
+
+6. For each affected account, call `recalculate_non_investment_snapshots`
+   over the touched date range so snapshot history matches the new types.
+7. --dry-run prints the candidate set without writing.
 
 Usage:
     python scripts/backfill_transfers.py --dry-run
@@ -34,6 +43,7 @@ sys.path.append(PROJECT_ROOT)
 from dotenv import load_dotenv
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
+from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
 
 from src.db.core import (
@@ -139,6 +149,90 @@ def reclassify_user(db, user: UserDB, dry_run: bool) -> dict:
     return {"reclassified": reclassified, "affected_accounts": affected}
 
 
+def reverse_reclassify_user(db, user: UserDB, dry_run: bool) -> dict:
+    """#51 reverse pass: TRANSFER_OUT -> PURCHASE for rows the current
+    classifier would no longer classify as transfers (card-mask false
+    positives that pre-date the mask-stripping fix, stopword tightenings
+    since #49, etc.).
+
+    Conservative partner-pair policy: delete the OFFSETS relationship if
+    one exists, but leave the partner row's type alone — the partner was
+    typically set by its own parser (e.g. Amex 'PAYMENT' -> TRANSFER_IN)
+    and is independently correct.
+    """
+    user_accounts = db.query(AccountDB).filter(AccountDB.user_id == user.db_id).all()
+    source_accounts = [a for a in user_accounts if a.account_type in SOURCE_TYPES]
+
+    if not source_accounts:
+        return {"reverted": 0, "offsets_deleted": 0, "affected_accounts": {}}
+
+    affected: dict[int, list] = {}
+    candidate_rows = (
+        db.query(TransactionDB)
+        .options(joinedload(TransactionDB.account))
+        .filter(
+            TransactionDB.user_id == user.db_id,
+            TransactionDB.account_id.in_([a.id for a in source_accounts]),
+            TransactionDB.transaction_type == TransactionType.TRANSFER_OUT,
+        )
+        .all()
+    )
+
+    reverted = 0
+    offsets_deleted = 0
+    for txn in candidate_rows:
+        source = txn.account
+        if source is None:
+            continue
+        result = classify_outflow(
+            description=txn.description or "",
+            source_account_id=source.id,
+            user_accounts=user_accounts,
+        )
+        if result.transaction_type == TransactionType.TRANSFER_OUT:
+            continue
+
+        offsets = (
+            db.query(TransactionRelationshipDB)
+            .filter(
+                TransactionRelationshipDB.relationship_type == RelationshipType.OFFSETS,
+                or_(
+                    TransactionRelationshipDB.from_transaction_id == txn.db_id,
+                    TransactionRelationshipDB.to_transaction_id == txn.db_id,
+                ),
+            )
+            .all()
+        )
+
+        print(
+            f"  [{user.email}] {txn.transaction_date} ${txn.amount} "
+            f"'{(txn.description or '')[:60]}' TRANSFER_OUT -> PURCHASE"
+            + (f" (will delete {len(offsets)} OFFSETS)" if offsets else "")
+        )
+
+        if dry_run:
+            reverted += 1
+            offsets_deleted += len(offsets)
+            continue
+
+        try:
+            update_transaction_type_with_hash(db, txn, TransactionType.PURCHASE)
+        except ValueError as e:
+            print(f"    SKIP (hash collision): {e}")
+            continue
+
+        for rel in offsets:
+            db.delete(rel)
+        offsets_deleted += len(offsets)
+        reverted += 1
+        affected.setdefault(source.id, []).append(txn.transaction_date)
+
+    if not dry_run and reverted:
+        db.commit()
+
+    return {"reverted": reverted, "offsets_deleted": offsets_deleted, "affected_accounts": affected}
+
+
 def pair_user(db, user: UserDB, dry_run: bool) -> int:
     """Run pairing pass; auto-create OFFSETS for high-confidence
     unique-closest-date pairs."""
@@ -208,20 +302,37 @@ def main():
         print(f"Found {len(users)} user(s).")
 
         total_reclassified = 0
-        total_offsets = 0
+        total_reverted = 0
+        total_offsets_created = 0
+        total_offsets_deleted = 0
         for user in users:
-            print(f"\n[user {user.email}]")
-            stats = reclassify_user(db, user, args.dry_run)
-            total_reclassified += stats["reclassified"]
-            paired = pair_user(db, user, args.dry_run)
-            total_offsets += paired
-            if not args.dry_run and stats["affected_accounts"]:
-                recalc_snapshots(db, stats["affected_accounts"], args.dry_run)
+            print(f"\n[user {user.email}] forward pass")
+            fwd = reclassify_user(db, user, args.dry_run)
+            total_reclassified += fwd["reclassified"]
 
+            print(f"\n[user {user.email}] reverse pass")
+            rev = reverse_reclassify_user(db, user, args.dry_run)
+            total_reverted += rev["reverted"]
+            total_offsets_deleted += rev["offsets_deleted"]
+
+            print(f"\n[user {user.email}] pairing pass")
+            paired = pair_user(db, user, args.dry_run)
+            total_offsets_created += paired
+
+            # Merge affected-account date ranges from both passes for snapshot recalc.
+            merged: dict[int, list] = {}
+            for src in (fwd["affected_accounts"], rev["affected_accounts"]):
+                for acct_id, dates in src.items():
+                    merged.setdefault(acct_id, []).extend(dates)
+            if not args.dry_run and merged:
+                recalc_snapshots(db, merged, args.dry_run)
+
+        verb_w = "[DRY-RUN] Would " if args.dry_run else ""
         print(
-            f"\n{'[DRY-RUN] Would reclassify' if args.dry_run else 'Reclassified'} "
-            f"{total_reclassified} row(s). "
-            f"{'Would create' if args.dry_run else 'Created'} {total_offsets} OFFSETS."
+            f"\n{verb_w}reclassify {total_reclassified} PURCHASE -> TRANSFER_OUT, "
+            f"{verb_w}revert {total_reverted} TRANSFER_OUT -> PURCHASE, "
+            f"{verb_w}create {total_offsets_created} OFFSETS, "
+            f"{verb_w}delete {total_offsets_deleted} OFFSETS."
         )
     finally:
         db.close()

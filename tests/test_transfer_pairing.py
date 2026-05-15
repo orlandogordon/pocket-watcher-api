@@ -317,5 +317,134 @@ class TestUpdateTypeWithHash(PairingBase):
         self.assertEqual(txn.transaction_hash, expected)
 
 
+class TestReverseReclassify(PairingBase):
+    """#51 reverse pass: TRANSFER_OUT on CHECKING/SAVINGS that the current
+    classifier would no longer flag should be downgraded to PURCHASE."""
+
+    def _user_obj(self):
+        # The PairingBase fixture has self.user already.
+        return self.user
+
+    def test_reverts_orphan_false_positive(self):
+        """TRANSFER_OUT whose description doesn't match any account token now
+        gets downgraded to PURCHASE."""
+        from scripts.backfill_transfers import reverse_reclassify_user
+
+        # Description that matches none of the seeded accounts (no AMEX,
+        # SCHWAB, CHARLES, etc. tokens, and not the TD checking source).
+        txn = _txn(self.session, self.user.db_id, self.checking.id,
+                   TransactionType.TRANSFER_OUT, 50, date(2026, 2, 1),
+                   "RANDOMMERCHANTNAME 12345")
+        self.session.commit()
+
+        stats = reverse_reclassify_user(self.session, self.user, dry_run=False)
+        self.session.refresh(txn)
+
+        self.assertEqual(stats["reverted"], 1)
+        self.assertEqual(stats["offsets_deleted"], 0)
+        self.assertEqual(txn.transaction_type, TransactionType.PURCHASE)
+
+    def test_reverts_paired_false_positive_deletes_offsets_keeps_partner_type(self):
+        """When the TRANSFER_OUT side is OFFSETS-paired, deleting the
+        relationship is correct but the partner row's type must be left
+        intact (it was set independently by its own parser)."""
+        from scripts.backfill_transfers import reverse_reclassify_user
+
+        out_txn = _txn(self.session, self.user.db_id, self.checking.id,
+                       TransactionType.TRANSFER_OUT, 100, date(2026, 2, 5),
+                       "RANDOMMERCHANTNAME 12345")
+        in_txn = _txn(self.session, self.user.db_id, self.amex.id,
+                      TransactionType.TRANSFER_IN, 100, date(2026, 2, 4),
+                      "AUTOPAY PAYMENT THANK YOU")
+        self.session.flush()
+        rel = TransactionRelationshipDB(
+            id=uuid4(),
+            from_transaction_id=out_txn.db_id,
+            to_transaction_id=in_txn.db_id,
+            relationship_type=RelationshipType.OFFSETS,
+            created_at=datetime.utcnow(),
+        )
+        self.session.add(rel)
+        self.session.commit()
+        rel_id = rel.relationship_id
+
+        stats = reverse_reclassify_user(self.session, self.user, dry_run=False)
+        self.session.refresh(out_txn)
+        self.session.refresh(in_txn)
+
+        self.assertEqual(stats["reverted"], 1)
+        self.assertEqual(stats["offsets_deleted"], 1)
+        self.assertEqual(out_txn.transaction_type, TransactionType.PURCHASE)
+        # Partner type left alone — Amex parser set it correctly.
+        self.assertEqual(in_txn.transaction_type, TransactionType.TRANSFER_IN)
+        # Relationship deleted.
+        self.assertIsNone(
+            self.session.query(TransactionRelationshipDB).filter_by(relationship_id=rel_id).first()
+        )
+
+    def test_leaves_legitimate_transfer_out_alone(self):
+        """A TRANSFER_OUT whose description still matches an account token
+        (e.g. "AMEXEPAYMENT" with an Amex account onboarded) must not be
+        touched."""
+        from scripts.backfill_transfers import reverse_reclassify_user
+
+        txn = _txn(self.session, self.user.db_id, self.checking.id,
+                   TransactionType.TRANSFER_OUT, 200, date(2026, 2, 8),
+                   "ELECTRONICPMT-WEB AMEXEPAYMENT")
+        self.session.commit()
+
+        stats = reverse_reclassify_user(self.session, self.user, dry_run=False)
+        self.session.refresh(txn)
+
+        self.assertEqual(stats["reverted"], 0)
+        self.assertEqual(txn.transaction_type, TransactionType.TRANSFER_OUT)
+
+    def test_ignores_purchase_rows(self):
+        """Reverse pass must only touch TRANSFER_OUT — PURCHASE rows are
+        the forward pass's domain."""
+        from scripts.backfill_transfers import reverse_reclassify_user
+
+        txn = _txn(self.session, self.user.db_id, self.checking.id,
+                   TransactionType.PURCHASE, 25, date(2026, 2, 9),
+                   "RANDOMMERCHANTNAME")
+        self.session.commit()
+
+        stats = reverse_reclassify_user(self.session, self.user, dry_run=False)
+        self.session.refresh(txn)
+
+        self.assertEqual(stats["reverted"], 0)
+        self.assertEqual(txn.transaction_type, TransactionType.PURCHASE)
+
+    def test_idempotent(self):
+        """Running the reverse pass twice must produce the same result —
+        no further reverts on the second run."""
+        from scripts.backfill_transfers import reverse_reclassify_user
+
+        _txn(self.session, self.user.db_id, self.checking.id,
+             TransactionType.TRANSFER_OUT, 50, date(2026, 2, 10),
+             "RANDOMMERCHANTNAME 12345")
+        self.session.commit()
+
+        first = reverse_reclassify_user(self.session, self.user, dry_run=False)
+        second = reverse_reclassify_user(self.session, self.user, dry_run=False)
+
+        self.assertEqual(first["reverted"], 1)
+        self.assertEqual(second["reverted"], 0)
+
+    def test_dry_run_does_not_write(self):
+        from scripts.backfill_transfers import reverse_reclassify_user
+
+        txn = _txn(self.session, self.user.db_id, self.checking.id,
+                   TransactionType.TRANSFER_OUT, 50, date(2026, 2, 11),
+                   "RANDOMMERCHANTNAME 12345")
+        self.session.commit()
+
+        stats = reverse_reclassify_user(self.session, self.user, dry_run=True)
+        self.session.refresh(txn)
+
+        self.assertEqual(stats["reverted"], 1)
+        self.assertEqual(txn.transaction_type, TransactionType.TRANSFER_OUT)
+
+
 if __name__ == "__main__":
     unittest.main()
