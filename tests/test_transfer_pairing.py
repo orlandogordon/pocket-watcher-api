@@ -291,7 +291,7 @@ class TestUpdateTypeWithHash(PairingBase):
         # Set the hash to the proper PURCHASE hash so we can verify the change.
         txn.transaction_hash = generate_transaction_hash(
             user_id=self.user.db_id,
-            institution_name=self.checking.institution_name,
+            account_id=self.checking.id,
             transaction_date=txn.transaction_date,
             transaction_type_value="PURCHASE",
             amount=txn.amount,
@@ -308,7 +308,7 @@ class TestUpdateTypeWithHash(PairingBase):
 
         expected = generate_transaction_hash(
             user_id=self.user.db_id,
-            institution_name=self.checking.institution_name,
+            account_id=self.checking.id,
             transaction_date=txn.transaction_date,
             transaction_type_value="TRANSFER_OUT",
             amount=txn.amount,

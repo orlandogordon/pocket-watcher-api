@@ -13,7 +13,7 @@ logger = get_logger(__name__)
 def _hash_regular_transaction(
     parsed_txn: ParsedTransaction,
     user_id: int,
-    institution_name: str,
+    account_id: int,
 ) -> str:
     """
     Build a SHA-256 hash for a parsed regular transaction.
@@ -22,7 +22,7 @@ def _hash_regular_transaction(
     txn_type_value = TransactionType[parsed_txn.transaction_type.upper()].value
     return generate_transaction_hash(
         user_id=user_id,
-        institution_name=institution_name,
+        account_id=account_id,
         transaction_date=parsed_txn.transaction_date,
         transaction_type_value=txn_type_value,
         amount=parsed_txn.amount,
@@ -61,8 +61,7 @@ def _serialize_existing_investment_transaction(txn: InvestmentTransactionDB) -> 
 def analyze_regular_transactions(
     transactions: List[ParsedTransaction],
     user_id: int,
-    institution_name: str,
-    account_id: Optional[int],
+    account_id: int,
     db: Session,
 ) -> Tuple[List[Dict], List[Dict]]:
     """
@@ -74,6 +73,8 @@ def analyze_regular_transactions(
     """
     if not transactions:
         return [], []
+    if account_id is None:
+        raise ValueError("analyze_regular_transactions requires account_id (used in transaction hash)")
 
     # Pre-fetch all existing transaction hashes for this user
     existing_hashes: Dict[str, TransactionDB] = {
@@ -92,7 +93,7 @@ def analyze_regular_transactions(
         temp_id = f"txn_{i:04d}"
 
         try:
-            base_hash = _hash_regular_transaction(parsed_txn, user_id, institution_name)
+            base_hash = _hash_regular_transaction(parsed_txn, user_id, account_id)
         except KeyError:
             logger.warning(f"Unknown transaction type '{parsed_txn.transaction_type}' — flagging as rejected")
             rejected.append({
@@ -195,8 +196,7 @@ def analyze_regular_transactions(
 def analyze_investment_transactions(
     transactions: List[ParsedInvestmentTransaction],
     user_id: int,
-    institution_name: str,
-    account_id: Optional[int],
+    account_id: int,
     db: Session,
 ) -> Tuple[List[Dict], List[Dict]]:
     """
@@ -205,6 +205,8 @@ def analyze_investment_transactions(
     """
     if not transactions:
         return [], []
+    if account_id is None:
+        raise ValueError("analyze_investment_transactions requires account_id (used in transaction hash)")
 
     # Pre-fetch existing investment transaction hashes
     existing_hashes: Dict[str, InvestmentTransactionDB] = {
@@ -220,7 +222,7 @@ def analyze_investment_transactions(
 
     for i, parsed_txn in enumerate(transactions):
         temp_id = f"inv_{i:04d}"
-        base_hash = generate_investment_transaction_hash(parsed_txn, user_id, institution_name)
+        base_hash = generate_investment_transaction_hash(parsed_txn, user_id, account_id)
 
         parsed_data = {
             "transaction_date": str(parsed_txn.transaction_date),

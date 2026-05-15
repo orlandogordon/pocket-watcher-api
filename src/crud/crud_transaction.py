@@ -121,7 +121,7 @@ def validate_refund_allocation(
 
 def generate_transaction_hash(
     user_id: int,
-    institution_name: str,
+    account_id: int,
     transaction_date,
     transaction_type_value: str,
     amount,
@@ -131,13 +131,19 @@ def generate_transaction_hash(
     """Generate a hash for transaction deduplication based on stable data.
 
     Args:
+        account_id: The integer FK to AccountDB. Used in the hash so two
+                    accounts at the same institution don't dedup against
+                    each other, and so renames of institution_name don't
+                    break re-upload dedup. See backend todo #52.
         transaction_type_value: The string value of the transaction type enum (e.g. "PURCHASE").
         make_unique: If True, append a UUID to guarantee a unique hash.
                      Used for approved duplicates in the preview flow.
     """
+    if account_id is None:
+        raise ValueError("generate_transaction_hash requires a non-None account_id")
     hash_string = (
         f"{user_id}|"
-        f"{institution_name.lower()}|"
+        f"{account_id}|"
         f"{transaction_date}|"
         f"{transaction_type_value}|"
         f"{amount}|"
@@ -165,14 +171,14 @@ def update_transaction_type_with_hash(
     if txn.transaction_type == new_type:
         return txn
 
-    if txn.account is None:
+    if txn.account_id is None:
         raise ValueError(
-            f"Cannot recompute hash for transaction {txn.id}: no account loaded"
+            f"Cannot recompute hash for transaction {txn.id}: no account_id"
         )
 
     new_hash = generate_transaction_hash(
         user_id=txn.user_id,
-        institution_name=txn.account.institution_name,
+        account_id=txn.account_id,
         transaction_date=txn.transaction_date,
         transaction_type_value=new_type.value,
         amount=txn.amount,
@@ -248,15 +254,17 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
         if subcategory.parent_category_id != category_id:
             raise ValueError(f"Sub-category '{subcategory.name}' does not belong to category ID {category_id}")
 
-    # Generate transaction hash for deduplication
-    institution_name = account.institution_name if account else ""
+    # Generate transaction hash for deduplication. For account-less manual
+    # transactions, force a unique hash — they're not re-importable so dedup
+    # doesn't apply; this just satisfies the not-null hash column.
     transaction_hash = generate_transaction_hash(
         user_id=user_id,
-        institution_name=institution_name,
+        account_id=account_id if account_id is not None else 0,
         transaction_date=transaction_data.transaction_date,
         transaction_type_value=transaction_data.transaction_type.value,
         amount=transaction_data.amount,
         description=transaction_data.description,
+        make_unique=account_id is None,
     )
 
     # Check for duplicate transaction
@@ -738,7 +746,7 @@ def bulk_create_transactions(db: Session, user_id: int, transaction_import: Tran
             # Generate hash for deduplication
             transaction_hash = generate_transaction_hash(
                 user_id=user_id,
-                institution_name=account.institution_name,
+                account_id=account.id,
                 transaction_date=transaction_data.transaction_date,
                 transaction_type_value=transaction_data.transaction_type.value,
                 amount=transaction_data.amount,
@@ -1289,7 +1297,6 @@ def bulk_create_transactions_from_parsed_data(
     db: Session,
     user_id: int,
     transactions: List[ParsedTransaction],
-    institution_name: str,
     account_id: Optional[int],
     skip_duplicates: bool = True,
 ) -> Tuple[List[TransactionDB], List[Dict]]:
@@ -1300,7 +1307,6 @@ def bulk_create_transactions_from_parsed_data(
         db: Database session
         user_id: User ID
         transactions: List of parsed transactions
-        institution_name: Institution name for hashing
         account_id: Optional account ID to associate transactions with
         skip_duplicates: If True, skip duplicate transactions (default: True)
 
@@ -1341,17 +1347,15 @@ def bulk_create_transactions_from_parsed_data(
             logger.warning(f"Skipping transaction with unknown type: {t_data.transaction_type}")
             continue
 
-        # Build hash directly (avoids constructing TransactionCreate with UUID requirement)
-        txn_type_value = transaction_type_enum.value
-        hash_string = (
-            f"{user_id}|"
-            f"{institution_name.lower()}|"
-            f"{t_data.transaction_date}|"
-            f"{txn_type_value}|"
-            f"{t_data.amount}|"
-            f"{t_data.description or ''}"
+        transaction_hash = generate_transaction_hash(
+            user_id=user_id,
+            account_id=account.id if account else 0,
+            transaction_date=t_data.transaction_date,
+            transaction_type_value=transaction_type_enum.value,
+            amount=t_data.amount,
+            description=t_data.description,
+            make_unique=account is None,
         )
-        transaction_hash = hashlib.sha256(hash_string.encode()).hexdigest()
 
         # Check if transaction hash existed in database BEFORE this upload
         is_duplicate = transaction_hash in existing_hashes_dict

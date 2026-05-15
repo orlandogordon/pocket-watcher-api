@@ -353,16 +353,28 @@ async def create_statement_preview(
             except Exception:
                 logger.warning(f"Could not resolve account from last4: {parsed_data.account_info.account_number_last4}")
 
+    # Account is required for duplicate detection (account_id is part of
+    # the transaction hash — see backend todo #52). If neither the user
+    # supplied account_uuid nor auto-detect-by-last4 resolved one, we can't
+    # build hashes, so fail the preview with an actionable error.
+    if not resolved_account_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Could not resolve an account for this statement. "
+                "Pass account_uuid explicitly, or ensure the statement's "
+                "account number matches an existing account."
+            ),
+        )
+
     # Tier A: reclassify checking/savings outflows that look like payments
     # to other user-owned accounts (CC, INVESTMENT, LOAN, OTHER) as
     # TRANSFER_OUT before dedup runs. Returns suggestions keyed by parsed
     # position; we inject those onto the preview items below.
-    source_account = None
-    if resolved_account_id:
-        source_account = db.query(AccountDB).filter(
-            AccountDB.id == resolved_account_id,
-            AccountDB.user_id == user_id,
-        ).first()
+    source_account = db.query(AccountDB).filter(
+        AccountDB.id == resolved_account_id,
+        AccountDB.user_id == user_id,
+    ).first()
     user_accounts = db.query(AccountDB).filter(AccountDB.user_id == user_id).all()
     tier_a_suggestions = classify_parsed_transactions(
         parsed_data.transactions, source_account, user_accounts
@@ -370,7 +382,7 @@ async def create_statement_preview(
 
     # Analyze duplicates
     rejected_txns, ready_txns = analyze_regular_transactions(
-        parsed_data.transactions, user_id, institution, resolved_account_id, db
+        parsed_data.transactions, user_id, resolved_account_id, db
     )
 
     if tier_a_suggestions:
@@ -388,7 +400,7 @@ async def create_statement_preview(
                 "matched_token": sug.matched_token,
             }
     rejected_inv, ready_inv = analyze_investment_transactions(
-        parsed_data.investment_transactions, user_id, institution, resolved_account_id, db
+        parsed_data.investment_transactions, user_id, resolved_account_id, db
     )
 
     # Run LLM processing across every preview item (both regular and investment,
@@ -938,7 +950,7 @@ async def confirm_statement_import(
         parsed_type_value = TransactionType[parsed_data["transaction_type"].upper()].value
         txn_hash = generate_transaction_hash(
             user_id=user_id,
-            institution_name=institution,
+            account_id=account_id,
             transaction_date=parsed_data['transaction_date'],
             transaction_type_value=parsed_type_value,
             amount=parsed_data['amount'],
@@ -1069,7 +1081,7 @@ async def confirm_statement_import(
         )
 
         inv_hash = generate_investment_transaction_hash(
-            parsed_inv, user_id, institution, make_unique=is_approved_dup
+            parsed_inv, user_id, account_id, make_unique=is_approved_dup
         )
         if is_approved_dup:
             duplicates_imported += 1

@@ -215,7 +215,6 @@ def process_local_file(db, file_path, institution, account_id, user_id):
                 db=db,
                 user_id=user_id,
                 transactions=parsed_data.transactions,
-                institution_name=institution,
                 account_id=account_id,
             )
             applied, fallthroughs, needs_review = _apply_cleanup_to_created(
@@ -247,7 +246,6 @@ def process_local_file(db, file_path, institution, account_id, user_id):
                 db=db,
                 user_id=user_id,
                 transactions=parsed_data.investment_transactions,
-                institution_name=institution,
                 account_id=account_id,
             )
             # Investment rows: no category columns, no tag join — just walk

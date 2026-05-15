@@ -130,7 +130,7 @@ class TestConfirmEndpoint(TransfersAPIBase):
         out = TransactionDB(
             id=uuid4(), user_id=self.user.db_id, account_id=self.checking.id,
             transaction_hash=generate_transaction_hash(
-                user_id=self.user.db_id, institution_name=self.checking.institution_name,
+                user_id=self.user.db_id, account_id=self.checking.id,
                 transaction_date=date(2026, 2, 5), transaction_type_value="PURCHASE",
                 amount=Decimal("100"), description="AMEXEPAYMENT",
             ),
@@ -177,7 +177,7 @@ class TestConfirmEndpoint(TransfersAPIBase):
         out = TransactionDB(
             id=uuid4(), user_id=self.user.db_id, account_id=self.checking.id,
             transaction_hash=generate_transaction_hash(
-                user_id=self.user.db_id, institution_name=self.checking.institution_name,
+                user_id=self.user.db_id, account_id=self.checking.id,
                 transaction_date=date(2026, 2, 5), transaction_type_value="PURCHASE",
                 amount=Decimal("100"), description="AMEXEPAYMENT",
             ),

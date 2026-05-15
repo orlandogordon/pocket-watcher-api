@@ -413,16 +413,20 @@ def map_transaction_type_to_enum(transaction_type_str: str) -> Optional[Investme
     # No mapping found
     return None
 
-def generate_investment_transaction_hash(transaction_data: ParsedInvestmentTransaction, user_id: int, institution_name: str, make_unique: bool = False) -> str:
+def generate_investment_transaction_hash(transaction_data: ParsedInvestmentTransaction, user_id: int, account_id: int, make_unique: bool = False) -> str:
     """Generate a hash for investment transaction deduplication.
 
     Args:
+        account_id: The integer FK to AccountDB. See backend todo #52 for
+                    why this is account_id rather than institution_name.
         make_unique: If True, append a UUID to guarantee a unique hash.
                      Used for approved duplicates in the preview flow.
     """
+    if account_id is None:
+        raise ValueError("generate_investment_transaction_hash requires a non-None account_id")
     hash_string = (
         f"{user_id}|"
-        f"{institution_name.lower()}|"
+        f"{account_id}|"
         f"{transaction_data.transaction_date}|"
         f"{transaction_data.transaction_type}|"
         f"{transaction_data.symbol}|"
@@ -457,7 +461,6 @@ def bulk_create_investment_transactions_from_parsed_data(
     db: Session,
     user_id: int,
     transactions: List[ParsedInvestmentTransaction],
-    institution_name: str,
     account_id: Optional[int],
     skip_duplicates: bool = True,
 ) -> Tuple[List[InvestmentTransactionDB], List[Dict], Optional[int]]:
@@ -468,7 +471,6 @@ def bulk_create_investment_transactions_from_parsed_data(
         db: Database session
         user_id: User ID
         transactions: List of parsed investment transactions
-        institution_name: Institution name for hashing
         account_id: Optional account ID to associate transactions with
         skip_duplicates: If True, skip duplicate transactions (default: True)
 
@@ -499,7 +501,7 @@ def bulk_create_investment_transactions_from_parsed_data(
 
     for t_data in transactions:
         # Generate transaction hash for deduplication
-        transaction_hash = generate_investment_transaction_hash(t_data, user_id, institution_name)
+        transaction_hash = generate_investment_transaction_hash(t_data, user_id, account.id if account else 0, make_unique=account is None)
 
         # Check if transaction hash existed in database BEFORE this upload
         existing_transaction = existing_hashes_dict.get(transaction_hash)
