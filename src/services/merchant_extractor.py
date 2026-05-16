@@ -24,7 +24,8 @@ from typing import Callable, Optional
 # entries here when a new fixed-string payee shows up across institutions.
 
 _MERCHANT_ALIASES: dict[str, str] = {
-    # TD Bank ACH/electronic shapes
+    # TD Bank ACH/electronic shapes (pre-#50 spaced forms, kept for any
+    # historical descriptions still in spaced shape).
     "HESAA PAYMENT": "HESAA",
     "AMEX EPAYMENT ACH PMT": "American Express",
     "AMZ_STORECRD_PMT PAYMENT": "Amazon",
@@ -36,6 +37,27 @@ _MERCHANT_ALIASES: dict[str, str] = {
     "STATE OF N.J. NJSTTAXRFD": "State of NJ",
     "IRS TREAS 310 TAX REF": "IRS",
     "NYC FINANCE PARKING TK": "NYC Finance",
+    # TD Bank ACH squashed-token shapes (post-#50). The parser's
+    # _ACH_ELECTRONIC_RE strips the leading `ACHDEBIT,` / `ELECTRONICPMT-WEB,`
+    # prefix, leaving a squashed payee token plus a trailing reference id.
+    # The reference id is stripped by _strip_trailing_ref() before lookup,
+    # so the keys here are the bare payee token.
+    "CRUNCHFITCLUBFEES":        "Crunch Fitness",
+    "ROBINHOODDEBITS":          "Robinhood",
+    "DEPTEDUCATIONSTUDENTLN":   "Dept of Education",
+    "AMEXEPAYMENTACHPMT":       "American Express",
+    "AMZSTORECRDPMT":           "Amazon",
+    "AMZ_STORECRD_PMTPAYMENT":  "Amazon",
+    "AMAZONCORPSYFPAYMNT":      "Amazon",
+    "PNCBANKNAREGSALARY":       "PNC Bank",
+    "ACTALENT,INC.DIRDEP":      "Actalent",
+    # NJCLASS (older shape) and HESAAPAYMENTP (post-2024 shape) refer to
+    # the same NJ state student-loan obligation — unify under "HESAA".
+    "STATEOFNJNJCLASSLN":       "HESAA",
+    "HESAAPAYMENTP":            "HESAA",
+    # Willis Towers Watson payroll, two payment-method codes.
+    "WILLIS NORTHAMEPAYROLL*BM": "Willis Towers Watson",
+    "WILLIS AMERICASPAYROLL*BG": "Willis Towers Watson",
     # Amazon Synchrony fixed payment shapes
     "ONLINE PYMT-THANK YOU ATLANTA GA": None,  # generic — explicit None
     "MOBILE PAYMENT - THANK YOU": None,
@@ -73,12 +95,31 @@ _WRAPPED_PATTERNS: tuple[re.Pattern, ...] = (
 
 # ---------- shape rejectors ----------
 
-# A captured merchant slot that begins with "<digits> <UPPERCASE>" is almost
-# certainly a street address ("1120 TILTON RD"), not a merchant. Reject.
-_ADDRESS_LIKE = re.compile(r"^\d+\s+[A-Z]")
+# A captured merchant slot that begins with digits followed by uppercase letters
+# is almost certainly a street address. Two shapes show up:
+#   - Spaced: "1120 TILTON RD" (Amex / pre-strip TD)
+#   - Squashed: "849FISCHERBLVD" (post-#50 TD strip preserves no whitespace
+#     between the leading number and the street name)
+# The `\s*` allows zero-or-more spaces so both forms are rejected.
+_ADDRESS_LIKE = re.compile(r"^\d+\s*[A-Z]")
 
 # Standalone all-caps single token that's purely a state abbreviation suffix
 _BARE_STATE = re.compile(r"^[A-Z]{2}$")
+
+
+# Generic descriptor tokens that should never form a merchant name on their
+# own. Post-#48 AmEx strips the leading "AplPay " from rows like
+# "AplPay STORE TOMS RIVER NJ", leaving captures like merchant="Store",
+# "Max", "The Club" — useless for grouping and unrelated businesses get
+# collapsed under the same name. A capture composed entirely of these
+# tokens is rejected. Multi-word captures that *contain* a generic token
+# (e.g. "5TH STREET DELI", "DOWNTOWN CAFE LLC") still pass.
+_NOT_A_MERCHANT: frozenset[str] = frozenset({
+    "THE", "STORE", "STORES", "SHOP", "SHOPS",
+    "MAX", "MIN", "CLUB", "MARKET",
+    "CAFE", "BAR", "GRILL", "DELI", "RESTAURANT",
+    "CO", "INC", "LLC", "LTD",
+})
 
 
 # ---------- prefix-stripped aliases ----------
@@ -92,7 +133,12 @@ _PREFIX_ALIASES: tuple[tuple[re.Pattern, str], ...] = (
     (re.compile(r"^SCHWAB1INT"), "Schwab"),
     (re.compile(r"^AMEX\s+EPAYMENT\b"), "American Express"),
     (re.compile(r"^AMZ_STORECRD_PMT\b"), "Amazon"),
-    (re.compile(r"^TD\s+ZELLE\s+(?:SENT|RECEIVED)\b"), "Zelle"),
+    # Post-#50 the TD parser rewrites Zelle rows to `Zelle: <counterparty>`.
+    # The counterparty name is preserved in the description; this alias
+    # keeps the merchant column as a stable "Zelle" so all Zelle activity
+    # groups together in analytics (the row's transfer classification
+    # carries the counterparty-specific info separately).
+    (re.compile(r"^ZELLE:\s+"), "Zelle"),
     (re.compile(r"^TfrTDBank", re.IGNORECASE), "TD Bank"),
     (re.compile(r"^WHOLEFOODS#?\b"), "Whole Foods"),
     (re.compile(r"^AMAZON\s+PRIME\b"), "Amazon Prime"),
@@ -102,26 +148,35 @@ _PREFIX_ALIASES: tuple[tuple[re.Pattern, str], ...] = (
 
 # ---------- TD Bank purchase pattern ----------
 #
-# Captures the merchant slot in card-purchase rows. Anchored to purchase-only
-# prefixes — withdrawal / cash-deposit rows fall through to None even though
-# they have similar shape (those rows have a street address, not a merchant).
+# Captures the merchant slot in card-purchase rows after the parser's
+# _clean_description has stripped the AUT compound prefix. Post-#50 shape:
+#   MICROSOFTXBOX MSBILLINFO *WA
+#   WAWA FUEL/CONVENIENCE TOMS RIVER *NJ
+#   849FISCHERBLVD TOMSRIVER *NJ            (address — rejected)
+# Anchored on the trailing `*<STATE>` suffix that #50's strip leaves intact.
+# Merchant is everything before the city; city is the last whitespace-delimited
+# uppercase run before the `*ST`. The single-space layout of post-strip rows
+# means the lazy/greedy boundary between merchant and city is heuristic, but
+# the trailing store-number strip cleans up the common case where the parser
+# leaves a numeric store id attached.
 
-_TDBANK_PURCHASE_PREFIX = re.compile(
-    r"^(?:VISA\s+DDA\s+(?:PUR|REF)|DDA\s+PURCHASE)\s+(?:AP\s+)?\d+\s+(?P<rest>.+)$"
+_TDBANK_PURCHASE_POST_CLEAN = re.compile(
+    r"^(?P<merchant>.+?)\s+(?P<city>[A-Z][A-Z\s.]+?)\s+\*(?P<state>[A-Z]{2})\s*$"
 )
 
 
 def _tdbank_purchase(raw: str, norm: str) -> Optional[str]:
-    m = _TDBANK_PURCHASE_PREFIX.match(raw)
+    m = _TDBANK_PURCHASE_POST_CLEAN.match(raw)
     if not m:
         return None
-    rest = m.group("rest")
-    # The rest is "<MERCHANT>  <CITY>  * <ST>" with 2+ spaces between fields.
-    parts = re.split(r"\s{2,}", rest)
-    if len(parts) < 2:
-        return None
-    merchant_raw = parts[0].strip()
+    merchant_raw = m.group("merchant").strip()
     if not merchant_raw or _ADDRESS_LIKE.match(merchant_raw):
+        return None
+    # Reject bare-number captures. The lazy merchant pattern stops at the
+    # first whitespace, so `1120 TILTON RD NORTHFIELD *NJ` captures
+    # merchant=`1120` (which then bypasses _ADDRESS_LIKE since that rejector
+    # requires letters after the digits).
+    if not any(ch.isalpha() for ch in merchant_raw):
         return None
     # Drop trailing store-number-like digits (e.g. "WALGREENS 6321" -> "WALGREENS").
     merchant_raw = re.sub(r"\s+\d{3,}$", "", merchant_raw)
@@ -185,6 +240,10 @@ def _amex_pos(raw: str, norm: str) -> Optional[str]:
         return None
     if _ADDRESS_LIKE.match(merchant) or _BARE_STATE.match(merchant):
         return None
+    # Reject captures composed entirely of generic descriptor tokens.
+    tokens = merchant.split()
+    if tokens and all(tok in _NOT_A_MERCHANT for tok in tokens):
+        return None
     return _titlecase(merchant)
 
 
@@ -223,9 +282,15 @@ def extract_merchant(institution: Optional[str], raw_description: Optional[str])
         if descriptor in norm:
             return None
 
-    # 2. Exact-match alias table (None values explicitly suppress)
+    # 2. Exact-match alias table (None values explicitly suppress). Try the
+    # normalized form first, then a version with the trailing reference-id
+    # suffix stripped — covers post-#50 TD ACH rows like
+    # `CRUNCHFITCLUBFEES****300238869` whose stable key is the bare token.
     if norm in _MERCHANT_ALIASES:
         return _MERCHANT_ALIASES[norm]
+    norm_stripped = _strip_trailing_ref(norm)
+    if norm_stripped != norm and norm_stripped in _MERCHANT_ALIASES:
+        return _MERCHANT_ALIASES[norm_stripped]
 
     # 3. Prefix-match aliases
     for pattern, merchant in _PREFIX_ALIASES:
@@ -257,6 +322,24 @@ def _normalize_for_match(raw: str) -> str:
     """Collapse internal whitespace and uppercase. Used for alias / generic
     matching. Original raw stays available for substring capture."""
     return re.sub(r"\s+", " ", raw.strip()).upper()
+
+
+# Trailing reference-ID suffix shapes found in TD post-#50 ACH rows:
+#   STATEOFNJNJCLASSLN****41203    (masked stars + digits)
+#   DEPTEDUCATIONSTUDENTLN0000     (bare trailing digits, no stars)
+#   HESAAPAYMENTP19515308          (alpha-then-digits)
+# The optional `*+` covers the masked-account variant; the digits at end
+# are the recurring-billing reference number that changes month-to-month
+# and would otherwise prevent an exact-match alias hit.
+_TRAILING_REF = re.compile(r"(?:\*+)?\d+$")
+
+
+def _strip_trailing_ref(norm: str) -> str:
+    """Strip a trailing reference-id suffix from a normalized description so
+    rows like `CRUNCHFITCLUBFEES****300238869` match the bare alias key
+    `CRUNCHFITCLUBFEES`. Idempotent when no suffix matches."""
+    stripped = _TRAILING_REF.sub("", norm).rstrip()
+    return stripped or norm
 
 
 _SHORT_ACRONYMS = {
