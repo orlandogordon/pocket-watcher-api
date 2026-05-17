@@ -44,7 +44,12 @@ def _load_golden(path: Path) -> list[tuple[dict, str, str]]:
         reader = csv.DictReader(f)
         for row in reader:
             parsed = json.loads(row["raw_parsed_data_json"])
-            out.append((parsed, row["expected_category_uuid"], row["expected_subcategory_uuid"]))
+            # Empty expected cells are treated as None so the row passes when
+            # the LLM emits null (typical for prompt-driven "ambiguous → null"
+            # rows like P2P transfers with no spending context).
+            exp_cat = row["expected_category_uuid"] or None
+            exp_sub = row["expected_subcategory_uuid"] or None
+            out.append((parsed, exp_cat, exp_sub))
     return out
 
 

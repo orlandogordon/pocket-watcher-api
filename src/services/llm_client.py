@@ -103,22 +103,47 @@ _MERCHANT_RULES = """Merchant name rules (applied to `merchant_name`):
 
 
 _CATEGORY_RULES = """Category rules (applied to `suggested_category_uuid` + `suggested_subcategory_uuid`):
+
+**TOKEN PRIORITY — consult BEFORE picking a category.** When the description contains one of these signals, use the indicated category. Token priority OVERRIDES brand-name pattern-matching and OVERRIDES the temptation to default to Restaurants:
+- `FUEL`, `GAS`, `GASOLINE`, or a named gas station (WAWA, EXXON, SHELL, BP, CHEVRON, MOBIL, SUNOCO, VALERO, MARATHON, CITGO, LUKOIL) → Transportation / Gas. The fuel signal beats the convenience-store / restaurant signal even when the brand also sells food (e.g. `WAWA FUEL/CONVENIENCE` → Gas, not Restaurants).
+- `AUTO`, `AUTO INSURANCE`, `CAR INSURANCE`, or a known auto insurer (GEICO, PROGRESSIVE, ALLSTATE, USAA, LIBERTY MUTUAL, FARMERS, ESURANCE) → Transportation / Car Insurance — NOT Housing / Insurance.
+- Home / renters insurance brands (LEMONADE, NATIONWIDE HOMEOWNERS, TRAVELERS HOME, USAA RENTERS) → Housing / Insurance.
+- Health insurance brands (BLUE CROSS, BLUE SHIELD, AETNA, CIGNA, UNITEDHEALTHCARE, KAISER, HUMANA) → Health / Health Insurance.
+- `WIRELESS`, `MOBILE`, `BROADBAND`, `CABLE`, `INTERNET`, electric/gas utility names (CONED, NATIONAL GRID, PSEG, PG&E, EDISON, DUKE ENERGY, PEPCO), wireless carriers (AT&T, T-MOBILE, VERIZON WIRELESS, SPECTRUM, COMCAST, XFINITY, FIOS, MINT MOBILE) → Housing / Utilities. **Wireless carriers are utilities, not insurance.**
+- `PARKING`, `PARK` (in payment context), `MPAY2PARK`, `MPAY`, `PARKMOBILE`, `LAZ PARKING`, `SPOTHERO`, `METER` → Transportation / Parking.
+- `FERRY`, `TRANSIT`, `METROCARD`, MTA, PATH, NJT, BART, METRO, AMTRAK (commuter context) → Transportation / Public Transit.
+- Gym + fitness brands (CRUNCH, PLANET FITNESS, EQUINOX, ANYTIME FITNESS, LA FITNESS, BLINK, CLASSPASS), auto club (AAA), AMAZON PRIME, professional dues → Subscriptions / Memberships. **`CLUBFEES` / `CLUB FEES` suffix is a membership signal, not an education signal.**
+- Warehouse clubs only when the row is the ANNUAL MEMBERSHIP FEE itself (e.g. `COSTCO MEMBERSHIP FEE` → Subscriptions / Memberships). Routine in-store purchases at warehouse clubs (`COSTCO WHSE`, `SAMS CLUB STORE`, `BJ'S WHOLESALE` with no `MEMBERSHIP`/`FEE` token) are Food / Groceries (groceries-typical amount) or Shopping / General (large mixed cart).
+- SaaS brands (CANVA, LINKEDIN PREMIUM, `LINKEDIN PRE*`, ADOBE, MICROSOFT 365, GITHUB, NOTION, FIGMA, DROPBOX, CLAUDE.AI, OPENAI, CHATGPT, ANTHROPIC, GOOGLE ONE, ICLOUD STORAGE) → Subscriptions / Software.
+- Streaming brands (NETFLIX, HULU, SPOTIFY, DISNEY+, HBO MAX, PEACOCK, PARAMOUNT+, APPLE MUSIC, APPLE TV+, YOUTUBE PREMIUM) → Subscriptions / Streaming.
+- News / media subscriptions (NYT, WSJ, WASHINGTON POST, ECONOMIST, SUBSTACK) → Subscriptions / News & Media.
+- Pharmacy chains (CVS, CVS/PHARMACY, WALGREENS, RITE AID, DUANE READE) → Health / Prescriptions. **NOT Personal Care/Nails or Personal Care/Hair** — the new Personal Care subcategories are services (haircut, manicure, massage), not pharmacy products.
+- `APPLE.COM/BILL` is genuinely ambiguous when standalone — it can be iCloud storage (Subscriptions/Software), Apple Music / Apple TV+ (Subscriptions/Streaming), an App Store app purchase, or AppleCare. **Emit null** unless the description carries a disambiguating signal (e.g. `APPLE.COM/BILL APPLE MUSIC` → Streaming; `APPLE.COM/BILL ICLOUD` → Software).
+- `INTEREST CHARGE`, `INTEREST CHARGE ON PURCHASES`, `FINANCE CHARGE`, `INTEREST ASSESSED` → Debt Payment / Credit Card. These are interest accrued on a credit card balance, not bank fees.
+- Fee-shaped descriptions with no merchant context (`MONTHLY MAINTENANCE FEE`, `FOREIGN TRANSACTION FEE`, `OVERDRAFT FEE`, `ATM FEE`, `NSF FEE`, `LATE PAYMENT FEE`, `WIRE TRANSFER FEE`, `STOP PAYMENT FEE`, `RETURNED ITEM FEE`) → Miscellaneous / Bank Fee. These are the bank charging the account itself.
+- Zelle / Venmo / Cash App WITH spending context in the description (e.g. `Zelle: JOHN LANDLORD RENT MARCH`, `VENMO COFFEE WITH SUSAN`, `CASH APP TO MIKE GROCERIES`) → use the context: rent context → Housing / Rent, coffee → Food / Coffee Shops, groceries → Food / Groceries. Only return null when the P2P row has a counterparty name but NO spending context.
+
+**Restaurants requires a POSITIVE food signal** — a recognized restaurant brand (Chipotle, Shake Shack, Halal Guys, etc.), a food-service token in the merchant name (RESTAURANT, GRILL, DELI, PIZZA, BISTRO, BAKERY, TAVERN, EATERY, KITCHEN, NOODLES, RAMEN, SUSHI, TACO, BURGER), or a delivery aggregator + vendor (DOORDASH*X, GRUBHUB*X, UBER EATS *X). Do NOT default to Restaurants when the description is unfamiliar — check the token-priority list above first; if no priority token matches AND no food signal is present, emit null. The "guess Restaurants" default is wrong.
+
 - Pick the SUBCATEGORY first — the UUID MUST be one of the subcategory UUIDs listed below.
-- Its parent category UUID MUST be the parent it's listed under — never mix (e.g. subcategory "General Merchandise" ONLY pairs with parent "Miscellaneous"; "Home Goods" ONLY pairs with parent "Shopping"; these are not interchangeable).
+- Its parent category UUID MUST be the parent it's listed under — never mix (e.g. subcategory "General" ONLY pairs with parent "Shopping"; "Home Goods" ONLY pairs with parent "Shopping"; these are not interchangeable).
 - NEVER emit a UUID that isn't in this list. NEVER invent one.
 - **Both category fields are nullable. Return null for both when the row's purpose is genuinely ambiguous and you'd be guessing rather than reasoning.** Typical case: peer-to-peer transfers (Zelle, Venmo, Cash App) where the source string contains a counterparty's name but no spending context — the same $40 Venmo could be a restaurant split, concert ticket, rent contribution, or loan repayment. Other examples: generic ACH deposits with no recognizable sender, bare-amount entries with no payee. Return null for BOTH category and subcategory together — they always travel as a pair, never split. The user will categorize from the preview UI; null routes the row to a review queue rather than filing it under a catchall at high confidence.
-- Do NOT pick a catchall category just to fill the field. "Miscellaneous / General Merchandise" is the right call when the row IS shopping but the specific subcategory is unclear (e.g. AMZN MKTP with no item context). It is the WRONG call when the row's category is unknown — emit null instead.
-- When no subcategory is a clean fit but the category itself is clear (e.g. "this is shopping, just unclear what kind"), pick "Miscellaneous / General Merchandise". Reserve null for genuine purpose-ambiguity, not subcategory-ambiguity.
+- Do NOT pick a catchall category just to fill the field. "Shopping / General" is the right call when the row IS shopping but the specific subcategory is unclear (e.g. AMZN MKTP with no item context). It is the WRONG call when the row's category is unknown — emit null instead.
+- When no subcategory is a clean fit but the category itself is clear (e.g. "this is shopping, just unclear what kind"), pick "Shopping / General". Reserve null for genuine purpose-ambiguity, not subcategory-ambiguity.
 - For income-shaped transactions (payroll, direct deposit, dividend, interest received), pick under "Income".
+- Income / Investment Income is for DIVIDENDS, INTEREST, and brokerage gains — NOT for marketplace sales. Person-to-person marketplace sales (FACEBOOK MARKETPLACE SALE, CRAIGSLIST SALE, ETSY PAYOUT, EBAY SALE), garage sale proceeds, and one-off paid work (`PAYMENT FROM <person> FOR <work>`) → Income / Other Income.
+- Income / Taxes is BIDIRECTIONAL: tax refunds (IRS TREAS, STATE TAX REFUND) AND tax payments (IRS PAYMENT, ESTIMATED TAX, PROPERTY TAX) both go here.
 - Mortgage payments go to Housing / Mortgage — NOT Debt Payment. Debt Payment is for credit cards, student loans, and car loans only.
 - Student loan servicers (HESAA, Nelnet, MOHELA, Sallie Mae, Navient, Great Lakes, EdFinancial, Dept of Education / DEPTEDUCATION) on payment-shaped rows go to Debt Payment / Student Loan. The merchant token may be concatenated with PAYMENT (e.g. HESAAPAYMENT, NELNETPAYMENT) — preserve all letters of the servicer name; do not drop trailing letters when the token splits.
 - Auto lenders (Ally, Capital One Auto, Toyota Financial Services, Honda Financial, Ford Credit) on payment-shaped rows go to Debt Payment / Car Loan.
 - Home Depot, Lowe's, and similar home-improvement stores go to Housing / Home Repair — NOT Shopping / Home Goods.
-- Cosmetics and beauty stores (Sephora, Ulta, MAC) go to Personal Care / Toiletries — NOT Shopping.
-- Generic Amazon purchases (AMZN MKTP, AMAZON.COM with no further context) go to Miscellaneous / General Merchandise — the item is unknown, so don't commit to Shopping.
+- Cosmetics and beauty stores (Sephora, Ulta, MAC) go to Shopping / Toiletries.
+- Apparel + department + off-price stores (NORDSTROM, NORDSTROM RACK, MACY'S, BLOOMINGDALE'S, SAKS, SAKS OFF 5TH, T.J. MAXX, MARSHALLS, ROSS, BURLINGTON, OLD NAVY, GAP, BANANA REPUBLIC, J.CREW, MADEWELL, ABERCROMBIE, HOLLISTER, AMERICAN EAGLE, AERIE, ANTHROPOLOGIE, URBAN OUTFITTERS, FREE PEOPLE, H&M, ZARA, UNIQLO, FOREVER 21, ASOS, LULULEMON, ATHLETA, NIKE, ADIDAS, FOOT LOCKER, DSW, FAMOUS FOOTWEAR, JCPENNEY, KOHL'S, DILLARD'S) → Shopping / Clothing. The store name alone is sufficient signal — "RACK" / "OFF 5TH" / discount-store suffixes don't change the category.
+- Generic Amazon purchases (AMZN MKTP, AMAZON.COM with no further context) go to Shopping / General — the item is unknown, so don't commit to a specific Shopping subcat.
 - For coffee shops specifically (Starbucks, Blue Bottle, etc.), use Food / Coffee Shops — not Restaurants.
-- For streaming services (Netflix, Spotify, Hulu), use Entertainment / Streaming Services.
-- Video games and gaming platforms (Steam, PlayStation, Xbox) go to Entertainment / Hobbies — NOT Streaming Services."""
+- For streaming services (Netflix, Spotify, Hulu, Disney+, HBO Max, Apple TV+, YouTube Premium, Apple Music), use Subscriptions / Streaming — NOT Entertainment.
+- Video games and gaming platforms (Steam, PlayStation, Xbox) go to Entertainment / Hobbies — NOT Subscriptions / Streaming."""
 
 
 _FEW_SHOT_EXAMPLES = """Examples (raw input -> output JSON):
@@ -136,7 +161,7 @@ Input: {"description": "DIRECT DEPOSIT ACME CORP PAYROLL", "amount": "3250.00", 
 Output: {"merchant_name": "Acme Corp", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "42e344f9-55f1-4f46-9c12-d548658409fb", "confidence": 0.99}
 
 Input: {"description": "NETFLIX.COM LOS GATOS CA", "amount": "15.49", "transaction_type": "PURCHASE"}
-Output: {"merchant_name": "Netflix", "suggested_category_uuid": "78bd0a07-5447-4cb6-b2d6-315d3d4cb4a0", "suggested_subcategory_uuid": "d6762e10-a608-417a-a7a6-87a2977e59e1", "confidence": 0.99}
+Output: {"merchant_name": "Netflix", "suggested_category_uuid": "978bf5d7-68a7-49ce-9f6e-f05ff01f4e07", "suggested_subcategory_uuid": "d6762e10-a608-417a-a7a6-87a2977e59e1", "confidence": 0.99}
 
 Input: {"description": "PAYPAL *STEAM GAMES 4029357733", "amount": "29.99", "transaction_type": "PURCHASE"}
 Output: {"merchant_name": "Steam", "suggested_category_uuid": "78bd0a07-5447-4cb6-b2d6-315d3d4cb4a0", "suggested_subcategory_uuid": "1831cdfa-bc8a-45e7-a552-404ee54b3464", "confidence": 0.95}
@@ -153,6 +178,27 @@ Output: {"merchant_name": "PNC Bank", "suggested_category_uuid": "17ac387d-1817-
 Input: {"description": "ACHDEBIT,HESAAPAYMENTP18514286", "amount": "200.14", "transaction_type": "PURCHASE"}
 Output: {"merchant_name": "HESAA", "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "3280dd39-0173-4754-bdba-17b1a3981e1e", "confidence": 0.92}
 
+Input: {"description": "WAWA FUEL/CONVENIENCE TOMS RIVER NJ", "amount": "42.18", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "Wawa", "suggested_category_uuid": "d0032366-ed8b-484b-9564-7f5e9721aa7e", "suggested_subcategory_uuid": "936a458b-82eb-4278-b64f-4fba8f7ae8da", "confidence": 0.95}
+
+Input: {"description": "ACHDEBIT,CRUNCHFITCLUBFEES****300238869", "amount": "39.99", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "Crunch Fitness", "suggested_category_uuid": "978bf5d7-68a7-49ce-9f6e-f05ff01f4e07", "suggested_subcategory_uuid": "2eaf0bb4-12ef-4049-a905-bcdb9de0142b", "confidence": 0.92}
+
+Input: {"description": "GEICO AUTO (800)841-3000 DC", "amount": "142.50", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "GEICO", "suggested_category_uuid": "d0032366-ed8b-484b-9564-7f5e9721aa7e", "suggested_subcategory_uuid": "2a4476f0-7541-47d1-89b6-d3868c0c6a55", "confidence": 0.95}
+
+Input: {"description": "MPAY2PARK 650000010961582 WALLINGFORD CT", "amount": "3.50", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "MPay2Park", "suggested_category_uuid": "d0032366-ed8b-484b-9564-7f5e9721aa7e", "suggested_subcategory_uuid": "e2c18ac3-6d9e-4e34-a4d4-59f3ccb4116d", "confidence": 0.92}
+
+Input: {"description": "LINKEDIN PRE*1234567 LINKEDIN.COM", "amount": "29.99", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "LinkedIn", "suggested_category_uuid": "978bf5d7-68a7-49ce-9f6e-f05ff01f4e07", "suggested_subcategory_uuid": "d8a8d1c4-1ce3-4316-afc2-84e516652845", "confidence": 0.92}
+
+Input: {"description": "VERIZON WIRELESS AUTOPAY", "amount": "85.00", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "Verizon Wireless", "suggested_category_uuid": "f8ee90f0-2d76-4547-b9b4-71fbb2c506d6", "suggested_subcategory_uuid": "8b4be050-62fa-4520-b5af-012e0eb048f5", "confidence": 0.95}
+
+Input: {"description": "APPLE.COM/BILL 866-712-7753 CA", "amount": "2.99", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "Apple", "suggested_category_uuid": null, "suggested_subcategory_uuid": null, "confidence": 0.4}
+
 Input: {"description": "DDA WITHDRAW AP TW04C996  1120 TILTON RD  NORTHFIELD  * NJ", "amount": "200.00", "transaction_type": "PURCHASE"}
 Output: {"merchant_name": null, "suggested_category_uuid": "0284c65f-1af6-48d2-9133-3d3ac3393ede", "suggested_subcategory_uuid": "d7a3041e-5253-492c-82ca-ca24fb25df26", "confidence": 0.7}
 
@@ -163,15 +209,15 @@ Input: {"description": "ANNUAL MEMBERSHIP FEE", "amount": "95.00", "transaction_
 Output: {"merchant_name": null, "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "b9328f2f-88f5-4128-90af-87130c967280", "confidence": 0.85}
 
 Input: {"description": "MOBILE PAYMENT - THANK YOU", "amount": "1500.00", "transaction_type": "TRANSFER_IN"}
-Output: {"merchant_name": null, "suggested_category_uuid": "0284c65f-1af6-48d2-9133-3d3ac3393ede", "suggested_subcategory_uuid": "5247aeec-a479-4801-9f5e-07af3122f6f9", "confidence": 0.65}
+Output: {"merchant_name": null, "suggested_category_uuid": "134bbe34-09df-4462-9d50-5dab2b03c089", "suggested_subcategory_uuid": "5247aeec-a479-4801-9f5e-07af3122f6f9", "confidence": 0.65}
 
-Input: {"description": "EDDITINCCLASS A", "amount": "245.00", "transaction_type": "BUY"}
-Output: {"merchant_name": null, "suggested_category_uuid": "1601d6e1-e0d7-44f7-8f47-207ca11538be", "suggested_subcategory_uuid": "a762c7e9-7a3d-4ab5-97e4-814b14d81e0b", "confidence": 0.6}
+Input: {"description": "EDDITINCCLASS A", "amount": "245.00", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": null, "suggested_category_uuid": null, "suggested_subcategory_uuid": null, "confidence": 0.3}
 
 Input: {"description": "DIVIDEND VOO", "amount": "45.20", "transaction_type": "DIVIDEND"}
 Output: {"merchant_name": "Vanguard", "suggested_category_uuid": "17ac387d-1817-48d5-85c6-84bd2af576e9", "suggested_subcategory_uuid": "fe41dac0-0a3b-4e33-a731-9aecc6217d42", "confidence": 0.95}
 
-Input: {"description": "TD ZELLE SENT 611400H09TUA Zelle MATTHEW MIHM", "amount": "40.00", "transaction_type": "PURCHASE"}
+Input: {"description": "Zelle: MATTHEWMIHM", "amount": "40.00", "transaction_type": "PURCHASE"}
 Output: {"merchant_name": "Zelle", "suggested_category_uuid": null, "suggested_subcategory_uuid": null, "confidence": 0.5}
 
 Input: {"description": "VENMO PAYMENT 3125551234 SUSAN PARK", "amount": "65.00", "transaction_type": "PURCHASE"}
