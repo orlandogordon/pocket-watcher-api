@@ -72,27 +72,42 @@ def create_db_account(db: Session, user_id: int, account_data: AccountCreate) ->
         raise ValueError("Account creation failed due to database constraint")
 
 
+def _attach_accrued_interest(db: Session, account: Optional[AccountDB]) -> Optional[AccountDB]:
+    """Attach a transient `accrued_interest` attribute to an AccountDB
+    instance so the Pydantic AccountResponse can serialize it via
+    from_attributes. None for non-LOAN accounts."""
+    if account is None:
+        return None
+    # Lazy import: keeps the crud_account module load-time free of crud_debt.
+    from src.crud.crud_debt import current_accrued_interest
+    account.accrued_interest = current_accrued_interest(db, account)
+    return account
+
+
 def read_db_account(db: Session, account_id: int, user_id: Optional[int] = None) -> Optional[AccountDB]:
     """Read an account by ID, optionally filtering by user"""
-    
+
     query = db.query(AccountDB).filter(AccountDB.id == account_id)
-    
+
     if user_id:
         query = query.filter(AccountDB.user_id == user_id)
-    
-    return query.first()
+
+    return _attach_accrued_interest(db, query.first())
 
 
-def read_db_accounts(db: Session, user_id: int, account_type: Optional[AccountTypeEnum] = None, 
+def read_db_accounts(db: Session, user_id: int, account_type: Optional[AccountTypeEnum] = None,
                      skip: int = 0, limit: int = 100) -> List[AccountDB]:
     """Read accounts for a user, optionally filtered by account type"""
-    
+
     query = db.query(AccountDB).filter(AccountDB.user_id == user_id)
-    
+
     if account_type:
         query = query.filter(AccountDB.account_type == AccountType(account_type.value))
-    
-    return query.offset(skip).limit(limit).all()
+
+    accounts = query.offset(skip).limit(limit).all()
+    for a in accounts:
+        _attach_accrued_interest(db, a)
+    return accounts
 
 
 def read_db_accounts_summary(db: Session, user_id: int) -> List[AccountDB]:
@@ -261,18 +276,22 @@ def get_db_account_by_last_four(db: Session, user_id: int, last_four: str) -> Ac
 
 def read_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int) -> Optional[AccountDB]:
     """Read an account by UUID, filtered by user ownership."""
-    return db.query(AccountDB).filter(
+    account = db.query(AccountDB).filter(
         AccountDB.uuid == account_uuid,
         AccountDB.user_id == user_id
     ).first()
+    return _attach_accrued_interest(db, account)
 
 
 def read_db_accounts_by_uuids(db: Session, uuids: List[UUID], user_id: int) -> List[AccountDB]:
     """Read multiple accounts by UUIDs, filtered by user ownership."""
-    return db.query(AccountDB).filter(
+    accounts = db.query(AccountDB).filter(
         AccountDB.uuid.in_(uuids),
         AccountDB.user_id == user_id
     ).all()
+    for a in accounts:
+        _attach_accrued_interest(db, a)
+    return accounts
 
 
 def update_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int, account_updates: AccountUpdate) -> AccountDB:

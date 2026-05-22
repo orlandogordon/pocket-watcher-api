@@ -119,6 +119,9 @@ class AccountResponse(BaseModel):
     interest_rate_type: Optional[str]
     original_principal: Optional[Decimal]
     minimum_payment: Optional[Decimal]
+    # Interest accrued since the last anchor (last payment or balance update).
+    # Populated for LOAN accounts only; None otherwise.
+    accrued_interest: Optional[Decimal] = None
     match_aliases: Optional[List[str]] = None
     comments: Optional[str]
     created_at: datetime

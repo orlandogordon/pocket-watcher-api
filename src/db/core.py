@@ -359,7 +359,7 @@ class DebtPaymentDB(Base):
     # Foreign Keys
     loan_account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))  # The loan account
     payment_source_account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))  # Checking account used for payment
-    transaction_id: Mapped[Optional[int]] = mapped_column(ForeignKey("transactions.db_id"))  # Links to bank statement transaction
+    transaction_id: Mapped[Optional[int]] = mapped_column(ForeignKey("transactions.db_id", ondelete="SET NULL"))  # Links to bank statement transaction (SET NULL on delete: payment history survives)
     
     # Payment Data
     payment_amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)

@@ -1,3 +1,6 @@
+from datetime import date
+from decimal import Decimal
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from typing import Optional, List, Dict
 from uuid import UUID, uuid4
@@ -132,6 +135,77 @@ def read_schedule_for_account(db: Session, user_id: int, account_id: int) -> Lis
         DebtRepaymentScheduleDB.account_id == account_id
     ).order_by(DebtRepaymentScheduleDB.payment_month).all()
 
+# ===== INTEREST MATH HELPERS =====
+
+# Interest accrues daily on the outstanding balance: simple interest at
+# (balance * annual_rate * days / 365). Each payment first pays accrued
+# interest since the last anchor, remainder applies to principal.
+#
+# Missed payments are handled implicitly — a longer `days_elapsed` since
+# the prior payment yields proportionally more interest, matching how
+# servicers actually account.
+
+def _anchor_date_for_loan(
+    db: Session,
+    loan_account: AccountDB,
+    *,
+    exclude_payment_id: Optional[int] = None,
+) -> date:
+    """Most recent date from which interest should accrue on the next
+    payment. Falls back through: prior payment_date → balance_last_updated
+    → created_at. The exclude_payment_id is used by update_debt_payment so
+    a payment isn't considered its own anchor."""
+    q = db.query(func.max(DebtPaymentDB.payment_date)).filter(
+        DebtPaymentDB.loan_account_id == loan_account.id
+    )
+    if exclude_payment_id is not None:
+        q = q.filter(DebtPaymentDB.payment_id != exclude_payment_id)
+    last_payment_date = q.scalar()
+    if last_payment_date is not None:
+        return last_payment_date
+    if loan_account.balance_last_updated is not None:
+        return loan_account.balance_last_updated.date()
+    return loan_account.created_at.date()
+
+
+def _compute_daily_interest(
+    balance: Decimal,
+    annual_rate: Decimal,
+    days_elapsed: int,
+    quantize_exemplar: Decimal,
+) -> Decimal:
+    """Daily simple interest rounded to the same number of decimal places
+    as the quantize_exemplar (typically the payment amount, so cents)."""
+    if days_elapsed <= 0:
+        interest = Decimal("0")
+    else:
+        interest = (balance * annual_rate * Decimal(days_elapsed)) / Decimal(365)
+    # Build a power-of-ten Decimal template matching the exemplar's scale.
+    # e.g. payment_amount=Decimal("63.64") → exponent=-2 → template Decimal("0.01")
+    template = Decimal(1).scaleb(quantize_exemplar.as_tuple().exponent)
+    return interest.quantize(template)
+
+
+def current_accrued_interest(
+    db: Session,
+    account: AccountDB,
+    as_of: Optional[date] = None,
+) -> Decimal:
+    """Interest accrued since the last anchor (last payment or balance
+    update) for a LOAN account. Returns 0 for non-LOAN or when rate/balance
+    are missing."""
+    if account.account_type != AccountType.LOAN:
+        return Decimal("0.00")
+    if account.interest_rate is None or account.balance is None:
+        return Decimal("0.00")
+    as_of = as_of or date.today()
+    anchor = _anchor_date_for_loan(db, account)
+    days_elapsed = max((as_of - anchor).days, 0)
+    return _compute_daily_interest(
+        account.balance, account.interest_rate, days_elapsed, Decimal("0.01")
+    )
+
+
 # ===== DATABASE OPERATIONS - PAYMENTS =====
 
 def create_debt_payment(db: Session, user_id: int, payment_data: DebtPaymentCreate, *, loan_account_id: int, payment_source_account_id: Optional[int] = None, transaction_id: Optional[int] = None) -> DebtPaymentDB:
@@ -161,11 +235,18 @@ def create_debt_payment(db: Session, user_id: int, payment_data: DebtPaymentCrea
     interest_amount = payment_data.interest_amount
 
     if principal_amount is None or interest_amount is None:
-        # If interest rate is available, calculate the interest portion
+        # If interest rate is available, calculate the interest portion using
+        # daily simple interest from the most recent anchor (prior payment
+        # date, balance update, or account creation).
         if loan_account.interest_rate is not None and loan_account.balance is not None:
-            # Calculate monthly interest: (balance * annual_rate) / 12
-            calculated_interest = (loan_account.balance * loan_account.interest_rate) / 12
-            calculated_interest = calculated_interest.quantize(payment_data.payment_amount.as_tuple().exponent)
+            anchor = _anchor_date_for_loan(db, loan_account)
+            days_elapsed = max((payment_data.payment_date - anchor).days, 0)
+            calculated_interest = _compute_daily_interest(
+                loan_account.balance,
+                loan_account.interest_rate,
+                days_elapsed,
+                payment_data.payment_amount,
+            )
 
             if interest_amount is None:
                 interest_amount = calculated_interest
@@ -284,8 +365,19 @@ def update_debt_payment(db: Session, payment_id: int, user_id: int, payment_data
 
     if new_principal is None or new_interest is None:
         if loan_account and loan_account.interest_rate is not None and loan_account.balance is not None:
-            calculated_interest = (loan_account.balance * loan_account.interest_rate) / 12
-            calculated_interest = calculated_interest.quantize(new_payment_amount.as_tuple().exponent)
+            # Daily simple interest from the prior anchor — excluding THIS
+            # payment (otherwise days_elapsed would be zero on update).
+            new_payment_date = update_data.get('payment_date', db_payment.payment_date)
+            anchor = _anchor_date_for_loan(
+                db, loan_account, exclude_payment_id=db_payment.payment_id
+            )
+            days_elapsed = max((new_payment_date - anchor).days, 0)
+            calculated_interest = _compute_daily_interest(
+                loan_account.balance,
+                loan_account.interest_rate,
+                days_elapsed,
+                new_payment_amount,
+            )
             if new_interest is None:
                 new_interest = calculated_interest
             if new_principal is None:
