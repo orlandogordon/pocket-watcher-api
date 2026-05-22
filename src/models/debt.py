@@ -104,7 +104,7 @@ class DebtPaymentUpdate(BaseModel):
     description: Optional[str] = Field(None, max_length=500)
 
 class DebtPaymentResponse(BaseModel):
-    id: UUID
+    uuid: UUID
     loan_account_uuid: UUID
     payment_source_account_uuid: Optional[UUID] = None
     transaction_uuid: Optional[UUID] = None
@@ -123,6 +123,8 @@ class DebtPaymentResponse(BaseModel):
     @classmethod
     def resolve_uuids(cls, data):
         if hasattr(data, '__dict__'):
+            if hasattr(data, 'id'):
+                data.__dict__['uuid'] = data.id
             if hasattr(data, 'loan_account') and data.loan_account:
                 data.__dict__['loan_account_uuid'] = data.loan_account.uuid
             if hasattr(data, 'payment_source_account') and data.payment_source_account:
