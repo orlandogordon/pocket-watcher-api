@@ -259,6 +259,29 @@ def _to_raw_suggestion(suggestion: Optional[dict]) -> Optional[dict]:
     }
 
 
+def _append_review_note(
+    existing: Optional[str], *, missing_category: bool, missing_merchant: bool
+) -> Optional[str]:
+    """Compose the explanation appended to a transaction's ``comments`` when it
+    is auto-tagged 'Needs Review' at confirm time, so the review inbox (#46
+    surfaces ``comments``) and the transaction itself record WHY it was flagged
+    — otherwise it's impossible to tell what tripped the tag after the fact.
+
+    Any comment the user entered during preview is preserved and kept first.
+    Returns ``existing`` unchanged when neither trigger applies (defensive — the
+    caller only invokes this once a trigger is known to hold)."""
+    reasons: list[str] = []
+    if missing_category:
+        reasons.append("no category assigned")
+    if missing_merchant:
+        reasons.append("no merchant identified")
+    if not reasons:
+        return existing
+    note = "Auto-flagged for review: " + " and ".join(reasons) + "."
+    existing = (existing or "").strip()
+    return f"{existing}\n{note}" if existing else note
+
+
 def _recompute_summary(session: dict) -> None:
     """Recompute the summary counts from the current session state."""
     rejected = sum(
@@ -1054,8 +1077,17 @@ async def confirm_statement_import(
         # (they're balance-neutral movements, not income/expense), so the
         # category-null heuristic would mis-flag every transfer.
         is_transfer = txn_type_enum in (TransactionType.TRANSFER_IN, TransactionType.TRANSFER_OUT)
-        if needs_review_tag and not is_transfer and (category_id_val is None or not merchant_name_val):
+        missing_category = category_id_val is None
+        missing_merchant = not merchant_name_val
+        if needs_review_tag and not is_transfer and (missing_category or missing_merchant):
             tag_ids.append(needs_review_tag.tag_id)
+            # Record WHY on the transaction itself so the review inbox (#46)
+            # shows what triggered the flag without opening each row.
+            db_txn.comments = _append_review_note(
+                db_txn.comments,
+                missing_category=missing_category,
+                missing_merchant=missing_merchant,
+            )
         if tag_ids:
             pending_tag_associations.append((db_txn, tag_ids))
 
