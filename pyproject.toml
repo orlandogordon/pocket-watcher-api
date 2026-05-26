@@ -1,0 +1,20 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "parser: parser tests backed by fixture statement files",
+    "integration: exercises the app over HTTP via TestClient",
+    "slow: slower tests, may be deselected in quick runs",
+]
+
+[tool.coverage.run]
+source = ["src"]
+branch = false
+omit = [
+    "*/__init__.py",
+    "alembic/*",
+    "scripts/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
