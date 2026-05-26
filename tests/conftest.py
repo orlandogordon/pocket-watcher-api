@@ -50,6 +50,7 @@ from src.auth.context import set_current_user_id  # noqa: E402
 from src.auth.dependencies import get_current_user_id  # noqa: E402
 from src.db.core import Base, get_db  # noqa: E402
 from src.main import app  # noqa: E402
+from src.services.llm_client import LLMUnavailableError  # noqa: E402
 from src.services.redis_client import get_redis_dependency  # noqa: E402
 from tests.factories import make_user  # noqa: E402
 
@@ -93,6 +94,53 @@ def fake_redis():
     client = FakeRedis(decode_responses=True)
     yield client
     client.flushall()
+
+
+class FakeLLMClient:
+    """In-memory stand-in for the real LLM backend.
+
+    By default every row comes back with a null merchant and a null
+    category/subcategory pair (confidence 0.0) — the realistic "model declined
+    to guess" outcome, which routes rows through the Needs-Review path at
+    confirm time. Populate ``suggestions`` (keyed by the raw description) to
+    return a concrete result for specific rows, or set ``unavailable=True`` to
+    exercise the graceful-degradation branch (process_preview_items catches
+    LLMUnavailableError and falls through to ``raw_fallthrough``).
+    """
+
+    model_name = "fake-llm-test"
+
+    def __init__(self):
+        self.suggestions: dict = {}
+        self.unavailable = False
+        self.batches: list = []  # records each batch passed in, for assertions
+
+    def process_transaction_batch(self, parsed):
+        if self.unavailable:
+            raise LLMUnavailableError("forced unavailable (test)")
+        self.batches.append(parsed)
+        results = []
+        for p in parsed:
+            desc = p.get("description") if isinstance(p, dict) else getattr(p, "description", "")
+            results.append(self.suggestions.get(desc, {
+                "merchant_name": None,
+                "suggested_category_uuid": None,
+                "suggested_subcategory_uuid": None,
+                "confidence": 0.0,
+            }))
+        return results
+
+
+@pytest.fixture
+def fake_llm(monkeypatch):
+    """Patch the LLM factory at the boundary the preview flow calls it
+    (``description_cleanup.get_llm_client``) so no real backend is contacted.
+    Returns the fake so tests can stage suggestions or force unavailability."""
+    fake = FakeLLMClient()
+    monkeypatch.setattr(
+        "src.services.description_cleanup.get_llm_client", lambda: fake
+    )
+    return fake
 
 
 @pytest.fixture
