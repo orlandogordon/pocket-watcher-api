@@ -2,6 +2,7 @@
 import unittest
 from datetime import date
 from decimal import Decimal
+from unittest.mock import patch
 from uuid import uuid4
 
 from sqlalchemy import create_engine
@@ -13,10 +14,13 @@ from src.db.core import (
     AccountDB,
     AccountType,
     AccountValueHistoryDB,
+    InvestmentTransactionDB,
+    InvestmentTransactionType,
 )
 from src.services.account_snapshot import (
     get_net_worth_history,
     get_account_value_history,
+    recalculate_account_snapshots,
     _format_symbol_for_review,
 )
 
@@ -332,6 +336,155 @@ class TestMonthlyDownsample(TestLOCFBase):
         self.assertEqual(jan["date"], date(2024, 1, 31))
         self.assertEqual(jan["balance"], Decimal("100"))
         self.assertTrue(jan["is_carried_forward"])
+
+
+class TestHoldAtCostValuation(unittest.TestCase):
+    """Snapshot recalc values held option contracts at cost basis when no
+    market price is available (#57 hold-at-cost). Option quantity is in
+    contracts and price is per underlying share, so a held contract is
+    worth ``qty * price * 100``; the bulk price fetch is patched to return
+    nothing so every holding takes the cost-basis fallback path."""
+
+    OCC = "SPY240517P00500000"  # SPY $500 put, expires 2024-05-17
+
+    def setUp(self):
+        self.engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(self.engine)
+        self.Session = sessionmaker(bind=self.engine)
+        self.session = self.Session()
+        self.user = _make_user(self.session)
+
+    def tearDown(self):
+        self.session.close()
+        Base.metadata.drop_all(self.engine)
+        self.engine.dispose()
+
+    def _investment_account(self, initial_cash) -> AccountDB:
+        acct = AccountDB(
+            uuid=uuid4(),
+            user_id=self.user.db_id,
+            account_name="Brokerage",
+            account_type=AccountType.INVESTMENT,
+            institution_name="TestBroker",
+            balance=Decimal("0"),
+            initial_cash_balance=Decimal(str(initial_cash)),
+        )
+        self.session.add(acct)
+        self.session.flush()
+        return acct
+
+    def _option_txn(self, account, txn_type, *, qty, price, txn_date, api_symbol=None):
+        api_symbol = api_symbol or self.OCC
+        quantity = Decimal(str(qty))
+        price_per_share = Decimal(str(price))
+        txn = InvestmentTransactionDB(
+            id=uuid4(),
+            user_id=self.user.db_id,
+            account_id=account.id,
+            transaction_hash=str(uuid4()),
+            transaction_type=txn_type,
+            symbol=api_symbol[: api_symbol.index("2")],
+            api_symbol=api_symbol,
+            quantity=quantity,
+            price_per_share=price_per_share,
+            total_amount=quantity * price_per_share * Decimal("100"),
+            transaction_date=txn_date,
+            security_type="OPTION",
+        )
+        self.session.add(txn)
+        self.session.commit()
+        return txn
+
+    def _recalc(self, account, start, end):
+        with patch(
+            "src.services.account_snapshot.fetch_bulk_historical_prices",
+            return_value={},
+        ):
+            recalculate_account_snapshots(
+                self.session, account.id, start_date=start, end_date=end,
+                delay_between_prices=0,
+            )
+
+    def _snapshot(self, account, value_date) -> AccountValueHistoryDB:
+        return self.session.query(AccountValueHistoryDB).filter(
+            AccountValueHistoryDB.account_id == account.id,
+            AccountValueHistoryDB.value_date == value_date,
+        ).first()
+
+    def test_held_option_contributes_qty_price_100(self):
+        acct = self._investment_account(1000)
+        self._option_txn(acct, InvestmentTransactionType.BUY,
+                         qty=1, price=5, txn_date=date(2024, 5, 1))
+        self._recalc(acct, date(2024, 5, 1), date(2024, 5, 1))
+
+        snap = self._snapshot(acct, date(2024, 5, 1))
+        # 1 contract * $5 * 100 = $500 of securities value.
+        self.assertEqual(snap.securities_value, Decimal("500.00"))
+
+    def test_no_phantom_loss_at_buy(self):
+        """The key invariant: buying an option moves cash into securities
+        of equal value — total unchanged. Guards against silently dropping
+        to intrinsic-style (or unmultiplied) valuation."""
+        acct = self._investment_account(1000)
+        self._option_txn(acct, InvestmentTransactionType.BUY,
+                         qty=1, price=5, txn_date=date(2024, 5, 1))
+        self._recalc(acct, date(2024, 5, 1), date(2024, 5, 1))
+
+        snap = self._snapshot(acct, date(2024, 5, 1))
+        # cash 1000 - 500 spent = 500 cash + 500 securities = 1000 total.
+        self.assertEqual(snap.cash_balance, Decimal("500.00"))
+        self.assertEqual(snap.securities_value, Decimal("500.00"))
+        self.assertEqual(snap.balance, Decimal("1000.00"))
+
+    def test_otm_expiration_drops_total(self):
+        acct = self._investment_account(1000)
+        self._option_txn(acct, InvestmentTransactionType.BUY,
+                         qty=1, price=5, txn_date=date(2024, 5, 1))
+        self._option_txn(acct, InvestmentTransactionType.EXPIRATION,
+                         qty=1, price=0, txn_date=date(2024, 5, 17))
+        self._recalc(acct, date(2024, 5, 16), date(2024, 5, 17))
+
+        before = self._snapshot(acct, date(2024, 5, 16))
+        after = self._snapshot(acct, date(2024, 5, 17))
+        self.assertEqual(before.balance, Decimal("1000.00"))
+        # Expiration zeros the position: securities -> 0, only $500 cash left.
+        self.assertEqual(after.securities_value, Decimal("0.00"))
+        self.assertEqual(after.balance, Decimal("500.00"))
+
+    def test_multiple_buys_weighted_average_cost(self):
+        acct = self._investment_account(2000)
+        self._option_txn(acct, InvestmentTransactionType.BUY,
+                         qty=1, price=5, txn_date=date(2024, 5, 1))
+        self._option_txn(acct, InvestmentTransactionType.BUY,
+                         qty=1, price=7, txn_date=date(2024, 5, 2))
+        self._recalc(acct, date(2024, 5, 2), date(2024, 5, 2))
+
+        snap = self._snapshot(acct, date(2024, 5, 2))
+        # avg cost (5 + 7)/2 = 6; 2 contracts * $6 * 100 = $1200.
+        self.assertEqual(snap.securities_value, Decimal("1200.00"))
+
+    def test_sell_preserves_average_cost(self):
+        acct = self._investment_account(2000)
+        self._option_txn(acct, InvestmentTransactionType.BUY,
+                         qty=2, price=5, txn_date=date(2024, 5, 1))
+        self._option_txn(acct, InvestmentTransactionType.SELL,
+                         qty=1, price=6, txn_date=date(2024, 5, 2))
+        self._recalc(acct, date(2024, 5, 2), date(2024, 5, 2))
+
+        snap = self._snapshot(acct, date(2024, 5, 2))
+        # 1 contract remains at the unchanged $5 avg cost: 1 * 5 * 100 = $500.
+        self.assertEqual(snap.securities_value, Decimal("500.00"))
+
+    def test_cost_basis_fallback_flags_stale_options(self):
+        acct = self._investment_account(1000)
+        self._option_txn(acct, InvestmentTransactionType.BUY,
+                         qty=1, price=5, txn_date=date(2024, 5, 1))
+        self._recalc(acct, date(2024, 5, 1), date(2024, 5, 1))
+
+        snap = self._snapshot(acct, date(2024, 5, 1))
+        self.assertTrue(snap.needs_review)
+        self.assertIn("[stale-options]", snap.review_reason)
+        self.assertIn("SPY", snap.review_reason)
 
 
 class TestFormatSymbolForReview(unittest.TestCase):

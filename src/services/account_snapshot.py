@@ -53,6 +53,45 @@ def _format_symbol_for_review(symbol: str) -> str:
     return f"{parsed['underlying']} {parsed['expiration']} {parsed['option_type']} {strike_str}"
 
 
+OPTION_CONTRACT_MULTIPLIER = Decimal("100")
+
+
+def _contract_multiplier(symbol: str) -> Decimal:
+    """Shares controlled per unit of stored ``quantity``.
+
+    Option ``quantity`` is in contracts and ``price_per_share`` is the
+    per-underlying-share premium, so a held contract is worth
+    ``qty * price * 100`` — matching ``total_amount`` (which already bakes
+    in the 100x). Without this multiplier securities value lags the cash
+    outflow at every option BUY, producing a ~100x phantom loss. Stocks
+    are 1:1.
+    """
+    return OPTION_CONTRACT_MULTIPLIER if is_option_symbol(symbol) else Decimal("1")
+
+
+def _build_missing_price_review_reason(missing_symbols: List[str]) -> Optional[str]:
+    """Compose the review_reason for a snapshot that fell back to cost basis
+    because one or more holdings had no historical price.
+
+    Option contracts get the ``[stale-options]`` prefix — the staleness
+    marker the frontend already renders for other stale types, and the key
+    the deferred paid-API refill (#57 Phase 2) uses to find rows to upgrade.
+    Stocks (delisted / fetch failure) keep the plain wording so they aren't
+    mistaken for refillable option rows.
+    """
+    if not missing_symbols:
+        return None
+    options = [s for s in missing_symbols if is_option_symbol(s)]
+    stocks = [s for s in missing_symbols if not is_option_symbol(s)]
+    parts = []
+    if options:
+        pretty = ", ".join(_format_symbol_for_review(s) for s in options)
+        parts.append(f"[stale-options] {pretty}")
+    if stocks:
+        parts.append(f"Missing price data for: {', '.join(stocks)}")
+    return " | ".join(parts)
+
+
 def trigger_backfill_if_needed(
     db: Session,
     user_id: int,
@@ -652,6 +691,7 @@ def recalculate_account_snapshots(
                 quantity = holding_data['quantity']
                 cost_basis = holding_data['average_cost_basis']  # Note: key is 'average_cost_basis'
                 api_symbol = holding_data['api_symbol']
+                multiplier = _contract_multiplier(api_symbol)
 
                 # Get price from bulk-fetched data
                 historical_price = None
@@ -666,13 +706,13 @@ def recalculate_account_snapshots(
                         logger.debug(f"Using {nearest_date} price for {symbol} on {current_date}")
 
                 if historical_price:
-                    securities_value += (quantity * historical_price).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
-                    total_cost_basis += (quantity * cost_basis).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+                    securities_value += (quantity * historical_price * multiplier).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+                    total_cost_basis += (quantity * cost_basis * multiplier).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
                 else:
                     # Fallback to cost basis
                     logger.warning(f"No historical price for {symbol} on {current_date}, using cost basis")
-                    securities_value += (quantity * cost_basis).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
-                    total_cost_basis += (quantity * cost_basis).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+                    securities_value += (quantity * cost_basis * multiplier).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+                    total_cost_basis += (quantity * cost_basis * multiplier).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
                     missing_prices.append(symbol)
 
             # 3. Calculate totals
@@ -697,14 +737,12 @@ def recalculate_account_snapshots(
                 existing_snapshot.recalculation_reason = reason
 
                 if missing_prices:
-                    pretty = [_format_symbol_for_review(s) for s in missing_prices]
                     existing_snapshot.needs_review = True
-                    existing_snapshot.review_reason = f"Missing price data for: {', '.join(pretty)}"
+                    existing_snapshot.review_reason = _build_missing_price_review_reason(missing_prices)
 
                 results['updated'] += 1
             else:
                 # Create new snapshot
-                pretty_missing = [_format_symbol_for_review(s) for s in missing_prices]
                 new_snapshot = AccountValueHistoryDB(
                     uuid=uuid4(),
                     account_id=account_id,
@@ -717,7 +755,7 @@ def recalculate_account_snapshots(
                     snapshot_source="BACKFILL",
                     recalculation_count=0,
                     needs_review=bool(missing_prices),
-                    review_reason=f"Missing price data for: {', '.join(pretty_missing)}" if missing_prices else None
+                    review_reason=_build_missing_price_review_reason(missing_prices)
                 )
                 db.add(new_snapshot)
                 results['created'] += 1
@@ -753,14 +791,15 @@ def calculate_investment_account_snapshot(
 
     for holding in holdings:
         if holding.quantity and holding.quantity > 0:
+            multiplier = _contract_multiplier(holding.symbol)
             # Use current_price if available, otherwise use cost basis
             price = holding.current_price if holding.current_price else holding.average_cost_basis
             if price:
-                total_value += holding.quantity * price
+                total_value += holding.quantity * price * multiplier
 
             # Calculate cost basis
             if holding.average_cost_basis:
-                total_cost_basis += holding.quantity * holding.average_cost_basis
+                total_cost_basis += holding.quantity * holding.average_cost_basis * multiplier
 
     unrealized_gain_loss = total_value - total_cost_basis if total_cost_basis > 0 else None
 
