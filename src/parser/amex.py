@@ -1,4 +1,5 @@
 import csv
+import re
 import pdfplumber
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
@@ -26,6 +27,40 @@ def _clean_description(description: str) -> str:
     description = description.removeprefix("AplPay ")
     description = description.removesuffix(" Pay Over Time")
     return description
+
+
+# The Amex "account activity" CSV export packs each Description as a fixed-width
+# record: a left-justified, space-padded merchant field, then a left-justified
+# city, then the state. The city always begins at this column (the merchant area
+# — including any "AplPay " prefix — is 20 chars wide). The merchant/city
+# boundary has NO separator, so a merchant longer than the field gets truncated
+# mid-name and runs straight into the city with no space (a "BRANDNAME" field
+# followed by "CITY" arrives as "BRANDNAMECITY"). PDF statements are not packed
+# this way.
+_ACTIVITY_CITY_COL = 20
+
+
+def _depack_activity_csv(raw: str) -> tuple[str, bool]:
+    """Split the Amex activity-CSV fixed-width Description into a clean,
+    single-spaced "<merchant> <city> <state>" string and report whether the
+    merchant field was full — i.e. truncated mid-name, so the real brand is
+    unrecoverable and the caller should blank the merchant (-> Needs Review).
+
+    Only rows carrying the tell-tale column padding (2+ consecutive spaces) are
+    treated as this format; anything else (e.g. "Amex Send: Add Money") is
+    returned unchanged with truncated=False.
+    """
+    if "  " not in raw or len(raw) <= _ACTIVITY_CITY_COL:
+        return raw, False
+    # A non-space in the field's last column means the name filled (overran) the
+    # field and was cut off, gluing onto the city.
+    truncated = raw[_ACTIVITY_CITY_COL - 1] != " "
+    merchant = raw[:_ACTIVITY_CITY_COL]
+    city_state = raw[_ACTIVITY_CITY_COL:]
+    # Re-join across the boundary with a single space, collapsing the field
+    # padding (and any internal padding like "BRAND  NAME").
+    clean = re.sub(r"\s+", " ", f"{merchant} {city_state}").strip()
+    return clean, truncated
 
 
 def _map_transaction_type(line: str, keywords: dict) -> List[bool]:
@@ -180,7 +215,8 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     for row in reader:
         try:
             date = datetime.strptime(row[0], "%m/%d/%Y").date()
-            description = _clean_description(row[1])
+            depacked, merchant_truncated = _depack_activity_csv(row[1])
+            description = _clean_description(depacked)
             amount = Decimal(row[2])
 
             transaction_type = 'Credit' if amount < 0 else 'Purchase'
@@ -191,7 +227,8 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                     transaction_date=date,
                     description=description.strip(),
                     amount=amount,
-                    transaction_type=transaction_type
+                    transaction_type=transaction_type,
+                    merchant_truncated=merchant_truncated,
                 )
             )
         except (ValueError, InvalidOperation, IndexError) as e:

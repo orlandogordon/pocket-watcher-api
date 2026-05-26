@@ -125,6 +125,7 @@ def analyze_regular_transactions(
             "description": parsed_txn.description,
             "transaction_type": parsed_txn.transaction_type.upper(),
             "account_id": account_id,
+            "merchant_truncated": parsed_txn.merchant_truncated,
         }
 
         is_db_duplicate = base_hash in existing_hashes

@@ -93,9 +93,15 @@ def process_preview_items(
     """
     raws = [str(p.get("description") or "") for p in parsed_items]
 
+    # Rows the source truncated mid-name (Amex activity-CSV fixed-width export):
+    # the real brand is unrecoverable, so skip merchant extraction entirely and
+    # leave it blank → Needs Review. See ParsedTransaction.merchant_truncated.
+    merchant_truncated = [bool(p.get("merchant_truncated")) for p in parsed_items]
+
     # Pre-compute regex merchant for every row (cheap, deterministic, no I/O).
     regex_merchants: list[Optional[str]] = [
-        extract_merchant(institution, raw) for raw in raws
+        None if merchant_truncated[i] else extract_merchant(institution, raws[i])
+        for i in range(len(raws))
     ]
 
     results: list[Optional[CleanedResult]] = [None] * len(raws)
@@ -118,6 +124,7 @@ def process_preview_items(
             parsed_items=parsed_items,
             raws=raws,
             regex_merchants=regex_merchants,
+            merchant_truncated=merchant_truncated,
             indices=llm_indices,
             results=results,
             batch_size=batch_size,
@@ -133,6 +140,7 @@ def _run_llm_batch(
     parsed_items: list[dict],
     raws: list[str],
     regex_merchants: list[Optional[str]],
+    merchant_truncated: list[bool],
     indices: list[int],
     results: list[Optional[CleanedResult]],
     batch_size: int,
@@ -188,11 +196,15 @@ def _run_llm_batch(
         llm_result = result_by_raw.get(raw)
 
         if llm_result is not None:
-            # Merchant precedence: regex extractor > LLM (already
-            # confidence-floored in process_transaction_batch).
-            if regex_merchant is not None:
+            # Merchant precedence: truncated source → always blank; otherwise
+            # regex extractor > LLM (already confidence-floored in
+            # process_transaction_batch).
+            if merchant_truncated[i]:
+                merchant = None
+                merchant_source: Optional[str] = None
+            elif regex_merchant is not None:
                 merchant = regex_merchant
-                merchant_source: Optional[str] = "regex"
+                merchant_source = "regex"
             elif llm_result["merchant_name"] is not None:
                 merchant = llm_result["merchant_name"]
                 merchant_source = "llm"

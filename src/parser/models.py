@@ -74,6 +74,11 @@ class ParsedTransaction(BaseModel):
     amount: Decimal
     transaction_type: str
     is_duplicate: bool = False
+    # Set by a parser when the source truncated the merchant name mid-word (the
+    # Amex activity-CSV fixed-width export does this). The real brand is
+    # unrecoverable, so downstream merchant extraction is skipped and the
+    # merchant is left blank → Needs Review. Default False for every other path.
+    merchant_truncated: bool = False
 
 class ParsedInvestmentTransaction(BaseModel):
     transaction_date: date

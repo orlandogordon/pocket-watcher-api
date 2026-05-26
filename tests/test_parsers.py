@@ -608,5 +608,86 @@ class TestTdbankParserIntegration(unittest.TestCase):
                 )
 
 
+class TestAmexActivityCsvDepack(unittest.TestCase):
+    """The Amex 'account activity' CSV packs Description as a fixed-width record
+    (merchant field then glued city + state). _depack_activity_csv splits at the
+    city column, returns a clean single-spaced string, and flags rows whose
+    merchant field was full (== truncated mid-name → caller blanks the merchant).
+    """
+
+    def setUp(self):
+        from src.parser.amex import _depack_activity_csv
+        self._depack = _depack_activity_csv
+
+    # Synthetic fixtures (no real cardholder data). Each preserves the export's
+    # structure: the city begins at column 20, and a non-space in column 19
+    # means the merchant field overran and was truncated.
+    def test_complete_padded_merchant_resolves(self):
+        # Short merchant: field is space-padded, so the merchant is intact.
+        clean, trunc = self._depack("AplPay BLUE CAFE    RIVERTON          CA")
+        self.assertEqual(clean, "AplPay BLUE CAFE RIVERTON CA")
+        self.assertFalse(trunc)
+
+    def test_twelve_char_merchant_still_complete(self):
+        # 12-char name fills all but the last column — still has a trailing pad,
+        # so it is NOT truncated (the boundary case the column rule gets right).
+        clean, trunc = self._depack("AplPay CORNER DINER RIVERTON          CA")
+        self.assertEqual(clean, "AplPay CORNER DINER RIVERTON CA")
+        self.assertFalse(trunc)
+
+    def test_internal_field_padding_collapsed(self):
+        clean, trunc = self._depack("AplPay SHOP  PLAZA  RIVERTON          CA")
+        self.assertEqual(clean, "AplPay SHOP PLAZA RIVERTON CA")
+        self.assertFalse(trunc)
+
+    def test_non_aplpay_row_uses_same_city_column(self):
+        clean, trunc = self._depack("GENERIC STREAM      METRO CITY        NY")
+        self.assertEqual(clean, "GENERIC STREAM METRO CITY NY")
+        self.assertFalse(trunc)
+
+    def test_truncated_merchant_glued_to_city_is_flagged(self):
+        # Field is full (last column non-space) → glued + truncated.
+        clean, trunc = self._depack("AplPay TST* SUSHI BARIVERTON          CA")
+        self.assertEqual(clean, "AplPay TST* SUSHI BA RIVERTON CA")
+        self.assertTrue(trunc)
+
+    def test_truncated_slash_name_flagged(self):
+        clean, trunc = self._depack("AplPay FUEL/MART XYZRIVERTON          CA")
+        self.assertEqual(clean, "AplPay FUEL/MART XYZ RIVERTON CA")
+        self.assertTrue(trunc)
+
+    def test_non_fixed_width_row_unchanged(self):
+        # No padding signature → not the activity format; returned as-is.
+        clean, trunc = self._depack("Amex Send: Add Money")
+        self.assertEqual(clean, "Amex Send: Add Money")
+        self.assertFalse(trunc)
+
+
+class TestAmexActivityCsvParse(unittest.TestCase):
+    """End-to-end through parse_csv: the de-packed description is stored and the
+    truncation flag rides along on ParsedTransaction."""
+
+    def _parse(self, *desc_rows: str):
+        import io
+        from src.parser.amex import parse_csv
+        lines = ["Date,Description,Amount"]
+        for d in desc_rows:
+            # Quote the description so embedded commas/spaces survive the reader.
+            lines.append(f'05/23/2026,"{d}",8.99')
+        buf = io.BytesIO("\n".join(lines).encode("utf-8"))
+        return parse_csv(buf).transactions
+
+    def test_complete_and_truncated_rows(self):
+        txns = self._parse(
+            "AplPay BLUE CAFE    RIVERTON          CA",
+            "AplPay TST* SUSHI BARIVERTON          CA",
+        )
+        self.assertEqual(txns[0].description, "BLUE CAFE RIVERTON CA")
+        self.assertFalse(txns[0].merchant_truncated)
+        # AplPay stripped, de-glued, and flagged truncated.
+        self.assertEqual(txns[1].description, "TST* SUSHI BA RIVERTON CA")
+        self.assertTrue(txns[1].merchant_truncated)
+
+
 if __name__ == "__main__":
     unittest.main()
