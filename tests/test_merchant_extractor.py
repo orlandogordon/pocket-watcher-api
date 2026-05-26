@@ -312,6 +312,50 @@ class TestSlashCasing(unittest.TestCase):
         )
 
 
+# ---------- Section H: embedded store-id cut + wrapped POS rows ----------
+
+class TestEmbeddedStoreIdCut(unittest.TestCase):
+    """When a store-id sits BETWEEN the brand and a trailing city (so trailing
+    stripping can't reach the brand), the brand is taken to end at the first
+    high-confidence store-id token. Brand-integral short numbers survive."""
+
+    def test_five_guys_location_code_qsr_and_store_number(self):
+        # "NJ0168" (location code, 4 digits), "QSR", and the store number are
+        # all dropped — the 4-digit code marks where the brand ends.
+        self.assertEqual(
+            extract_merchant("amex", "FIVE GUYS NJ0168 QSR 000000168 BRICK NJ"),
+            "Five Guys",
+        )
+
+    def test_brand_integral_short_number_preserved(self):
+        # The 2-digit "54" is part of the name; only the 8-digit store id and
+        # the city are cut.
+        self.assertEqual(
+            extract_merchant("amex", "STUDIO 54 00012345 NEW YORK NY"),
+            "Studio 54",
+        )
+
+
+class TestWrappedPosCleanup(unittest.TestCase):
+    """Toast (TST*) / Square (SQ*) wrap a full POS row, so the inner capture
+    still carries the store-id + city — it gets the same cleanup as a direct
+    POS capture."""
+
+    def test_toast_strips_store_number_and_city(self):
+        self.assertEqual(
+            extract_merchant("amex", "TST* BURGER 25 00055899 TOMS RIVER NJ"),
+            "Burger 25",
+        )
+
+    def test_toast_keeps_location_qualifier_drops_store_number(self):
+        # The "- BRICK" location qualifier is part of the captured name; only
+        # the store number + trailing city are cut.
+        self.assertEqual(
+            extract_merchant("amex", "TST* BURGER 25 - BRICK 00197717 BRICK TOWNSHIP NJ"),
+            "Burger 25 - Brick",
+        )
+
+
 # ---------- Negative cases that should still fall through to LLM ----------
 
 class TestExtractorNegativeCases(unittest.TestCase):

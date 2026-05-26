@@ -308,7 +308,10 @@ def extract_merchant(institution: Optional[str], raw_description: Optional[str])
     for pattern in _WRAPPED_PATTERNS:
         m = pattern.match(norm)
         if m:
-            inner = m.group("merchant").strip()
+            # Toast/Square wrap a full POS row (BRAND STORE# CITY ST), so the
+            # inner still carries store-id + location noise — clean it the same
+            # way as a direct POS capture.
+            inner = _strip_store_suffix(m.group("merchant").strip())
             if inner and not _ADDRESS_LIKE.match(inner):
                 return _titlecase(inner)
 
@@ -349,28 +352,48 @@ def _strip_trailing_ref(norm: str) -> str:
     return stripped or norm
 
 
+def _is_hard_store_token(tok: str) -> bool:
+    """A token confident enough to be a store id / location code that the brand
+    is taken to END before it (used for the mid-string cut): a `#`-prefixed
+    store number, or any token carrying 4+ digits (`00055899`, `NJ0168`,
+    `P40905479D`). Shorter pure numbers (2-3 digits) are left to the trailing
+    pass so brand-integral numbers like `Burger 25` survive."""
+    if re.fullmatch(r"#\d+", tok):
+        return True
+    return sum(ch.isdigit() for ch in tok) >= 4
+
+
 def _is_store_token(tok: str) -> bool:
-    """A trailing token that's a store id / reference number, not part of the
-    brand name. Two shapes:
-      - a pure number or `#`-prefixed store number (`8368`, `#05675`, `000005675`)
-      - a numeric-dominant reference code (`P40905479D`) — 4+ digits overall.
-        The 4-digit floor avoids eating brand tokens that legitimately carry a
-        digit or two (`3M`, `7UP`, `H&M2`), which are also rarely trailing.
-    """
-    if re.fullmatch(r"#?\d+", tok):
+    """A trailing token to drop: a `#`-prefixed store number (any length), a
+    pure number of 3+ digits, or a 4+-digit reference code. 1-2 digit pure
+    numbers are kept — they're usually part of the brand (`Burger 25`,
+    `Studio 54`), and no real store-number case in our data is that short."""
+    if re.fullmatch(r"#\d+", tok):
+        return True
+    if re.fullmatch(r"\d{3,}", tok):
         return True
     return sum(ch.isdigit() for ch in tok) >= 4
 
 
 def _strip_store_suffix(merchant: str) -> str:
-    """Drop trailing store-id / reference-number tokens from a captured POS
-    merchant slot. POS rows routinely append one or two of these between the
-    brand and the city: `WAWA 8368 8368`, `CVS/PHARMACY #05675 000005675`,
-    `SPOTIFY P40905479D 685603`. Pop junk tokens from the right, stopping at
-    the first token that looks like part of the name; never strip the capture
-    down to nothing (keep at least one token). Trailing separator punctuation
-    left behind (`JOEYS PIZZA-`) is then trimmed."""
+    """Remove store-id / location noise from a captured POS merchant phrase.
+
+    Two passes:
+      1. Mid-string cut — if a high-confidence store-id token (`#NNN` or a
+         4+-digit code) appears after the first token, the brand ends there;
+         drop it and everything after, since a store id is typically followed
+         by the city + state ("BURGER 25 00055899 TOMS RIVER" -> "BURGER 25";
+         "FIVE GUYS NJ0168 QSR 000000168 BRICK" -> "FIVE GUYS").
+      2. Trailing strip — drop any remaining trailing store-number tokens too
+         short to trip the cut ("WAWA 939" -> "WAWA", "WALGREENS 6321" ->
+         "WALGREENS").
+    Never strips the phrase to nothing (keeps at least the first token); a
+    leftover separator (`JOEYS PIZZA-`) is then trimmed."""
     tokens = merchant.split()
+    for i in range(1, len(tokens)):
+        if _is_hard_store_token(tokens[i]):
+            tokens = tokens[:i]
+            break
     while len(tokens) > 1 and _is_store_token(tokens[-1]):
         tokens.pop()
     return " ".join(tokens).rstrip(" -#/.,")
