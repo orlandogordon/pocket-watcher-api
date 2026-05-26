@@ -85,7 +85,7 @@ class TransactionBatchResult(TypedDict):
 # ---------- prompt fragments ----------
 
 _MERCHANT_RULES = """Merchant name rules (applied to `merchant_name`):
-- `merchant_name` is JUST the normalized brand — no metadata, no location, no store number, no identifier. So "STARBUCKS STORE 12345 SEATTLE WA" -> merchant "Starbucks"; "COSTCO WHSE 1025 MANAHAWKIN NJ" -> merchant "Costco"; "Apple.com/bill 866-712-7753" -> merchant "Apple"; "VENMO 3125551234" -> merchant "Venmo".
+- `merchant_name` is JUST the normalized brand — no metadata, no location, no store number, no identifier. So "STARBUCKS STORE 12345 SEATTLE WA" -> merchant "Starbucks"; "COSTCO WHSE 1025 MANAHAWKIN NJ" -> merchant "Costco"; "APPLE.COM/BILL 866-712-7753" -> merchant "apple.com" (keep the apple.com identifier, drop the phone number); "VENMO 3125551234" -> merchant "Venmo".
 - **Return null when there is no real brand in the source.** The merchant column is allowed to be null and SHOULD be null for:
   - Bare-address rows (e.g. "DDA WITHDRAW AP TW04C996 1120 TILTON RD NORTHFIELD * NJ" — there is no merchant, just a street address; return null. Do NOT invent a brand from the address).
   - ATM cash deposits at branch addresses (e.g. "ATM CASH DEPOSIT 1101 HOOPER AVENUE TOMS RIVER * NJ" — return null).
@@ -105,7 +105,8 @@ _MERCHANT_RULES = """Merchant name rules (applied to `merchant_name`):
 _CATEGORY_RULES = """Category rules (applied to `suggested_category_uuid` + `suggested_subcategory_uuid`):
 
 **TOKEN PRIORITY — consult BEFORE picking a category.** When the description contains one of these signals, use the indicated category. Token priority OVERRIDES brand-name pattern-matching and OVERRIDES the temptation to default to Restaurants:
-- `FUEL`, `GAS`, `GASOLINE`, or a named gas station (WAWA, EXXON, SHELL, BP, CHEVRON, MOBIL, SUNOCO, VALERO, MARATHON, CITGO, LUKOIL) → Transportation / Gas. The fuel signal beats the convenience-store / restaurant signal even when the brand also sells food (e.g. `WAWA FUEL/CONVENIENCE` → Gas, not Restaurants).
+- `FUEL`, `GAS`, `GASOLINE`, or a dedicated gas station (EXXON, SHELL, BP, CHEVRON, MOBIL, SUNOCO, VALERO, MARATHON, CITGO, LUKOIL) → Transportation / Gas. For these fuel-only brands the gas signal beats the restaurant signal (e.g. `SHELL OIL` → Gas, not Restaurants).
+- **Convenience-store chains that ALSO sell fuel (WAWA, SHEETZ, QUIKTRIP, ROYAL FARMS, CUMBERLAND FARMS, QUICKCHEK, CIRCLE K, 7-ELEVEN, SPEEDWAY) are genuinely ambiguous — emit null for BOTH category fields.** A single charge could be a fill-up, a coffee, a sandwich, or sundries, and a `FUEL/CONVENIENCE`-style descriptor does NOT disambiguate (it just names the store format, not what was bought). Do NOT file these under Transportation / Gas. Let the user categorize from the preview.
 - `AUTO`, `AUTO INSURANCE`, `CAR INSURANCE`, or a known auto insurer (GEICO, PROGRESSIVE, ALLSTATE, USAA, LIBERTY MUTUAL, FARMERS, ESURANCE) → Transportation / Car Insurance — NOT Housing / Insurance.
 - Home / renters insurance brands (LEMONADE, NATIONWIDE HOMEOWNERS, TRAVELERS HOME, USAA RENTERS) → Housing / Insurance.
 - Health insurance brands (BLUE CROSS, BLUE SHIELD, AETNA, CIGNA, UNITEDHEALTHCARE, KAISER, HUMANA) → Health / Health Insurance.
@@ -133,6 +134,7 @@ _CATEGORY_RULES = """Category rules (applied to `suggested_category_uuid` + `sug
 - When no subcategory is a clean fit but the category itself is clear (e.g. "this is shopping, just unclear what kind"), pick "Shopping / General". Reserve null for genuine purpose-ambiguity, not subcategory-ambiguity.
 - For income-shaped transactions (payroll, direct deposit, dividend, interest received), pick under "Income".
 - Income / Investment Income is for DIVIDENDS, INTEREST, and brokerage gains — NOT for marketplace sales. Person-to-person marketplace sales (FACEBOOK MARKETPLACE SALE, CRAIGSLIST SALE, ETSY PAYOUT, EBAY SALE), garage sale proceeds, and one-off paid work (`PAYMENT FROM <person> FOR <work>`) → Income / Other Income.
+- **Donations and crowdfunding contributions you MAKE go to Miscellaneous / Gifts & Charity, NOT Income.** A `DONATION` token, a fundraising/crowdfunding platform (GOFUNDME, KICKSTARTER, INDIEGOGO, PATREON, DONORBOX), a charity (RED CROSS, UNICEF, ST JUDE, WIKIMEDIA, NPR/PBS pledge, church/temple offering), or a `… FOR <name>` campaign on an OUTGOING row (PURCHASE/DEBIT, money leaving the account) is a gift made — file it under Gifts & Charity. Direction is the discriminator: do NOT route it to Income just because the platform (e.g. GoFundMe) is associated with receiving money — the user here is the giver. This is the outgoing mirror of the marketplace-sales rule above. Gifts purchased for other people go here too.
 - Income / Taxes is BIDIRECTIONAL: tax refunds (IRS TREAS, STATE TAX REFUND) AND tax payments (IRS PAYMENT, ESTIMATED TAX, PROPERTY TAX) both go here.
 - Mortgage payments go to Housing / Mortgage — NOT Debt Payment. Debt Payment is for credit cards, student loans, and car loans only.
 - Student loan servicers (HESAA, Nelnet, MOHELA, Sallie Mae, Navient, Great Lakes, EdFinancial, Dept of Education / DEPTEDUCATION) on payment-shaped rows go to Debt Payment / Student Loan. The merchant token may be concatenated with PAYMENT (e.g. HESAAPAYMENT, NELNETPAYMENT) — preserve all letters of the servicer name; do not drop trailing letters when the token splits.
@@ -179,7 +181,7 @@ Input: {"description": "ACHDEBIT,HESAAPAYMENTP18514286", "amount": "200.14", "tr
 Output: {"merchant_name": "HESAA", "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "3280dd39-0173-4754-bdba-17b1a3981e1e", "confidence": 0.92}
 
 Input: {"description": "WAWA FUEL/CONVENIENCE TOMS RIVER NJ", "amount": "42.18", "transaction_type": "PURCHASE"}
-Output: {"merchant_name": "Wawa", "suggested_category_uuid": "d0032366-ed8b-484b-9564-7f5e9721aa7e", "suggested_subcategory_uuid": "936a458b-82eb-4278-b64f-4fba8f7ae8da", "confidence": 0.95}
+Output: {"merchant_name": "Wawa", "suggested_category_uuid": null, "suggested_subcategory_uuid": null, "confidence": 0.45}
 
 Input: {"description": "ACHDEBIT,CRUNCHFITCLUBFEES****300238869", "amount": "39.99", "transaction_type": "PURCHASE"}
 Output: {"merchant_name": "Crunch Fitness", "suggested_category_uuid": "978bf5d7-68a7-49ce-9f6e-f05ff01f4e07", "suggested_subcategory_uuid": "2eaf0bb4-12ef-4049-a905-bcdb9de0142b", "confidence": 0.92}
@@ -197,7 +199,7 @@ Input: {"description": "VERIZON WIRELESS AUTOPAY", "amount": "85.00", "transacti
 Output: {"merchant_name": "Verizon Wireless", "suggested_category_uuid": "f8ee90f0-2d76-4547-b9b4-71fbb2c506d6", "suggested_subcategory_uuid": "8b4be050-62fa-4520-b5af-012e0eb048f5", "confidence": 0.95}
 
 Input: {"description": "APPLE.COM/BILL 866-712-7753 CA", "amount": "2.99", "transaction_type": "PURCHASE"}
-Output: {"merchant_name": "Apple", "suggested_category_uuid": null, "suggested_subcategory_uuid": null, "confidence": 0.4}
+Output: {"merchant_name": "apple.com", "suggested_category_uuid": null, "suggested_subcategory_uuid": null, "confidence": 0.4}
 
 Input: {"description": "DDA WITHDRAW AP TW04C996  1120 TILTON RD  NORTHFIELD  * NJ", "amount": "200.00", "transaction_type": "PURCHASE"}
 Output: {"merchant_name": null, "suggested_category_uuid": "0284c65f-1af6-48d2-9133-3d3ac3393ede", "suggested_subcategory_uuid": "d7a3041e-5253-492c-82ca-ca24fb25df26", "confidence": 0.7}
@@ -222,6 +224,9 @@ Output: {"merchant_name": "Zelle", "suggested_category_uuid": null, "suggested_s
 
 Input: {"description": "VENMO PAYMENT 3125551234 SUSAN PARK", "amount": "65.00", "transaction_type": "PURCHASE"}
 Output: {"merchant_name": "Venmo", "suggested_category_uuid": null, "suggested_subcategory_uuid": null, "confidence": 0.5}
+
+Input: {"description": "RED CROSS DONATION 800-RED-CROSS", "amount": "75.00", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "Red Cross", "suggested_category_uuid": "0284c65f-1af6-48d2-9133-3d3ac3393ede", "suggested_subcategory_uuid": "63e4c43b-a02e-4ac4-b820-46425a20d954", "confidence": 0.9}
 
 Input: {"description": "ACH CREDIT XXXXX1234 ", "amount": "320.00", "transaction_type": "DEPOSIT"}
 Output: {"merchant_name": null, "suggested_category_uuid": null, "suggested_subcategory_uuid": null, "confidence": 0.4}"""
@@ -389,7 +394,7 @@ class LlamaCppClient(LLMClient):
         self,
         endpoint: str,
         model: str,
-        timeout_s: float = 15.0,
+        timeout_s: float = 120.0,
         max_retries: int = 1,
     ):
         self._endpoint = endpoint
@@ -530,14 +535,17 @@ def get_llm_client() -> LLMClient:
         LLM_ENDPOINT     default 'http://localhost:8080/v1' (llama.cpp only)
         LLM_MODEL        model identifier; defaults depend on backend
         LLM_API_KEY      Anthropic API key (unused for llama.cpp)
-        LLM_TIMEOUT_S    per-call timeout in seconds (default 15.0)
+        LLM_TIMEOUT_S    per-call timeout in seconds (default 120.0). Generous
+                         on purpose — a 20-row batch on a local 9B can take
+                         ~25s, and a too-tight timeout drops the whole batch's
+                         category suggestions via LLMUnavailableError.
     """
     global _client_singleton
     if _client_singleton is not None:
         return _client_singleton
 
     backend = os.getenv("LLM_BACKEND", "llama_cpp").lower()
-    timeout_s = float(os.getenv("LLM_TIMEOUT_S", "15.0"))
+    timeout_s = float(os.getenv("LLM_TIMEOUT_S", "120.0"))
 
     if backend == "llama_cpp":
         _client_singleton = LlamaCppClient(

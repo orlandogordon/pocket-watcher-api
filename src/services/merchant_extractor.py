@@ -143,6 +143,16 @@ _PREFIX_ALIASES: tuple[tuple[re.Pattern, str], ...] = (
     (re.compile(r"^WHOLEFOODS#?\b"), "Whole Foods"),
     (re.compile(r"^AMAZON\s+PRIME\b"), "Amazon Prime"),
     (re.compile(r"^AMAZON\s+(?:RETAIL|MARKETPLACE|DIGITAL)\b"), "Amazon"),
+    # Recurring Apple billing descriptor. iCloud, App Store, Apple Music,
+    # AppleCare, etc. all surface as `APPLE.COM/BILL ...` (often trailed by a
+    # support phone + state). The specific product is unknowable from the row,
+    # so group them under a single stable "apple.com" merchant. (Category stays
+    # null for the standalone shape — see _CATEGORY_RULES in llm_client.)
+    (re.compile(r"^APPLE\.COM"), "apple.com"),
+    # CVS rows arrive as `CVS/PHARMACY #NNNN NNNNN ...`, `CVS PHARMACY ...`, or
+    # bare `CVS #NNNN ...`. Normalize the brand to "CVS Pharmacy" rather than
+    # letting the title-caser emit "Cvs/pharmacy" with the slash intact.
+    (re.compile(r"^CVS\b"), "CVS Pharmacy"),
 )
 
 
@@ -178,8 +188,7 @@ def _tdbank_purchase(raw: str, norm: str) -> Optional[str]:
     # requires letters after the digits).
     if not any(ch.isalpha() for ch in merchant_raw):
         return None
-    # Drop trailing store-number-like digits (e.g. "WALGREENS 6321" -> "WALGREENS").
-    merchant_raw = re.sub(r"\s+\d{3,}$", "", merchant_raw)
+    merchant_raw = _strip_store_suffix(merchant_raw)
     if len(merchant_raw) < 2:
         return None
     return _titlecase(merchant_raw)
@@ -233,9 +242,7 @@ def _amex_pos(raw: str, norm: str) -> Optional[str]:
     m = _AMEX_POS_PAT.match(norm)
     if not m:
         return None
-    merchant = m.group("merchant").strip()
-    # Strip trailing # store numbers if attached
-    merchant = re.sub(r"#\s*\d+\s*$", "", merchant).strip()
+    merchant = _strip_store_suffix(m.group("merchant").strip())
     if not merchant or len(merchant) < 2:
         return None
     if _ADDRESS_LIKE.match(merchant) or _BARE_STATE.match(merchant):
@@ -342,6 +349,33 @@ def _strip_trailing_ref(norm: str) -> str:
     return stripped or norm
 
 
+def _is_store_token(tok: str) -> bool:
+    """A trailing token that's a store id / reference number, not part of the
+    brand name. Two shapes:
+      - a pure number or `#`-prefixed store number (`8368`, `#05675`, `000005675`)
+      - a numeric-dominant reference code (`P40905479D`) — 4+ digits overall.
+        The 4-digit floor avoids eating brand tokens that legitimately carry a
+        digit or two (`3M`, `7UP`, `H&M2`), which are also rarely trailing.
+    """
+    if re.fullmatch(r"#?\d+", tok):
+        return True
+    return sum(ch.isdigit() for ch in tok) >= 4
+
+
+def _strip_store_suffix(merchant: str) -> str:
+    """Drop trailing store-id / reference-number tokens from a captured POS
+    merchant slot. POS rows routinely append one or two of these between the
+    brand and the city: `WAWA 8368 8368`, `CVS/PHARMACY #05675 000005675`,
+    `SPOTIFY P40905479D 685603`. Pop junk tokens from the right, stopping at
+    the first token that looks like part of the name; never strip the capture
+    down to nothing (keep at least one token). Trailing separator punctuation
+    left behind (`JOEYS PIZZA-`) is then trimmed."""
+    tokens = merchant.split()
+    while len(tokens) > 1 and _is_store_token(tokens[-1]):
+        tokens.pop()
+    return " ".join(tokens).rstrip(" -#/.,")
+
+
 _SHORT_ACRONYMS = {
     "NYC", "USA", "ATM", "POS", "ETF", "LLC", "INC", "FBO", "IRS",
     "IHOP", "CVS", "DSW", "KFC", "BBQ", "AMC", "NBA", "MTA", "SA",
@@ -353,23 +387,31 @@ _SHORT_ACRONYMS = {
 }
 
 
+def _case_token(tok: str) -> str:
+    """Case a single slash-free, whitespace-free token: preserve known
+    acronyms / state codes and single letters; otherwise capitalize."""
+    if tok.upper() in _SHORT_ACRONYMS:
+        return tok.upper()
+    if len(tok) == 1:
+        # Single-letter tokens (K, M in "K M Tire") -> uppercase
+        return tok.upper()
+    t = tok.lower().capitalize()
+    # Fix apostrophe casing: Joe'S -> Joe's
+    return re.sub(r"'(\w)", lambda m: "'" + m.group(1).lower(), t)
+
+
 def _titlecase(s: str) -> str:
     """Convert ALL CAPS merchant text to display case, preserving known
-    acronyms (NYC, IHOP) and US state codes. Best-effort — don't rely on
-    this matching the LLM's casing exactly; the merchant column is for
-    grouping, not display.
+    acronyms (NYC, IHOP) and US state codes. Tokens glued by '/' are cased on
+    each side and rejoined (CVS/PHARMACY -> CVS/Pharmacy, FUEL/CONVENIENCE ->
+    Fuel/Convenience) so a slash doesn't defeat the acronym lookup or leave a
+    lowercased tail. Best-effort — don't rely on this matching the LLM's casing
+    exactly; the merchant column is for grouping, not display.
     """
-    words = s.split()
     out: list[str] = []
-    for w in words:
-        if w.upper() in _SHORT_ACRONYMS:
-            out.append(w.upper())
-        elif len(w) == 1:
-            # Single-letter tokens (K, M in "K M Tire") -> uppercase
-            out.append(w.upper())
+    for word in s.split():
+        if "/" in word:
+            out.append("/".join(_case_token(p) for p in word.split("/")))
         else:
-            t = w.lower().capitalize()
-            # Fix apostrophe casing: Joe'S -> Joe's
-            t = re.sub(r"'(\w)", lambda m: "'" + m.group(1).lower(), t)
-            out.append(t)
+            out.append(_case_token(word))
     return " ".join(out)

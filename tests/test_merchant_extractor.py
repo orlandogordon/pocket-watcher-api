@@ -210,6 +210,108 @@ class TestSquashedTokenAliases(unittest.TestCase):
         self.assertIn("Microsoft", result)
 
 
+# ---------- Section E: store-number / reference-id suffix stripping ----------
+
+class TestStoreNumberStripping(unittest.TestCase):
+    """POS rows append store ids and reference numbers between the brand and
+    the city: a pure number, a `#`-prefixed store number, or a numeric-dominant
+    reference code. These must be dropped from the merchant slot so rows for
+    the same brand group together (continuation of the #54 extractor work)."""
+
+    def test_wawa_double_store_number(self):
+        self.assertEqual(
+            extract_merchant("amex", "WAWA 8368 8368 EATONTOWN NJ"),
+            "Wawa",
+        )
+
+    def test_joeys_pizza_trailing_ref_and_dash(self):
+        # Trailing ref number dropped; the leftover dangling hyphen is trimmed.
+        self.assertEqual(
+            extract_merchant("amex", "JOEYS PIZZA- 000000002 MANAHAWKIN NJ"),
+            "Joeys Pizza",
+        )
+
+    def test_chickfila_hash_store_and_long_ref(self):
+        self.assertEqual(
+            extract_merchant("amex", "CHICK-FIL-A #02744 000000000404966 BRICK NJ"),
+            "Chick-fil-a",
+        )
+
+    def test_dunkin_hash_store_and_number(self):
+        self.assertEqual(
+            extract_merchant("amex", "DUNKIN #357459 357459 BARNEGAT NJ"),
+            "Dunkin",
+        )
+
+    def test_spotify_alnum_reference_code(self):
+        # `P40905479D` is a numeric-dominant reference code (8 digits) — junk.
+        self.assertEqual(
+            extract_merchant("amex", "SPOTIFY P40905479D 685603 NEW YORK NY"),
+            "Spotify",
+        )
+
+    def test_multiword_brand_keeps_name_drops_number(self):
+        # Only the trailing number is junk — the multi-word brand survives.
+        self.assertEqual(
+            extract_merchant("amex", "MAMMA ROSA RESTAURANT PIZ 145000001 BARNEGAT NJ"),
+            "Mamma Rosa Restaurant Piz",
+        )
+
+
+# ---------- Section F: CVS + Apple billing aliases ----------
+
+class TestBrandNormalizationAliases(unittest.TestCase):
+    """Brands whose raw shape needs normalization beyond suffix stripping."""
+
+    def test_cvs_pharmacy_slash_form(self):
+        # Store numbers stripped AND the slash form normalized to "CVS Pharmacy"
+        # (vs. the title-caser's "Cvs/pharmacy").
+        self.assertEqual(
+            extract_merchant("amex", "CVS/PHARMACY #05675 000005675 BARNEGAT NJ"),
+            "CVS Pharmacy",
+        )
+
+    def test_cvs_bare_store_number(self):
+        self.assertEqual(
+            extract_merchant("amex", "CVS #1234 TOMS RIVER NJ"),
+            "CVS Pharmacy",
+        )
+
+    def test_apple_com_bill_with_city(self):
+        self.assertEqual(
+            extract_merchant("amex", "APPLE.COM/BILL CUPERTINO CA"),
+            "apple.com",
+        )
+
+    def test_apple_com_bill_with_phone(self):
+        # The phone-number "city" would otherwise fail the POS regex; the
+        # prefix alias catches the row regardless.
+        self.assertEqual(
+            extract_merchant("amex", "APPLE.COM/BILL 866-712-7753 CA"),
+            "apple.com",
+        )
+
+
+# ---------- Section G: slash-joined token casing ----------
+
+class TestSlashCasing(unittest.TestCase):
+    """Tokens glued by '/' are cased on each side and rejoined, so the acronym
+    lookup isn't defeated and no lowercased tail is left behind."""
+
+    def test_wawa_fuel_convenience(self):
+        # The blessed merchant shape — now with both sides correctly cased.
+        self.assertEqual(
+            extract_merchant("amex", "WAWA FUEL/CONVENIENCE TOMS RIVER NJ"),
+            "Wawa Fuel/Convenience",
+        )
+
+    def test_slash_joined_descriptor(self):
+        self.assertEqual(
+            extract_merchant("amex", "KINGS BAR/GRILL HOBOKEN NJ"),
+            "Kings Bar/Grill",
+        )
+
+
 # ---------- Negative cases that should still fall through to LLM ----------
 
 class TestExtractorNegativeCases(unittest.TestCase):
