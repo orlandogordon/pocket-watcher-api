@@ -1,0 +1,6 @@
+"Date","Action","Symbol","Description","Quantity","Price","Fees & Comm","Amount"
+"12/30/2024","Credit Interest","","SCHWAB1 INT 11/27-12/29","","","","$0.09"
+"06/03/2024","Buy","VOO","VANGUARD S&P 500 ETF","2","$480.00","","-$960.00"
+"06/17/2024","Sell to Close","JPM 08/16/2024 200.00 C","CALL J P MORGAN CHASE & $200 EXP 08/16/24","1","$4.60","$0.67","$459.33"
+"06/20/2024","Cash Dividend","VOO","VANGUARD S&P 500 ETF","","","","$12.34"
+"06/25/2024","MoneyLink Transfer","","FUNDS TRANSFER","","","","-$500.00"
