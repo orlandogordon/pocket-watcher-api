@@ -905,6 +905,17 @@ def get_transaction_stats(db: Session, user_id: int, filters: Optional[Transacti
     total_income = Decimal('0.00')
     total_expenses = Decimal('0.00')
 
+    # When exactly one account is in scope, a transfer is real money crossing
+    # that account's boundary, so it counts toward income/expense. Across all
+    # or multiple accounts a transfer nets to zero (it's internal movement)
+    # and stays excluded.
+    single_account = bool(filters and filters.account_ids and len(filters.account_ids) == 1)
+    income_types = {TransactionType.CREDIT, TransactionType.DEPOSIT, TransactionType.INTEREST}
+    expense_types = {TransactionType.PURCHASE, TransactionType.WITHDRAWAL, TransactionType.FEE}
+    if single_account:
+        income_types.add(TransactionType.TRANSFER_IN)
+        expense_types.add(TransactionType.TRANSFER_OUT)
+
     for transaction in transactions:
         if transaction.db_id in absorbed_ids:
             continue
@@ -912,11 +923,10 @@ def get_transaction_stats(db: Session, user_id: int, filters: Optional[Transacti
         adj = adjustments.get(transaction.db_id, Decimal('0.00'))
         effective = max(transaction.amount - adj, Decimal('0.00'))
 
-        if transaction.transaction_type in (TransactionType.CREDIT, TransactionType.DEPOSIT, TransactionType.INTEREST):
+        if transaction.transaction_type in income_types:
             total_income += effective
-        elif transaction.transaction_type in (TransactionType.PURCHASE, TransactionType.WITHDRAWAL, TransactionType.FEE):
+        elif transaction.transaction_type in expense_types:
             total_expenses += effective
-        # TRANSFER_IN, TRANSFER_OUT: not counted as income or expense
 
     # If category filter is active, adjust split transaction amounts
     if filters and filters.category_ids:
