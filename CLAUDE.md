@@ -221,6 +221,29 @@ The API provides comprehensive endpoints for all financial management features:
 3. **Security Focus**: Validate user ownership on all operations
 4. **Clear Communication**: Ask for clarification rather than making assumptions
 
+## Testing
+
+`pytest`-based suite that runs the app in-process via `TestClient` — **no
+server, Postgres, or Redis needed** (in-memory SQLite + `fakeredis`). Run:
+
+```
+./venv/Scripts/python.exe -m pytest --cov=src --cov-report=term-missing -q
+```
+
+- Fixtures/factories: `tests/conftest.py`, `tests/factories.py`. Authed
+  `client` vs `unauth_client`; `admin_client` for admin-gated routes;
+  `fake_redis`, `fake_llm`.
+- Markers (`pyproject.toml`): `parser`, `integration`, `slow`.
+- Parser regression runs off a **gitignored** real-statement corpus at
+  `tests/parsers/fixtures/local/<institution>/` (PII — never committed); those
+  tests skip when it is absent. Committed synthetic `*.csv` fixtures cover the
+  CSV paths. The PDF `parse_statement`/`parse_pdf` bodies are excluded from
+  coverage (corpus-only). Coverage is ~76% fresh-clone / ~78% local; no enforced
+  floor.
+- **Never commit real PII** in fixtures or code (repo is public).
+  `scripts/verify_pdf_sanitized.py` + `tests/test_fixture_pii_guard.py` guard
+  committed PDFs.
+
 ## Next Steps / To-Do
 
 ### Logging Implementation

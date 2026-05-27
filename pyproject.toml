@@ -18,3 +18,15 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
+# The PDF parse entry points can only be exercised by real statement PDFs, which
+# are gitignored (PII) and never committed — so their coverage swings purely on
+# whether the local tests/parsers/fixtures/local/ corpus is present. Exclude
+# those bodies so the reported number is stable across a fresh clone and a local
+# checkout. The parser tests still run and assert behavior when the corpus is
+# present; this only drops the volatile lines from the metric. CSV paths
+# (schwab/ameriprise/amex parse_csv) have committed synthetic fixtures and stay
+# measured.
+exclude_also = [
+    "def parse_statement",
+    "def parse_pdf",
+]

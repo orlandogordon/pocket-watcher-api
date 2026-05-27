@@ -19,6 +19,36 @@
 - Run Claude Code: npx @anthropic-ai/claude-code
 
 
+## Testing
+
+The test suite is `pytest`-based and runs the app in-process via `TestClient` —
+**no running server, database, or Redis is required** (SQLite is in-memory and
+Redis is faked).
+
+Run everything with coverage:
+
+```
+./venv/Scripts/python.exe -m pytest --cov=src --cov-report=term-missing -q
+```
+
+(`python -m pytest ...` on any platform; the path above is the Windows venv.)
+
+- **Coverage** lands around **76% on a fresh clone** and **~78% locally**. There
+  is no enforced `--cov-fail-under` floor — coverage is a guardrail, not the
+  target. The PDF `parse_statement`/`parse_pdf` parser bodies are excluded from
+  measurement (see `pyproject.toml`) because they can only be exercised by real
+  statement PDFs, which are never committed.
+- **Markers** (`pyproject.toml`): `parser`, `integration`, `slow`. Deselect with
+  e.g. `-m "not parser"`.
+- **Parser regression corpus**: real statements live, gitignored, under
+  `tests/parsers/fixtures/local/<institution>/` and contain PII, so they are
+  never committed. Those tests **skip when the corpus is absent**. The committed
+  synthetic CSV fixtures (`tests/parsers/fixtures/*.csv`) cover the CSV paths.
+- **No PII in committed fixtures.** `scripts/verify_pdf_sanitized.py` is a
+  tripwire that fails if a candidate PDF still carries PII;
+  `tests/test_fixture_pii_guard.py` runs it over every committed
+  `tests/parsers/fixtures/*.pdf` as part of the suite.
+
 ## Bulk Upload Script instruction
   Before you run it, you need to:
 
