@@ -3,7 +3,7 @@ import re
 import unittest
 from pathlib import Path
 
-INPUT_DIR = Path(__file__).parent.parent / "input"
+INPUT_DIR = Path(__file__).parent / "parsers" / "fixtures" / "local"
 
 
 class TestAmeripriseNormalize(unittest.TestCase):
@@ -71,7 +71,7 @@ class TestAmexParserIntegration(unittest.TestCase):
     def test_pdf_payment_is_transfer_in(self):
         pdf_files = list(INPUT_DIR.glob("amex/*.pdf"))
         if not pdf_files:
-            self.skipTest("No Amex PDF files in input/")
+            self.skipTest("No Amex PDF files in tests/parsers/fixtures/local/amex/")
         from src.parser.amex import parse_statement
         for pdf_file in pdf_files:
             result = parse_statement(str(pdf_file))
@@ -83,7 +83,7 @@ class TestAmexParserIntegration(unittest.TestCase):
 class TestAmexCleanDescription(unittest.TestCase):
     def test_strips_aplpay_prefix(self):
         from src.parser.amex import _clean_description
-        self.assertEqual(_clean_description("AplPay TARGET BRICK NJ"), "TARGET BRICK NJ")
+        self.assertEqual(_clean_description("AplPay TARGET THIRDTOWN NJ"), "TARGET THIRDTOWN NJ")
 
     def test_strips_pay_over_time_suffix(self):
         from src.parser.amex import _clean_description
@@ -126,7 +126,7 @@ class TestAmznSyfParserIntegration(unittest.TestCase):
     def test_pdf_payment_is_transfer_in(self):
         pdf_files = list(INPUT_DIR.glob("amzn-synchrony/*.pdf"))
         if not pdf_files:
-            self.skipTest("No Amazon Synchrony PDF files in input/")
+            self.skipTest("No Amazon Synchrony PDF files in tests/parsers/fixtures/local/amzn-synchrony/")
         from src.parser.amzn_syf import parse_statement
         for pdf_file in pdf_files:
             result = parse_statement(str(pdf_file))
@@ -151,17 +151,17 @@ class TestVenmoHelpers(unittest.TestCase):
     def test_balance_affecting_cashout(self):
         from src.parser.venmo import _is_balance_affecting
         # Standard Transfer: funding blank, destination = bank.
-        self.assertTrue(_is_balance_affecting("", "TD BANK, NA *4636"))
+        self.assertTrue(_is_balance_affecting("", "TD BANK, NA *0000"))
 
     def test_balance_affecting_skips_external_funded(self):
         from src.parser.venmo import _is_balance_affecting
         # Payment sent via Visa: external funding, destination blank.
-        self.assertFalse(_is_balance_affecting("Visa *1312", ""))
+        self.assertFalse(_is_balance_affecting("Visa *0001", ""))
         # Charge paid via Amex Send: external funding, destination blank.
         self.assertFalse(_is_balance_affecting("Amex Send Account", ""))
         # Merchant Transaction via TD Bank checking: external funding.
         self.assertFalse(
-            _is_balance_affecting("TD BANK, NA Personal Checking *4636", "")
+            _is_balance_affecting("TD BANK, NA Personal Checking *0000", "")
         )
 
     def test_classify_payment(self):
@@ -200,66 +200,39 @@ class TestVenmoHelpers(unittest.TestCase):
 
 
 class TestVenmoParserIntegration(unittest.TestCase):
-    def test_jan_2023_reconciles_to_zero(self):
-        """Beginning balance $180, ending balance $0 — net change must be -$180."""
-        from src.parser.venmo import parse_csv
-        from decimal import Decimal
-        csv_path = INPUT_DIR / "venmo" / "VenmoStatement_January_2023.csv"
-        if not csv_path.exists():
-            self.skipTest("Venmo Jan 2023 fixture missing")
-        data = parse_csv(csv_path)
-        net = Decimal("0")
-        for t in data.transactions:
-            if t.transaction_type in ("DEPOSIT", "TRANSFER_IN"):
-                net += t.amount
-            else:
-                net -= t.amount
-        self.assertEqual(net, Decimal("-180.00"))
-
-    def test_feb_2025_reconciles_to_four(self):
-        """Beginning balance $0, ending balance $4 — net change must be +$4."""
-        from src.parser.venmo import parse_csv
-        from decimal import Decimal
-        csv_path = INPUT_DIR / "venmo" / "VenmoStatement_February_2025.csv"
-        if not csv_path.exists():
-            self.skipTest("Venmo Feb 2025 fixture missing")
-        data = parse_csv(csv_path)
-        net = Decimal("0")
-        for t in data.transactions:
-            if t.transaction_type in ("DEPOSIT", "TRANSFER_IN"):
-                net += t.amount
-            else:
-                net -= t.amount
-        self.assertEqual(net, Decimal("4.00"))
-
-    def test_skips_external_funded_rows(self):
-        """Jan 2023 has 14 raw rows, 9 of which are funded by Visa *1312.
-        Only 5 deposits + 1 cashout should be emitted (= 6 transactions)."""
-        from src.parser.venmo import parse_csv
-        csv_path = INPUT_DIR / "venmo" / "VenmoStatement_January_2023.csv"
-        if not csv_path.exists():
-            self.skipTest("Venmo Jan 2023 fixture missing")
-        data = parse_csv(csv_path)
-        self.assertEqual(len(data.transactions), 6)
-
-    def test_full_year_fixtures_reconcile(self):
-        """Reconcile every full-year + monthly fixture against the
-        Beginning/Ending balance pair reported by Venmo itself."""
-        from src.parser.venmo import parse_csv
-        from decimal import Decimal
+    @staticmethod
+    def _reported_balances(csv_path):
+        """Read the Beginning/Ending Balance the Venmo statement reports about
+        itself, so reconciliation needs no hardcoded (personal) figures."""
         import csv
+        from decimal import Decimal
 
-        expected = {
-            "venmo - 2020.csv": (Decimal("0.00"), Decimal("0.00")),
-            "venmo - 2021.csv": (Decimal("0.00"), Decimal("15.00")),
-            "venmo - 2022.csv": (Decimal("15.00"), Decimal("180.00")),
-            "VenmoStatement_January_2023.csv": (Decimal("180.00"), Decimal("0.00")),
-            "VenmoStatement_February_2025.csv": (Decimal("0.00"), Decimal("4.00")),
-        }
-        for fname, (begin, end) in expected.items():
-            csv_path = INPUT_DIR / "venmo" / fname
-            if not csv_path.exists():
-                continue
+        def _money(value):
+            return Decimal(value.replace("$", "").replace(",", "").strip())
+
+        rows = list(csv.reader(csv_path.open(encoding="utf-8")))
+        hdr = next(i for i, r in enumerate(rows) if "Beginning Balance" in r)
+        cols = rows[hdr]
+        bi, ei = cols.index("Beginning Balance"), cols.index("Ending Balance")
+        begin = end = Decimal("0")
+        for r in rows[hdr + 1:]:
+            if len(r) > bi and r[bi].strip():
+                begin = _money(r[bi])
+            if len(r) > ei and r[ei].strip():
+                end = _money(r[ei])
+        return begin, end
+
+    def test_all_fixtures_reconcile_to_reported_balances(self):
+        """Every Venmo CSV present reconciles: the net of emitted transactions
+        equals (ending - beginning) as the statement itself reports. Self-
+        referential — no personal balances are hardcoded in the test."""
+        from src.parser.venmo import parse_csv
+        from decimal import Decimal
+        csvs = sorted((INPUT_DIR / "venmo").glob("*.csv"))
+        if not csvs:
+            self.skipTest("No Venmo CSV fixtures in tests/parsers/fixtures/local/venmo/")
+        for csv_path in csvs:
+            begin, end = self._reported_balances(csv_path)
             data = parse_csv(csv_path)
             net = Decimal("0")
             for t in data.transactions:
@@ -267,10 +240,18 @@ class TestVenmoParserIntegration(unittest.TestCase):
                     net += t.amount
                 else:
                     net -= t.amount
-            self.assertEqual(
-                net, end - begin,
-                f"{fname}: net change {net} does not reconcile to {end - begin}",
-            )
+            self.assertEqual(net, end - begin,
+                             f"{csv_path.name}: net {net} != reported {end - begin}")
+
+    def test_skips_external_funded_rows(self):
+        """Jan 2023 has 14 raw rows, 9 of which are funded by Visa *0001.
+        Only 5 deposits + 1 cashout should be emitted (= 6 transactions)."""
+        from src.parser.venmo import parse_csv
+        csv_path = INPUT_DIR / "venmo" / "VenmoStatement_January_2023.csv"
+        if not csv_path.exists():
+            self.skipTest("Venmo Jan 2023 fixture missing")
+        data = parse_csv(csv_path)
+        self.assertEqual(len(data.transactions), 6)
 
 
 class TestCashAppHelpers(unittest.TestCase):
@@ -317,19 +298,19 @@ class TestCashAppHelpers(unittest.TestCase):
 
     def test_description_strips_boilerplate_note(self):
         from src.parser.cashapp import _build_description
-        # "$535 Payment From Chris Provel" is auto-generated boilerplate;
+        # "$535 Payment From Jane Doe" is auto-generated boilerplate;
         # description should fall back to just the Name column.
         self.assertEqual(
-            _build_description("P2P", "$535 Payment From Chris Provel", "Chris Provel", "Cash Balance"),
-            "Chris Provel",
+            _build_description("P2P", "$535 Payment From Jane Doe", "Jane Doe", "Cash Balance"),
+            "Jane Doe",
         )
 
     def test_description_keeps_user_supplied_note(self):
         from src.parser.cashapp import _build_description
         # User-supplied memo (an emoji, a freeform string) should be kept.
         self.assertEqual(
-            _build_description("P2P", "Uber home", "Matt Mihm", "Cash Balance"),
-            "Matt Mihm: Uber home",
+            _build_description("P2P", "Uber home", "John Smith", "Cash Balance"),
+            "John Smith: Uber home",
         )
 
     def test_description_withdrawal_uses_account(self):
@@ -354,7 +335,7 @@ class TestCashAppParserIntegration(unittest.TestCase):
 
     def test_fixture_type_breakdown(self):
         """Of the 20 emitted: 8 cashouts, 10 deposits, 2 purchases
-        (Matt Mihm tally hose $20 + Uber home $30)."""
+        (John Smith tally hose $20 + Uber home $30)."""
         from src.parser.cashapp import parse_csv
         from collections import Counter
         csv_path = INPUT_DIR / "cashapp" / "cash_app_report_1778789548189.csv"
@@ -374,7 +355,7 @@ class TestTdbankCleanDescription(unittest.TestCase):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
             _clean_description(
-                "DEBITCARDPURCHASE,*****30081855819,AUT100920VISADDAPUR MICROSOFTXBOX MSBILLINFO *WA"
+                "DEBITCARDPURCHASE,*****11111111111,AUT100920VISADDAPUR MICROSOFTXBOX MSBILLINFO *WA"
             ),
             "MICROSOFTXBOX MSBILLINFO *WA",
         )
@@ -384,7 +365,7 @@ class TestTdbankCleanDescription(unittest.TestCase):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
             _clean_description(
-                "DEBITCARDCREDIT,*****30081855819,AUT101720VISADDAREF AMZNMKTPUS AMZNCOMBILL*WA"
+                "DEBITCARDCREDIT,*****11111111111,AUT101720VISADDAREF AMZNMKTPUS AMZNCOMBILL*WA"
             ),
             "AMZNMKTPUS AMZNCOMBILL*WA",
         )
@@ -393,18 +374,18 @@ class TestTdbankCleanDescription(unittest.TestCase):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
             _clean_description(
-                "TDATMDEBIT,*****30089881312,AUT061221DDAWITHDRAW 1840OLDMILLROAD WALL TOWNSHIP*NJ"
+                "TDATMDEBIT,*****22222222222,AUT061221DDAWITHDRAW 100MAINSTREET ANYTOWN*NJ"
             ),
-            "1840OLDMILLROAD WALL TOWNSHIP*NJ",
+            "100MAINSTREET ANYTOWN*NJ",
         )
 
     def test_non_td_atm_debit(self):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
             _clean_description(
-                "NONTDATMDEBIT,*****30081855819,AUT101820DDAWITHDRAW 1725HOOPERAVE TOMSRIVER *NJ"
+                "NONTDATMDEBIT,*****11111111111,AUT101820DDAWITHDRAW 200FIRSTAVE OTHERTOWN *NJ"
             ),
-            "1725HOOPERAVE TOMSRIVER *NJ",
+            "200FIRSTAVE OTHERTOWN *NJ",
         )
 
     def test_atm_cash_deposit_uses_space_separator(self):
@@ -412,16 +393,16 @@ class TestTdbankCleanDescription(unittest.TestCase):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
             _clean_description(
-                "ATMCASHDEPOSIT,*****30089881312 AUT022021ATMCASHDEPOSIT 849FISCHERBLVD TOMSRIVER *NJ"
+                "ATMCASHDEPOSIT,*****22222222222 AUT022021ATMCASHDEPOSIT 300SECONDBLVD OTHERTOWN *NJ"
             ),
-            "849FISCHERBLVD TOMSRIVER *NJ",
+            "300SECONDBLVD OTHERTOWN *NJ",
         )
 
     def test_visa_transfer_keeps_processor(self):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
             _clean_description(
-                "VISATRANSFER,*****30081855819,AUT010421VISATRANSFER CASHAPPCASHOUT VISADIRECT *CA"
+                "VISATRANSFER,*****11111111111,AUT010421VISATRANSFER CASHAPPCASHOUT VISADIRECT *CA"
             ),
             "CASHAPPCASHOUT VISADIRECT *CA",
         )
@@ -429,30 +410,30 @@ class TestTdbankCleanDescription(unittest.TestCase):
     def test_zelle_sent(self):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
-            _clean_description("TDZELLESENT, 214000K0D2LSZelleTRONGHIENGUYEN"),
-            "Zelle: TRONGHIENGUYEN",
+            _clean_description("TDZELLESENT, REF0000000001ZelleALEXJOHNSON"),
+            "Zelle: ALEXJOHNSON",
         )
 
     def test_zelle_received(self):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
-            _clean_description("TDZELLERECEIVED, 223900E0E6JDZelleLINDADRIVERS"),
-            "Zelle: LINDADRIVERS",
+            _clean_description("TDZELLERECEIVED, REF0000000002ZelleMARIAGARCIA"),
+            "Zelle: MARIAGARCIA",
         )
 
     def test_zelle_with_space_before_zelle_keyword(self):
         """Some TD statements have a space between the token and 'Zelle'."""
         from src.parser.tdbank import _clean_description
         self.assertEqual(
-            _clean_description("TDZELLESENT, 505300G020QW ZelleMATTHEWMIHM"),
-            "Zelle: MATTHEWMIHM",
+            _clean_description("TDZELLESENT, REF0000000003 ZelleJOHNSMITH"),
+            "Zelle: JOHNSMITH",
         )
 
     def test_already_clean_description_unchanged(self):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
-            _clean_description("TARGET BRICK NJ"),
-            "TARGET BRICK NJ",
+            _clean_description("TARGET THIRDTOWN NJ"),
+            "TARGET THIRDTOWN NJ",
         )
 
     def test_unknown_prefix_unchanged(self):
@@ -478,9 +459,9 @@ class TestTdbankCleanDescription(unittest.TestCase):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
             _clean_description(
-                "DBCRDPURAP,*****30089881312,AUT100723VISADDAPURAP COSTCOGAS 0739 BRICK *NJ"
+                "DBCRDPURAP,*****22222222222,AUT100723VISADDAPURAP COSTCOGAS 0739 THIRDTOWN *NJ"
             ),
-            "COSTCOGAS 0739 BRICK *NJ",
+            "COSTCOGAS 0739 THIRDTOWN *NJ",
         )
 
     def test_debitpos_variant(self):
@@ -488,9 +469,9 @@ class TestTdbankCleanDescription(unittest.TestCase):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
             _clean_description(
-                "DEBITPOS,*****30081855819,AUT101820DDAPURCHASE WAWA 937 TOMSRIVER *NJ"
+                "DEBITPOS,*****11111111111,AUT101820DDAPURCHASE WAWA 937 OTHERTOWN *NJ"
             ),
-            "WAWA 937 TOMSRIVER *NJ",
+            "WAWA 937 OTHERTOWN *NJ",
         )
 
     def test_tdatmdebitap_with_trailing_ap_token(self):
@@ -500,18 +481,18 @@ class TestTdbankCleanDescription(unittest.TestCase):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
             _clean_description(
-                "TDATMDEBITAP,*****30089881312,AUT122524DDAWITHDRAW AP 1101HOOPERAVENUE TOMSRIVER *NJ"
+                "TDATMDEBITAP,*****22222222222,AUT122524DDAWITHDRAW AP 400THIRDAVENUE OTHERTOWN *NJ"
             ),
-            "1101HOOPERAVENUE TOMSRIVER *NJ",
+            "400THIRDAVENUE OTHERTOWN *NJ",
         )
 
     def test_poscredit_refund_variant(self):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
             _clean_description(
-                "POSCREDIT,*****30089881312,AUT061621DDAPURCHREF GNC 730310BRICKPLA BRICK *NJ"
+                "POSCREDIT,*****22222222222,AUT061621DDAPURCHREF GNC 500FOURTHPLAZA THIRDTOWN *NJ"
             ),
-            "GNC 730310BRICKPLA BRICK *NJ",
+            "GNC 500FOURTHPLAZA THIRDTOWN *NJ",
         )
 
     def test_ach_deposit_strips_prefix_keeps_account_suffix(self):
@@ -520,23 +501,23 @@ class TestTdbankCleanDescription(unittest.TestCase):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
             _clean_description(
-                "ACHDEPOSIT,WILLIS NORTHAMEPAYROLL*BM***000120888"
+                "ACHDEPOSIT,ACMECORPINCPAYROLL*BM***100000001"
             ),
-            "WILLIS NORTHAMEPAYROLL*BM***000120888",
+            "ACMECORPINCPAYROLL*BM***100000001",
         )
 
     def test_ach_debit(self):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
-            _clean_description("ACHDEBIT,CRUNCHFITCLUBFEES****300238869"),
-            "CRUNCHFITCLUBFEES****300238869",
+            _clean_description("ACHDEBIT,CRUNCHFITCLUBFEES****200000002"),
+            "CRUNCHFITCLUBFEES****200000002",
         )
 
     def test_ach_iat_debit(self):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
-            _clean_description("ACHIATDEBIT,TSBRETURNSLTDIATPAYPAL****339246657"),
-            "TSBRETURNSLTDIATPAYPAL****339246657",
+            _clean_description("ACHIATDEBIT,TSBRETURNSLTDIATPAYPAL****300000003"),
+            "TSBRETURNSLTDIATPAYPAL****300000003",
         )
 
     def test_electronicpmt_web_strips_prefix_and_space(self):
@@ -544,9 +525,9 @@ class TestTdbankCleanDescription(unittest.TestCase):
         from src.parser.tdbank import _clean_description
         self.assertEqual(
             _clean_description(
-                "ELECTRONICPMT-WEB, AMZ_STORECRD_PMTPAYMENT****78116246568"
+                "ELECTRONICPMT-WEB, AMZ_STORECRD_PMTPAYMENT****40000000004"
             ),
-            "AMZ_STORECRD_PMTPAYMENT****78116246568",
+            "AMZ_STORECRD_PMTPAYMENT****40000000004",
         )
 
     def test_realtimepymt(self):
@@ -589,7 +570,7 @@ class TestTdbankParserIntegration(unittest.TestCase):
     def test_no_polluted_descriptions_after_parse(self):
         pdf_files = list(INPUT_DIR.glob("tdbank/*.pdf"))
         if not pdf_files:
-            self.skipTest("No TD Bank PDF files in input/tdbank/")
+            self.skipTest("No TD Bank PDF files in tests/parsers/fixtures/local/tdbank/")
         from src.parser.tdbank import parse_statement
         for pdf_file in pdf_files:
             data = parse_statement(str(pdf_file))

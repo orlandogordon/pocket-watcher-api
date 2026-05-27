@@ -7,6 +7,8 @@ __temp/
 /processed/*
 /scripts/test*
 /llm_inspect/
+# Real statements for local-only parser regression (never committed — PII).
+/tests/parsers/fixtures/local/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

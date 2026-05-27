@@ -4,14 +4,15 @@ Each test asserts the parser's per-transaction-type sums match the values
 read from the statement's body subtotals. This catches silent banner-detection
 bugs that drop entire categories of rows.
 
-Skips gracefully if input/personal_seed/amex-gold-1005/ PDFs aren't present.
+Skips gracefully if tests/parsers/fixtures/local/amex-gold-1005/ PDFs aren't
+present (that folder is gitignored — see tests/parsers/fixtures/README.md).
 """
 from collections import defaultdict
 from decimal import Decimal
 from pathlib import Path
 import unittest
 
-AMEX_PDF_DIR = Path(__file__).parent.parent / "input" / "personal_seed" / "amex-gold-1005"
+AMEX_PDF_DIR = Path(__file__).parent / "parsers" / "fixtures" / "local" / "amex-gold-1005"
 
 
 def _sums_by_type(pdf_path: Path) -> dict:
