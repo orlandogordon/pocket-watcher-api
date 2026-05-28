@@ -15,7 +15,7 @@ import os
 import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import BinaryIO, Union
+from typing import BinaryIO, Iterator, Union
 from uuid import UUID
 
 from src.logging_config import get_logger
@@ -56,6 +56,12 @@ class StorageBackend(ABC):
     @abstractmethod
     def exists(self, key: str) -> bool: ...
 
+    @abstractmethod
+    def iter_keys(self) -> Iterator[str]: ...
+
+    @abstractmethod
+    def modified_time(self, key: str) -> float: ...
+
 
 class LocalStorage(StorageBackend):
     """Filesystem-backed storage rooted at ``root``."""
@@ -91,6 +97,17 @@ class LocalStorage(StorageBackend):
 
     def exists(self, key: str) -> bool:
         return self._resolve(key).exists()
+
+    def iter_keys(self) -> Iterator[str]:
+        if not self.root.exists():
+            return
+        for path in self.root.rglob("*"):
+            if path.is_file():
+                yield path.relative_to(self.root).as_posix()
+
+    def modified_time(self, key: str) -> float:
+        """POSIX mtime (epoch seconds) of the stored file."""
+        return self._resolve(key).stat().st_mtime
 
 
 _storage: StorageBackend | None = None

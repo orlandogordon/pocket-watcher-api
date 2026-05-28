@@ -245,7 +245,8 @@ server, Postgres, or Redis needed** (in-memory SQLite + `fakeredis`). Run:
   gitignored `local/` corpus.
 - **`scripts/` is local-only** (gitignored, #59) — not in the repo. Scheduled
   jobs live in `src/jobs/` (`python -m src.jobs.eod_snapshot`,
-  `python -m src.jobs.option_expiration_sweep`).
+  `python -m src.jobs.option_expiration_sweep`,
+  `python -m src.jobs.sweep_preview_orphans`).
 
 ## Next Steps / To-Do
 
