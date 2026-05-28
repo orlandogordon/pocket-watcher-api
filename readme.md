@@ -44,10 +44,9 @@ Run everything with coverage:
   `tests/parsers/fixtures/local/<institution>/` and contain PII, so they are
   never committed. Those tests **skip when the corpus is absent**. The committed
   synthetic CSV fixtures (`tests/parsers/fixtures/*.csv`) cover the CSV paths.
-- **No PII in committed fixtures.** `scripts/verify_pdf_sanitized.py` is a
-  tripwire that fails if a candidate PDF still carries PII;
-  `tests/test_fixture_pii_guard.py` runs it over every committed
-  `tests/parsers/fixtures/*.pdf` as part of the suite.
+- **No PII in committed fixtures** (repo is public). Statement PDFs are never
+  committed — only synthetic CSVs. Real statements stay in the gitignored
+  `local/` corpus.
 
 ## Bulk Upload Script instruction
   Before you run it, you need to:

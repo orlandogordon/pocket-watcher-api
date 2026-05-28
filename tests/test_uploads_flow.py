@@ -12,7 +12,7 @@ The fixture is a small synthetic Amex activity CSV (no real cardholder data);
 it doubles as the first parser fixture and exercises `amex.parse(is_csv=True)`.
 """
 from pathlib import Path
-from uuid import uuid4
+from uuid import uuid4, UUID
 
 import pytest
 
@@ -21,6 +21,7 @@ from src.db.core import (
     TagDB,
     TransactionDB,
     TransactionTagDB,
+    UploadJobDB,
 )
 from src.services.system_tags import ensure_system_tags
 from tests.factories import make_account
@@ -258,3 +259,25 @@ def test_llm_unavailable_degrades_gracefully(client, fake_llm, cc_account):
     body = resp.json()
     assert body["summary"]["ready_to_import"] == 4
     assert body["llm_summary"]["degraded"] is True
+
+
+def test_confirm_persists_viewable_document(client, fake_llm, cc_account, db):
+    """The single-file review path also produces a browsable document (#59):
+    the file is archived, listed per account, downloadable, and the imported
+    rows link back to it."""
+    sid = _preview(client, cc_account.uuid).json()["preview_session_id"]
+    confirm = client.post("/uploads/statement/confirm", json={"preview_session_id": sid})
+    assert confirm.status_code == 201, confirm.text
+
+    docs = client.get(f"/uploads/documents?account_uuid={cc_account.uuid}").json()["documents"]
+    assert len(docs) == 1
+    doc = docs[0]
+    assert doc["filename"] == "amex_sample.csv"
+    assert doc["transactions_created"] == 4
+
+    content = client.get(f"/uploads/documents/{doc['document_uuid']}/content")
+    assert content.status_code == 200
+    assert content.content == _csv_bytes()
+
+    job = db.query(UploadJobDB).filter(UploadJobDB.uuid == UUID(doc["document_uuid"])).first()
+    assert db.query(TransactionDB).filter(TransactionDB.upload_job_id == job.id).count() == 4

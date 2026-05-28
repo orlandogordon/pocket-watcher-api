@@ -289,6 +289,7 @@ class InvestmentTransactionDB(Base):
         Index("idx_investment_transactions_holding", "holding_id"),
         Index("idx_investment_transactions_date", "transaction_date"),
         Index("idx_investment_transactions_type", "transaction_type"),
+        Index("idx_investment_transactions_upload_job", "upload_job_id"),
     )
 
     # Primary Key (internal)
@@ -301,6 +302,8 @@ class InvestmentTransactionDB(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"), nullable=False)
     account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))
     holding_id: Mapped[Optional[int]] = mapped_column(ForeignKey("investment_holdings.holding_id"))  # Optional for dividends, etc.
+    # Document that imported this row (#59); null for manual/API rows.
+    upload_job_id: Mapped[Optional[int]] = mapped_column(ForeignKey("upload_jobs.id"))
 
     # Deduplication & Source Tracking
     transaction_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -446,6 +449,7 @@ class TransactionDB(Base):
         Index("idx_transactions_user_date", "user_id", "transaction_date"),
         Index("idx_transactions_user_account", "user_id", "account_id"),
         Index("idx_transactions_date", "transaction_date"),
+        Index("idx_transactions_upload_job", "upload_job_id"),
     )
 
     # Core Transaction Identification
@@ -455,6 +459,9 @@ class TransactionDB(Base):
     account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
     subcategory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
+    # Document that imported this row (#59) — lets a document delete cascade to
+    # the transactions it created. Null for manually-entered rows.
+    upload_job_id: Mapped[Optional[int]] = mapped_column(ForeignKey("upload_jobs.id"))
 
     # Deduplication & Source Tracking
     transaction_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -896,10 +903,43 @@ class SnapshotBackfillJobDB(Base):
     account = relationship("AccountDB")
 
 
+class BulkImportBatchDB(Base):
+    """
+    Groups several upload jobs imported together in one bulk submission (#59),
+    so overall progress can be polled as a unit. Each child is an UploadJobDB.
+    """
+    __tablename__ = "bulk_import_batches"
+
+    __table_args__ = (
+        Index("idx_bulk_batches_user", "user_id"),
+        Index("idx_bulk_batches_status", "status"),
+        Index("idx_bulk_batches_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"), nullable=False)
+
+    status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)  # PENDING, IN_PROGRESS, COMPLETED, FAILED
+    total_files: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    processed_files: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+    user = relationship("UserDB")
+    upload_jobs = relationship("UploadJobDB", back_populates="batch")
+
+
 class UploadJobDB(Base):
     """
     Tracks statement upload jobs and their processing status.
     Enables async processing with result tracking.
+
+    Since #59 this is also the persistent **document** record: the uploaded file
+    is archived to local storage (``storage_key``) and addressed publicly by
+    ``uuid``, so a user can browse/open the statements they've imported.
     """
     __tablename__ = "upload_jobs"
 
@@ -908,22 +948,30 @@ class UploadJobDB(Base):
         Index("idx_upload_jobs_account", "account_id"),
         Index("idx_upload_jobs_status", "status"),
         Index("idx_upload_jobs_created", "created_at"),
+        Index("idx_upload_jobs_batch", "batch_id"),
     )
 
     # Primary Key
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)  # public id (#59)
 
     # Foreign Keys
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"), nullable=False)
     account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))
+    batch_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bulk_import_batches.id"))  # null for single-file imports
 
     # Upload Details
-    file_path: Mapped[Optional[str]] = mapped_column(String(500))  # original uploaded filename (audit/reference only — files are not archived)
+    file_path: Mapped[Optional[str]] = mapped_column(String(500))  # original uploaded filename (display/reference)
     institution: Mapped[str] = mapped_column(String(100), nullable=False)
     skip_duplicates: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    # Archived file (local storage, #59) — null until/unless the bytes are stored
+    storage_key: Mapped[Optional[str]] = mapped_column(String(500))
+    file_size: Mapped[Optional[int]] = mapped_column(Integer)
+    content_type: Mapped[Optional[str]] = mapped_column(String(100))
+
     # Job Status
-    status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)  # PENDING, PROCESSING, COMPLETED, FAILED
+    status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)  # UPLOADED, PENDING, PROCESSING, COMPLETED, FAILED
     error_message: Mapped[Optional[str]] = mapped_column(Text)
 
     # Result Metrics
@@ -931,6 +979,7 @@ class UploadJobDB(Base):
     transactions_skipped: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     investment_transactions_created: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     investment_transactions_skipped: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    needs_review: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # rows auto-tagged Needs Review
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -940,6 +989,7 @@ class UploadJobDB(Base):
     # Relationships
     user = relationship("UserDB", back_populates="upload_jobs")
     account = relationship("AccountDB")
+    batch = relationship("BulkImportBatchDB", back_populates="upload_jobs")
     skipped_transactions = relationship("SkippedTransactionDB", back_populates="upload_job", cascade="all, delete-orphan")
 
     # Parsed import audit records (SET NULL on delete — audit rows survive)

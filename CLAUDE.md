@@ -240,9 +240,12 @@ server, Postgres, or Redis needed** (in-memory SQLite + `fakeredis`). Run:
   CSV paths. The PDF `parse_statement`/`parse_pdf` bodies are excluded from
   coverage (corpus-only). Coverage is ~76% fresh-clone / ~78% local; no enforced
   floor.
-- **Never commit real PII** in fixtures or code (repo is public).
-  `scripts/verify_pdf_sanitized.py` + `tests/test_fixture_pii_guard.py` guard
-  committed PDFs.
+- **Never commit real PII** in fixtures or code (repo is public). Statement PDFs
+  are never committed — only synthetic CSV fixtures; real statements live in the
+  gitignored `local/` corpus.
+- **`scripts/` is local-only** (gitignored, #59) — not in the repo. Scheduled
+  jobs live in `src/jobs/` (`python -m src.jobs.eod_snapshot`,
+  `python -m src.jobs.option_expiration_sweep`).
 
 ## Next Steps / To-Do
 

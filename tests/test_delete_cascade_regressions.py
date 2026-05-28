@@ -158,7 +158,7 @@ class TestRegularTransactionDelete(DeleteCascadeBase):
         """Audit row survives; transaction_id FK gets nulled."""
         t = self._make_transaction()
         job = UploadJobDB(
-            user_id=self.user.db_id, account_id=self.account.id,
+            uuid=uuid4(), user_id=self.user.db_id, account_id=self.account.id,
             institution="test", status="COMPLETED",
         )
         self.session.add(job)
@@ -180,7 +180,7 @@ class TestRegularTransactionDelete(DeleteCascadeBase):
     def test_delete_with_skipped_transaction_sets_null(self):
         t = self._make_transaction()
         job = UploadJobDB(
-            user_id=self.user.db_id, account_id=self.account.id,
+            uuid=uuid4(), user_id=self.user.db_id, account_id=self.account.id,
             institution="test", status="COMPLETED",
         )
         self.session.add(job)

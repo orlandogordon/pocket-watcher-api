@@ -55,6 +55,17 @@ from src.services.redis_client import get_redis_dependency  # noqa: E402
 from tests.factories import make_user  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _isolated_storage(tmp_path, monkeypatch):
+    """Point the document-storage singleton (#59) at a per-test tmp dir so no
+    test ever writes to the real ./data/uploads (the preview/confirm + bulk
+    upload paths persist files)."""
+    from src.services import file_storage
+    monkeypatch.setattr(
+        file_storage, "_storage", file_storage.LocalStorage(tmp_path / "uploads")
+    )
+
+
 @pytest.fixture(scope="session")
 def engine():
     eng = create_engine(

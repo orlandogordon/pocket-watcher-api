@@ -5,8 +5,11 @@ __temp/
 /input/*
 /output/*
 /processed/*
-/scripts/test*
+# scripts/ is local-only dev tooling (#59) — runtime jobs live in src/jobs/.
+/scripts/
 /llm_inspect/
+# Uploaded statement documents (local file storage, #59) — never committed.
+/data/
 # Real statements for local-only parser regression (never committed — PII).
 /tests/parsers/fixtures/local/
 

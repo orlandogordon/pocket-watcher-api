@@ -14,6 +14,11 @@ class LLMSuggestion(BaseModel):
     confidence: float
 
 
+class BulkImportRequest(BaseModel):
+    """Start a bulk import over already-uploaded documents (#59)."""
+    document_uuids: List[UUID] = Field(..., min_length=1)
+
+
 class EditTransactionRequest(BaseModel):
     temp_id: str
     edited_data: Dict[str, Any]

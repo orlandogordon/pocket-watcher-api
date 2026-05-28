@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 import io
 import time
@@ -9,12 +10,15 @@ from typing import Optional, List, Dict
 import redis
 
 from src.db.core import (
-    get_db, UploadJobDB, SkippedTransactionDB, TransactionDB, InvestmentTransactionDB,
+    get_db, NotFoundError, UploadJobDB, BulkImportBatchDB, SkippedTransactionDB, TransactionDB,
+    InvestmentTransactionDB,
     AccountDB, TransactionType, SourceType, InvestmentTransactionType, AccountType,
     CategoryDB, TagDB, TransactionTagDB, ParsedImportDB,
 )
 from src.auth.dependencies import get_current_user_id
 from src.services.importer import PARSER_MAPPING
+from src.services.file_storage import get_storage, build_key
+from src.services.bulk_import_runner import submit_bulk_import
 from src.services.redis_client import get_redis_dependency
 from src.services.preview_session import (
     create_preview_session,
@@ -35,14 +39,16 @@ from src.services.system_tags import get_system_tag
 from src.crud.crud_transaction import (
     generate_transaction_hash,
     update_account_balance_from_transaction,
+    delete_db_transaction_by_uuid,
 )
 from src.crud.crud_investment import (
     generate_investment_transaction_hash,
     map_transaction_type_to_enum,
     rebuild_holdings_from_transactions,
     _update_investment_account_balance,
+    delete_db_investment_transaction_by_uuid,
 )
-from src.crud.crud_account import get_db_account_by_last_four
+from src.crud.crud_account import get_db_account_by_last_four, read_db_account_by_uuid
 from src.models.preview import (
     EditTransactionRequest,
     BulkEditRequest,
@@ -51,6 +57,7 @@ from src.models.preview import (
     ConfirmImportRequest,
     BulkRejectItemRequest,
     BulkRestoreItemRequest,
+    BulkImportRequest,
     PreviewSessionInfo,
 )
 from src.parser.models import ParsedInvestmentTransaction
@@ -62,6 +69,10 @@ router = APIRouter(
     prefix="/uploads",
     tags=["uploads"],
 )
+
+# Per-file upload cap for the bulk-import path (#59). Match the reverse-proxy
+# client_max_body_size in the C5 deploy.
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 
 # Union of all fields the user is allowed to edit in a preview session.
@@ -92,6 +103,328 @@ def _validate_edited_data(edited: Dict) -> None:
             status_code=400,
             detail=f"Disallowed edited_data keys: {', '.join(rejected)}",
         )
+
+
+# ---------------------------------------------------------------------------
+# Bulk statement import (#59): per-file upload -> kick off a batch -> poll.
+# ---------------------------------------------------------------------------
+
+@router.post("/files", status_code=201)
+async def upload_statement_file(
+    file: UploadFile = File(...),
+    account_uuid: str = Form(...),
+    institution: str = Form(...),
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Upload ONE statement file for an owned account and archive it to local
+    storage. Returns the document uuid to pass to POST /uploads/bulk. The
+    frontend calls this once per selected file (a few concurrent), never one
+    giant multipart request — see #59."""
+    if institution.lower() not in PARSER_MAPPING:
+        raise HTTPException(status_code=400, detail=f"Unknown institution '{institution}'")
+
+    try:
+        parsed_account_uuid = UUID(account_uuid)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid account_uuid format")
+
+    account = read_db_account_by_uuid(db, parsed_account_uuid, user_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File exceeds the per-file size limit")
+
+    document_uuid = uuid4()
+    storage_key = build_key(user_id, document_uuid, file.filename or "")
+    get_storage().save(contents, storage_key)
+
+    job = UploadJobDB(
+        uuid=document_uuid,
+        user_id=user_id,
+        account_id=account.id,
+        institution=institution,
+        file_path=file.filename,
+        status="UPLOADED",
+        storage_key=storage_key,
+        file_size=len(contents),
+        content_type=file.content_type,
+    )
+    db.add(job)
+    db.commit()
+
+    return {"document_uuid": str(document_uuid), "filename": file.filename, "size": len(contents)}
+
+
+@router.post("/bulk", status_code=202)
+def start_bulk_import(
+    request: BulkImportRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Kick off a background import over already-uploaded documents (all owned,
+    none already imported). Returns a batch uuid to poll."""
+    jobs = db.query(UploadJobDB).filter(
+        UploadJobDB.uuid.in_(request.document_uuids),
+        UploadJobDB.user_id == user_id,
+    ).all()
+    found = {j.uuid for j in jobs}
+    missing = [str(u) for u in request.document_uuids if u not in found]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Documents not found: {', '.join(missing)}")
+
+    already = [str(j.uuid) for j in jobs if j.batch_id is not None]
+    if already:
+        raise HTTPException(status_code=400, detail=f"Documents already imported: {', '.join(already)}")
+
+    batch = BulkImportBatchDB(
+        uuid=uuid4(),
+        user_id=user_id,
+        status="PENDING",
+        total_files=len(jobs),
+        processed_files=0,
+    )
+    db.add(batch)
+    db.flush()
+    for j in jobs:
+        j.batch_id = batch.id
+        j.status = "PENDING"
+    db.commit()
+
+    submit_bulk_import(batch.id)
+    return {"batch_uuid": str(batch.uuid), "total_files": batch.total_files}
+
+
+def _batch_progress(db: Session, batch: BulkImportBatchDB) -> Dict:
+    children = (
+        db.query(UploadJobDB)
+        .filter(UploadJobDB.batch_id == batch.id)
+        .order_by(UploadJobDB.id)
+        .all()
+    )
+    per_file = [{
+        "document_uuid": str(j.uuid),
+        "filename": j.file_path,
+        "status": j.status,
+        "transactions_created": j.transactions_created,
+        "transactions_skipped": j.transactions_skipped,
+        "investment_transactions_created": j.investment_transactions_created,
+        "investment_transactions_skipped": j.investment_transactions_skipped,
+        "error_message": j.error_message,
+    } for j in children]
+    current = next((j.file_path for j in children if j.status == "PROCESSING"), None)
+    return {
+        "batch_uuid": str(batch.uuid),
+        "status": batch.status,
+        "total": batch.total_files,
+        "processed": batch.processed_files,
+        "current_filename": current,
+        "created": sum(j.transactions_created + j.investment_transactions_created for j in children),
+        "skipped": sum(j.transactions_skipped + j.investment_transactions_skipped for j in children),
+        "needs_review": sum(j.needs_review for j in children),
+        "per_file": per_file,
+        "created_at": batch.created_at,
+        "completed_at": batch.completed_at,
+    }
+
+
+@router.get("/bulk")
+def list_bulk_imports(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    batches = (
+        db.query(BulkImportBatchDB)
+        .filter(BulkImportBatchDB.user_id == user_id)
+        .order_by(BulkImportBatchDB.created_at.desc())
+        .offset(skip).limit(limit).all()
+    )
+    return {
+        "batches": [{
+            "batch_uuid": str(b.uuid), "status": b.status, "total": b.total_files,
+            "processed": b.processed_files, "created_at": b.created_at,
+            "completed_at": b.completed_at,
+        } for b in batches],
+        "skip": skip, "limit": limit,
+    }
+
+
+@router.get("/bulk/{batch_uuid}")
+def get_bulk_import(
+    batch_uuid: str,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    try:
+        parsed = UUID(batch_uuid)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid batch_uuid format")
+    batch = db.query(BulkImportBatchDB).filter(
+        BulkImportBatchDB.uuid == parsed,
+        BulkImportBatchDB.user_id == user_id,
+    ).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Bulk import not found")
+    return _batch_progress(db, batch)
+
+
+@router.delete("/bulk/{batch_uuid}")
+def cancel_bulk_import(
+    batch_uuid: str,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    try:
+        parsed = UUID(batch_uuid)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid batch_uuid format")
+    batch = db.query(BulkImportBatchDB).filter(
+        BulkImportBatchDB.uuid == parsed,
+        BulkImportBatchDB.user_id == user_id,
+    ).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Bulk import not found")
+    if batch.status in ("PENDING", "IN_PROGRESS"):
+        batch.status = "CANCELLED"
+        db.commit()
+    return {"batch_uuid": str(batch.uuid), "status": batch.status}
+
+
+# ---------------------------------------------------------------------------
+# Document browsing / viewing (#59): archived statements, per account, owner-only.
+# ---------------------------------------------------------------------------
+
+def _document_summary(job: UploadJobDB) -> Dict:
+    return {
+        "document_uuid": str(job.uuid),
+        "filename": job.file_path,
+        "institution": job.institution,
+        "status": job.status,
+        "account_uuid": str(job.account.uuid) if job.account else None,
+        "transactions_created": job.transactions_created,
+        "transactions_skipped": job.transactions_skipped,
+        "investment_transactions_created": job.investment_transactions_created,
+        "investment_transactions_skipped": job.investment_transactions_skipped,
+        "file_size": job.file_size,
+        "content_type": job.content_type,
+        "created_at": job.created_at,
+    }
+
+
+def _owned_document(db: Session, document_uuid: str, user_id: int) -> UploadJobDB:
+    try:
+        parsed = UUID(document_uuid)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid document_uuid format")
+    job = db.query(UploadJobDB).filter(
+        UploadJobDB.uuid == parsed,
+        UploadJobDB.user_id == user_id,
+        UploadJobDB.storage_key.isnot(None),
+    ).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return job
+
+
+@router.get("/documents")
+def list_documents(
+    account_uuid: Optional[str] = Query(None),
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """List the user's archived statement documents, optionally for one owned
+    account. Only files actually stored (storage_key set) are documents."""
+    q = db.query(UploadJobDB).filter(
+        UploadJobDB.user_id == user_id,
+        UploadJobDB.storage_key.isnot(None),
+    )
+    if account_uuid:
+        try:
+            parsed = UUID(account_uuid)
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=400, detail="Invalid account_uuid format")
+        account = read_db_account_by_uuid(db, parsed, user_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        q = q.filter(UploadJobDB.account_id == account.id)
+    docs = q.order_by(UploadJobDB.created_at.desc()).all()
+    return {"documents": [_document_summary(j) for j in docs]}
+
+
+@router.get("/documents/{document_uuid}")
+def get_document(
+    document_uuid: str,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    return _document_summary(_owned_document(db, document_uuid, user_id))
+
+
+@router.get("/documents/{document_uuid}/content")
+def get_document_content(
+    document_uuid: str,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Stream the original uploaded file back (inline) for the owner only."""
+    job = _owned_document(db, document_uuid, user_id)
+    storage = get_storage()
+    if not storage.exists(job.storage_key):
+        raise HTTPException(status_code=404, detail="Document file missing from storage")
+    filename = job.file_path or str(job.uuid)
+    return StreamingResponse(
+        storage.open(job.storage_key),
+        media_type=job.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
+@router.delete("/documents/{document_uuid}", status_code=204)
+def delete_document(
+    document_uuid: str,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Delete a document: removes the stored file AND cascades to the
+    transactions it imported (reusing the per-transaction delete path so account
+    balances + snapshots stay correct). The upload-job record is removed too."""
+    job = _owned_document(db, document_uuid, user_id)
+
+    # Collect the UUIDs first — deletes mutate the session.
+    txn_uuids = [
+        t.id for t in db.query(TransactionDB.id).filter(
+            TransactionDB.upload_job_id == job.id,
+            TransactionDB.user_id == user_id,
+        )
+    ]
+    inv_uuids = [
+        t.id for t in db.query(InvestmentTransactionDB.id).filter(
+            InvestmentTransactionDB.upload_job_id == job.id,
+            InvestmentTransactionDB.user_id == user_id,
+        )
+    ]
+    for tu in txn_uuids:
+        try:
+            delete_db_transaction_by_uuid(db, tu, user_id)
+        except NotFoundError:
+            pass  # already gone (e.g. removed via an OFFSETS-pair cascade)
+    for iu in inv_uuids:
+        try:
+            delete_db_investment_transaction_by_uuid(db, iu, user_id)
+        except NotFoundError:
+            pass
+
+    if job.storage_key:
+        get_storage().delete(job.storage_key)
+    db.delete(job)
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/jobs")
@@ -443,6 +776,13 @@ async def create_statement_preview(
         "can_confirm": True,
     }
 
+    # Archive the original file so the eventual confirm produces a viewable
+    # document (#59). Keyed by a fresh uuid; the confirm step copies the key onto
+    # the UploadJobDB. Abandoned previews are cleaned on cancel (TTL-orphan sweep
+    # is a follow-up).
+    storage_key = build_key(user_id, uuid4(), file.filename or "")
+    get_storage().save(file_bytes, storage_key)
+
     # Store in Redis
     session_id, expires_at = create_preview_session(
         r=r,
@@ -456,6 +796,9 @@ async def create_statement_preview(
         summary=summary,
         account_info=account_info_dict,
         llm_summary=llm_summary,
+        storage_key=storage_key,
+        file_size=len(file_bytes),
+        content_type=file.content_type,
     )
 
     return {
@@ -933,12 +1276,17 @@ async def confirm_statement_import(
     # Create upload job up front so each ParsedImportDB can link to it via relationship.
     # Counter fields are updated before commit once we know final totals.
     upload_job = UploadJobDB(
+        uuid=uuid4(),
         user_id=user_id,
         file_path=session.get("filename"),
         institution=institution,
         account_id=account_id,
         skip_duplicates=False,
         status="COMPLETED",
+        # Archived original file (#59) — makes this import a viewable document.
+        storage_key=session.get("storage_key"),
+        file_size=session.get("file_size"),
+        content_type=session.get("content_type"),
         transactions_created=0,
         transactions_skipped=len(session["rejected"]["transactions"]),
         investment_transactions_created=0,
@@ -947,10 +1295,12 @@ async def confirm_statement_import(
         completed_at=datetime.utcnow(),
     )
     db.add(upload_job)
+    db.flush()  # assign upload_job.id so created rows can link to this document
 
     # --- Create regular transactions ---
     suggestion_accept_count = 0
     suggestion_override_count = 0
+    needs_review_count = 0
     for item in session["ready_to_import"]["transactions"]:
         parsed_data = item["parsed_data"]
         edited = item.get("edited_data") or {}
@@ -1049,6 +1399,7 @@ async def confirm_statement_import(
             description=display_description,
             merchant_name=merchant_name_val,
             comments=final_data.get("comments"),
+            upload_job_id=upload_job.id,
         )
         db.add(db_txn)
         created_txns.append(db_txn)
@@ -1081,6 +1432,7 @@ async def confirm_statement_import(
         missing_merchant = not merchant_name_val
         if needs_review_tag and not is_transfer and (missing_category or missing_merchant):
             tag_ids.append(needs_review_tag.tag_id)
+            needs_review_count += 1
             # Record WHY on the transaction itself so the review inbox (#46)
             # shows what triggered the flag without opening each row.
             db_txn.comments = _append_review_note(
@@ -1153,6 +1505,7 @@ async def confirm_statement_import(
             transaction_date=inv_txn_date,
             description=display_description,
             security_type=final_data.get("security_type"),
+            upload_job_id=upload_job.id,
         )
         db.add(db_inv)
         created_inv.append(db_inv)
@@ -1174,6 +1527,7 @@ async def confirm_statement_import(
     # Finalize upload job counters now that totals are known
     upload_job.transactions_created = len(created_txns)
     upload_job.investment_transactions_created = len(created_inv)
+    upload_job.needs_review = needs_review_count
 
     # Flush to assign db_ids, then create tag associations
     if pending_tag_associations:
@@ -1262,10 +1616,14 @@ async def cancel_preview(
     user_id: int = Depends(get_current_user_id),
     r: redis.Redis = Depends(get_redis_dependency),
 ):
-    """Cancel preview session and delete from Redis."""
-    success = delete_preview_session(r, session_id, user_id)
-    if not success:
+    """Cancel preview session, delete its archived file, and remove from Redis."""
+    session = get_preview_session(r, session_id, user_id)
+    if not session:
         raise HTTPException(404, "Preview session not found")
+    storage_key = session.get("storage_key")
+    if storage_key:
+        get_storage().delete(storage_key)
+    delete_preview_session(r, session_id, user_id)
     return None
 
 

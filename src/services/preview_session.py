@@ -23,6 +23,9 @@ def create_preview_session(
     summary: Dict[str, Any],
     account_info: Optional[Dict] = None,
     llm_summary: Optional[Dict[str, Any]] = None,
+    storage_key: Optional[str] = None,
+    file_size: Optional[int] = None,
+    content_type: Optional[str] = None,
     expiry: int = DEFAULT_EXPIRY_SECONDS,
 ) -> Tuple[str, str]:
     """
@@ -40,6 +43,10 @@ def create_preview_session(
         "account_id": account_id,
         "filename": filename,
         "source_type": source_type,
+        # Archived original file (#59) — set so confirm can finalize the document.
+        "storage_key": storage_key,
+        "file_size": file_size,
+        "content_type": content_type,
         "account_info": account_info,
         "rejected": rejected,
         "ready_to_import": ready_to_import,
