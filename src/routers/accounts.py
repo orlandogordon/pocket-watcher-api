@@ -15,19 +15,12 @@ from src.db.core import (
 )
 from src.services.job_runner import get_job_runner
 from src.auth.dependencies import get_current_user_id
+from src.routers._deps import parse_uuid
 
 router = APIRouter(
     prefix="/accounts",
     tags=["accounts"],
 )
-
-
-def _parse_account_uuid(account_uuid: str) -> UUID:
-    """Validate and parse a UUID string, raising 400 on invalid format."""
-    try:
-        return UUID(account_uuid)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid UUID format")
 
 
 @router.post("/", response_model=account_models.AccountResponse, status_code=status.HTTP_201_CREATED)
@@ -88,7 +81,7 @@ def read_account(
     """
     Retrieve a specific account by its UUID.
     """
-    uuid_obj = _parse_account_uuid(account_uuid)
+    uuid_obj = parse_uuid(account_uuid)
     db_account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
     if db_account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
@@ -104,7 +97,7 @@ def update_account(
     """
     Update an account.
     """
-    uuid_obj = _parse_account_uuid(account_uuid)
+    uuid_obj = parse_uuid(account_uuid)
     try:
         return crud_account.update_db_account_by_uuid(
             db=db, account_uuid=uuid_obj, user_id=user_id, account_updates=account
@@ -127,7 +120,7 @@ def delete_account(
     Without ?force=true, returns 409 if the account has associated data.
     With ?force=true, cascade-deletes all associated records and returns deletion counts.
     """
-    uuid_obj = _parse_account_uuid(account_uuid)
+    uuid_obj = parse_uuid(account_uuid)
     db_account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
     if db_account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
@@ -160,7 +153,7 @@ def list_backfill_jobs(
 
     Returns jobs ordered by created_at DESC (newest first).
     """
-    uuid_obj = _parse_account_uuid(account_uuid)
+    uuid_obj = parse_uuid(account_uuid)
     account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -182,7 +175,7 @@ def get_backfill_job(
     """
     Get detailed status of a specific backfill job.
     """
-    uuid_obj = _parse_account_uuid(account_uuid)
+    uuid_obj = parse_uuid(account_uuid)
     account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -214,7 +207,7 @@ def manually_recalculate_snapshots(
         - Backfill after manual transaction edits
         - Re-fetch prices if historical data was incorrect
     """
-    uuid_obj = _parse_account_uuid(account_uuid)
+    uuid_obj = parse_uuid(account_uuid)
     account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -269,7 +262,7 @@ def get_snapshots_needing_review(
     """
     Get all snapshots that need review (missing price data, etc.)
     """
-    uuid_obj = _parse_account_uuid(account_uuid)
+    uuid_obj = parse_uuid(account_uuid)
     account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")

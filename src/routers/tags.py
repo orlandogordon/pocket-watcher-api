@@ -8,17 +8,12 @@ from src.models import tag as tag_models
 from src.models import transaction as transaction_models
 from src.db.core import get_db, NotFoundError
 from src.auth.dependencies import get_current_user_id
+from src.routers._deps import parse_uuid
 
 router = APIRouter(
     prefix="/tags",
     tags=["tags"],
 )
-
-def _parse_uuid(value: str) -> UUID:
-    try:
-        return UUID(value)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid UUID format")
 
 @router.post("/", response_model=tag_models.TagResponse, status_code=status.HTTP_201_CREATED)
 def create_tag(
@@ -76,7 +71,7 @@ def read_tag(
     """
     Retrieve a specific tag by its UUID.
     """
-    parsed_uuid = _parse_uuid(tag_uuid)
+    parsed_uuid = parse_uuid(tag_uuid)
     db_tag = crud_tag.read_db_tag_by_uuid(db=db, tag_uuid=parsed_uuid, user_id=user_id)
     if db_tag is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
@@ -92,7 +87,7 @@ def update_tag(
     """
     Update a tag's name or color. System tags cannot be modified.
     """
-    parsed_uuid = _parse_uuid(tag_uuid)
+    parsed_uuid = parse_uuid(tag_uuid)
     db_tag = crud_tag.read_db_tag_by_uuid(db, parsed_uuid, user_id)
     if not db_tag:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
@@ -114,7 +109,7 @@ def delete_tag(
     """
     Delete a tag. This will also remove all associations between this tag and any transactions.
     """
-    parsed_uuid = _parse_uuid(tag_uuid)
+    parsed_uuid = parse_uuid(tag_uuid)
     db_tag = crud_tag.read_db_tag_by_uuid(db, tag_uuid=parsed_uuid, user_id=user_id)
     if db_tag is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
@@ -135,7 +130,7 @@ def get_tag_stats(
     """
     Get statistics for a single tag.
     """
-    parsed_uuid = _parse_uuid(tag_uuid)
+    parsed_uuid = parse_uuid(tag_uuid)
     try:
         return crud_tag.get_tag_stats_by_uuid(db=db, tag_uuid=parsed_uuid, user_id=user_id)
     except NotFoundError as e:
@@ -152,7 +147,7 @@ def get_transactions_for_tag(
     """
     Get all transactions associated with a specific tag.
     """
-    parsed_uuid = _parse_uuid(tag_uuid)
+    parsed_uuid = parse_uuid(tag_uuid)
     try:
         return crud_tag.get_transactions_for_tag_by_uuid(db=db, tag_uuid=parsed_uuid, user_id=user_id, skip=skip, limit=limit)
     except NotFoundError as e:
@@ -168,8 +163,8 @@ def add_tag_to_transaction(
     """
     Add a tag to a single transaction using UUIDs.
     """
-    parsed_transaction_uuid = _parse_uuid(transaction_uuid)
-    parsed_tag_uuid = _parse_uuid(tag_uuid)
+    parsed_transaction_uuid = parse_uuid(transaction_uuid)
+    parsed_tag_uuid = parse_uuid(tag_uuid)
     try:
         return crud_tag.add_tag_to_transaction_by_uuids(
             db=db, user_id=user_id,
@@ -189,8 +184,8 @@ def remove_tag_from_transaction(
     """
     Remove a tag from a single transaction using UUIDs.
     """
-    parsed_transaction_uuid = _parse_uuid(transaction_uuid)
-    parsed_tag_uuid = _parse_uuid(tag_uuid)
+    parsed_transaction_uuid = parse_uuid(transaction_uuid)
+    parsed_tag_uuid = parse_uuid(tag_uuid)
     try:
         if not crud_tag.remove_tag_from_transaction_by_uuids(
             db=db, user_id=user_id,

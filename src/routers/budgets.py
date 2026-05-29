@@ -7,17 +7,12 @@ from src.crud import crud_budget
 from src.models import budget as budget_models
 from src.db.core import get_db, NotFoundError
 from src.auth.dependencies import get_current_user_id
+from src.routers._deps import parse_uuid
 
 router = APIRouter(
     prefix="/budgets",
     tags=["budgets"],
 )
-
-def _parse_uuid(value: str) -> UUID:
-    try:
-        return UUID(value)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid UUID format")
 
 
 # ===== TEMPLATE ENDPOINTS =====
@@ -67,7 +62,7 @@ def get_template(
     user_id: int = Depends(get_current_user_id),
 ):
     """Get a specific budget template by UUID."""
-    parsed = _parse_uuid(template_uuid)
+    parsed = parse_uuid(template_uuid)
     template = crud_budget.read_template(db, parsed, user_id)
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
@@ -82,7 +77,7 @@ def update_template(
     user_id: int = Depends(get_current_user_id),
 ):
     """Update a budget template's name or default status."""
-    parsed = _parse_uuid(template_uuid)
+    parsed = parse_uuid(template_uuid)
     try:
         return crud_budget.update_template(db, parsed, user_id, data)
     except NotFoundError as e:
@@ -98,7 +93,7 @@ def delete_template(
     user_id: int = Depends(get_current_user_id),
 ):
     """Delete a budget template. Months using it will be unassigned."""
-    parsed = _parse_uuid(template_uuid)
+    parsed = parse_uuid(template_uuid)
     try:
         crud_budget.delete_template(db, parsed, user_id)
     except NotFoundError as e:
@@ -117,7 +112,7 @@ def add_template_category(
     user_id: int = Depends(get_current_user_id),
 ):
     """Add a category allocation to a template."""
-    _parse_uuid(template_uuid)
+    parse_uuid(template_uuid)
     from src.crud import crud_category
 
     db_cat = crud_category.read_db_category_by_uuid(db, data.category_uuid)
@@ -131,7 +126,7 @@ def add_template_category(
             raise HTTPException(status_code=404, detail="Subcategory not found")
         sub_id = db_sub.id
 
-    parsed = _parse_uuid(template_uuid)
+    parsed = parse_uuid(template_uuid)
     try:
         return crud_budget.add_template_category(
             db, parsed, user_id, data,
@@ -150,7 +145,7 @@ def update_template_category(
     user_id: int = Depends(get_current_user_id),
 ):
     """Update a template category allocation amount."""
-    parsed = _parse_uuid(allocation_uuid)
+    parsed = parse_uuid(allocation_uuid)
     try:
         return crud_budget.update_template_category(db, parsed, user_id, data)
     except NotFoundError as e:
@@ -166,7 +161,7 @@ def delete_template_category(
     user_id: int = Depends(get_current_user_id),
 ):
     """Delete a category allocation from a template."""
-    parsed = _parse_uuid(allocation_uuid)
+    parsed = parse_uuid(allocation_uuid)
     try:
         crud_budget.delete_template_category(db, parsed, user_id)
     except NotFoundError as e:

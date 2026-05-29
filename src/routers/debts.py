@@ -8,17 +8,12 @@ from src.crud import crud_debt, crud_account
 from src.models import debt as debt_models
 from src.db.core import get_db, NotFoundError
 from src.auth.dependencies import get_current_user_id
+from src.routers._deps import parse_uuid
 
 router = APIRouter(
     prefix="/debt",
     tags=["debt"],
 )
-
-def _parse_uuid(value: str) -> UUID:
-    try:
-        return UUID(value)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid UUID format")
 
 # ===== DEBT REPAYMENT PLANS =====
 
@@ -56,7 +51,7 @@ def read_debt_repayment_plan(
     """
     Retrieve a specific debt repayment plan.
     """
-    parsed_uuid = _parse_uuid(plan_uuid)
+    parsed_uuid = parse_uuid(plan_uuid)
     db_plan = crud_debt.read_debt_repayment_plan_by_uuid(db=db, plan_uuid=parsed_uuid, user_id=user_id)
     if db_plan is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
@@ -72,7 +67,7 @@ def update_debt_repayment_plan(
     """
     Update a debt repayment plan.
     """
-    parsed_uuid = _parse_uuid(plan_uuid)
+    parsed_uuid = parse_uuid(plan_uuid)
     updated_plan = crud_debt.update_debt_repayment_plan_by_uuid(db=db, plan_uuid=parsed_uuid, user_id=user_id, plan_data=plan_data)
     if updated_plan is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
@@ -87,7 +82,7 @@ def delete_debt_repayment_plan(
     """
     Delete a debt repayment plan.
     """
-    parsed_uuid = _parse_uuid(plan_uuid)
+    parsed_uuid = parse_uuid(plan_uuid)
     if not crud_debt.delete_debt_repayment_plan_by_uuid(db=db, plan_uuid=parsed_uuid, user_id=user_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
 
@@ -122,7 +117,7 @@ def read_accounts_for_plan(
     """
     Retrieve all accounts linked to a debt repayment plan.
     """
-    parsed_uuid = _parse_uuid(plan_uuid)
+    parsed_uuid = parse_uuid(plan_uuid)
     db_plan = crud_debt.read_debt_repayment_plan_by_uuid(db=db, plan_uuid=parsed_uuid, user_id=user_id)
     if db_plan is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
@@ -139,8 +134,8 @@ def remove_account_from_debt_plan(
     """
     Remove a loan account from a debt repayment plan.
     """
-    parsed_plan_uuid = _parse_uuid(plan_uuid)
-    parsed_account_uuid = _parse_uuid(account_uuid)
+    parsed_plan_uuid = parse_uuid(plan_uuid)
+    parsed_account_uuid = parse_uuid(account_uuid)
     db_plan = crud_debt.read_debt_repayment_plan_by_uuid(db=db, plan_uuid=parsed_plan_uuid, user_id=user_id)
     if db_plan is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
@@ -183,7 +178,7 @@ def read_payment_schedule_for_account(
     """
     Retrieve the monthly payment schedule for a specific loan account.
     """
-    parsed_uuid = _parse_uuid(account_uuid)
+    parsed_uuid = parse_uuid(account_uuid)
     db_account = crud_account.read_db_account_by_uuid(db=db, account_uuid=parsed_uuid, user_id=user_id)
     if db_account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
@@ -277,7 +272,7 @@ def read_debt_payments_for_account(
     """
     Retrieve all debt payments for a specific loan account.
     """
-    parsed_uuid = _parse_uuid(account_uuid)
+    parsed_uuid = parse_uuid(account_uuid)
     db_account = crud_account.read_db_account_by_uuid(db=db, account_uuid=parsed_uuid, user_id=user_id)
     if db_account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
@@ -295,7 +290,7 @@ def read_debt_payment(
     """
     Retrieve a specific debt payment by its UUID.
     """
-    parsed_uuid = _parse_uuid(payment_uuid)
+    parsed_uuid = parse_uuid(payment_uuid)
     db_payment = crud_debt.read_debt_payment_by_uuid(db=db, payment_uuid=parsed_uuid, user_id=user_id)
     if db_payment is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment not found")
@@ -311,7 +306,7 @@ def update_debt_payment(
     """
     Update a debt payment.
     """
-    parsed_uuid = _parse_uuid(payment_uuid)
+    parsed_uuid = parse_uuid(payment_uuid)
 
     # Resolve optional UUID fields
     resolved_updates = {}
@@ -353,6 +348,6 @@ def delete_debt_payment(
     """
     Delete a debt payment.
     """
-    parsed_uuid = _parse_uuid(payment_uuid)
+    parsed_uuid = parse_uuid(payment_uuid)
     if not crud_debt.delete_debt_payment_by_uuid(db=db, payment_uuid=parsed_uuid, user_id=user_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment not found")
