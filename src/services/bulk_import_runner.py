@@ -53,7 +53,7 @@ def process_batch(db, batch_id: int) -> None:
     children = (
         db.query(UploadJobDB)
         .filter(UploadJobDB.batch_id == batch_id)
-        .order_by(UploadJobDB.id)
+        .order_by(UploadJobDB.db_id)
         .all()
     )
     storage = get_storage()
@@ -80,7 +80,7 @@ def process_batch(db, batch_id: int) -> None:
                 institution=job.institution,
                 account_id=job.account_id,
                 user_id=job.user_id,
-                upload_job_id=job.id,
+                upload_job_id=job.db_id,
             )
             job.transactions_created = result.transactions_created
             job.transactions_skipped = result.transactions_skipped

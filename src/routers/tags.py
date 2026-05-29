@@ -116,7 +116,7 @@ def delete_tag(
     if db_tag.is_system:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System tags cannot be deleted")
     try:
-        crud_tag.delete_db_tag(db=db, tag_id=db_tag.tag_id, user_id=user_id)
+        crud_tag.delete_db_tag(db=db, tag_id=db_tag.db_id, user_id=user_id)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     return None
@@ -221,7 +221,7 @@ def bulk_tag_transactions(
 
     try:
         created_relations = crud_tag.bulk_tag_transactions(
-            db=db, user_id=user_id, transaction_ids=transaction_ids, tag_id=db_tag.tag_id
+            db=db, user_id=user_id, transaction_ids=transaction_ids, tag_id=db_tag.db_id
         )
         return {
             "message": f"{len(created_relations)} transaction(s) tagged successfully.",

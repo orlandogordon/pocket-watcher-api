@@ -146,7 +146,7 @@ async def upload_statement_file(
     job = UploadJobDB(
         uuid=document_uuid,
         user_id=user_id,
-        account_id=account.id,
+        account_id=account.db_id,
         institution=institution,
         file_path=file.filename,
         status="UPLOADED",
@@ -191,19 +191,19 @@ def start_bulk_import(
     db.add(batch)
     db.flush()
     for j in jobs:
-        j.batch_id = batch.id
+        j.batch_id = batch.db_id
         j.status = "PENDING"
     db.commit()
 
-    submit_bulk_import(batch.id)
+    submit_bulk_import(batch.db_id)
     return {"batch_uuid": str(batch.uuid), "total_files": batch.total_files}
 
 
 def _batch_progress(db: Session, batch: BulkImportBatchDB) -> Dict:
     children = (
         db.query(UploadJobDB)
-        .filter(UploadJobDB.batch_id == batch.id)
-        .order_by(UploadJobDB.id)
+        .filter(UploadJobDB.batch_id == batch.db_id)
+        .order_by(UploadJobDB.db_id)
         .all()
     )
     per_file = [{
@@ -352,7 +352,7 @@ def list_documents(
         account = read_db_account_by_uuid(db, parsed, user_id)
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
-        q = q.filter(UploadJobDB.account_id == account.id)
+        q = q.filter(UploadJobDB.account_id == account.db_id)
     docs = q.order_by(UploadJobDB.created_at.desc()).all()
     return {"documents": [_document_summary(j) for j in docs]}
 
@@ -398,14 +398,14 @@ def delete_document(
 
     # Collect the UUIDs first — deletes mutate the session.
     txn_uuids = [
-        t.id for t in db.query(TransactionDB.id).filter(
-            TransactionDB.upload_job_id == job.id,
+        t.uuid for t in db.query(TransactionDB.uuid).filter(
+            TransactionDB.upload_job_id == job.db_id,
             TransactionDB.user_id == user_id,
         )
     ]
     inv_uuids = [
-        t.id for t in db.query(InvestmentTransactionDB.id).filter(
-            InvestmentTransactionDB.upload_job_id == job.id,
+        t.uuid for t in db.query(InvestmentTransactionDB.uuid).filter(
+            InvestmentTransactionDB.upload_job_id == job.db_id,
             InvestmentTransactionDB.user_id == user_id,
         )
     ]
@@ -466,7 +466,7 @@ def get_upload_job_status(
     - Timestamps
     """
     job = db.query(UploadJobDB).filter(
-        UploadJobDB.id == job_id,
+        UploadJobDB.db_id == job_id,
         UploadJobDB.user_id == user_id
     ).first()
 
@@ -474,7 +474,7 @@ def get_upload_job_status(
         raise HTTPException(status_code=404, detail="Upload job not found")
 
     return {
-        "id": job.id,
+        "id": job.db_id,
         "status": job.status,
         "institution": job.institution,
         "account_id": job.account_id,
@@ -507,7 +507,7 @@ def get_skipped_transactions(
     """
     # Verify job ownership
     job = db.query(UploadJobDB).filter(
-        UploadJobDB.id == job_id,
+        UploadJobDB.db_id == job_id,
         UploadJobDB.user_id == user_id
     ).first()
 
@@ -525,15 +525,15 @@ def get_skipped_transactions(
         existing_txn = None
         if s.transaction_type == "REGULAR" and s.existing_transaction_id:
             existing_txn = db.query(TransactionDB).filter(
-                TransactionDB.id == s.existing_transaction_id
+                TransactionDB.uuid == s.existing_transaction_id
             ).first()
         elif s.transaction_type == "INVESTMENT" and s.existing_investment_transaction_id:
             existing_txn = db.query(InvestmentTransactionDB).filter(
-                InvestmentTransactionDB.id == s.existing_investment_transaction_id
+                InvestmentTransactionDB.uuid == s.existing_investment_transaction_id
             ).first()
 
         results.append({
-            "id": s.id,
+            "id": s.db_id,
             "transaction_type": s.transaction_type,
             "skipped_transaction": {
                 "date": s.parsed_date,
@@ -675,7 +675,7 @@ async def create_statement_preview(
         account_obj = read_db_account_by_uuid(db, parsed_account_uuid, user_id)
         if not account_obj:
             raise HTTPException(status_code=404, detail="Account not found")
-        account_id = account_obj.id
+        account_id = account_obj.db_id
 
     # Parse the file
     file_bytes = await file.read()
@@ -703,8 +703,8 @@ async def create_statement_preview(
                     last_four=parsed_data.account_info.account_number_last4
                 )
                 if found:
-                    resolved_account_id = found.id
-                    account_info_dict["suggested_account_id"] = found.id
+                    resolved_account_id = found.db_id
+                    account_info_dict["suggested_account_id"] = found.db_id
                     account_info_dict["suggested_account_name"] = found.account_name
             except Exception:
                 logger.warning(f"Could not resolve account from last4: {parsed_data.account_info.account_number_last4}")
@@ -728,7 +728,7 @@ async def create_statement_preview(
     # TRANSFER_OUT before dedup runs. Returns suggestions keyed by parsed
     # position; we inject those onto the preview items below.
     source_account = db.query(AccountDB).filter(
-        AccountDB.id == resolved_account_id,
+        AccountDB.db_id == resolved_account_id,
         AccountDB.user_id == user_id,
     ).first()
     user_accounts = db.query(AccountDB).filter(AccountDB.user_id == user_id).all()
@@ -742,7 +742,7 @@ async def create_statement_preview(
     )
 
     if tier_a_suggestions:
-        partner_lookup = {a.id: a for a in user_accounts}
+        partner_lookup = {a.db_id: a for a in user_accounts}
         for item in rejected_txns + ready_txns:
             pos = item.get("statement_position")
             sug = tier_a_suggestions.get(pos) if pos is not None else None
@@ -1207,7 +1207,7 @@ async def confirm_statement_import(
     account = None
     if account_id:
         account = db.query(AccountDB).filter(
-            AccountDB.id == account_id, AccountDB.user_id == user_id
+            AccountDB.db_id == account_id, AccountDB.user_id == user_id
         ).first()
 
     # Guard: regular TransactionDB rows must not land on an INVESTMENT
@@ -1256,12 +1256,12 @@ async def confirm_statement_import(
 
     if cat_uuids:
         cat_uuid_objs = [UUID(u) for u in cat_uuids]
-        cats = db.query(CategoryDB.uuid, CategoryDB.id).filter(CategoryDB.uuid.in_(cat_uuid_objs)).all()
-        category_uuid_map = {str(c.uuid): c.id for c in cats}
+        cats = db.query(CategoryDB.uuid, CategoryDB.db_id).filter(CategoryDB.uuid.in_(cat_uuid_objs)).all()
+        category_uuid_map = {str(c.uuid): c.db_id for c in cats}
     if tag_uuids_needed:
         tag_uuid_objs = [UUID(u) for u in tag_uuids_needed]
-        tags = db.query(TagDB.id, TagDB.tag_id).filter(TagDB.id.in_(tag_uuid_objs)).all()
-        tag_uuid_map = {str(t.id): t.tag_id for t in tags}
+        tags = db.query(TagDB.uuid, TagDB.db_id).filter(TagDB.uuid.in_(tag_uuid_objs)).all()
+        tag_uuid_map = {str(t.uuid): t.db_id for t in tags}
 
     # Collect tag associations to create after flush
     pending_tag_associations: list[tuple[TransactionDB, list[int]]] = []
@@ -1295,7 +1295,7 @@ async def confirm_statement_import(
         completed_at=datetime.utcnow(),
     )
     db.add(upload_job)
-    db.flush()  # assign upload_job.id so created rows can link to this document
+    db.flush()  # assign upload_job.db_id so created rows can link to this document
 
     # --- Create regular transactions ---
     suggestion_accept_count = 0
@@ -1386,7 +1386,7 @@ async def confirm_statement_import(
             )
 
         db_txn = TransactionDB(
-            id=uuid4(),
+            uuid=uuid4(),
             user_id=user_id,
             account_id=account_id,
             category_id=category_id_val,
@@ -1399,7 +1399,7 @@ async def confirm_statement_import(
             description=display_description,
             merchant_name=merchant_name_val,
             comments=final_data.get("comments"),
-            upload_job_id=upload_job.id,
+            upload_job_id=upload_job.db_id,
         )
         db.add(db_txn)
         created_txns.append(db_txn)
@@ -1409,7 +1409,7 @@ async def confirm_statement_import(
         # diffs user_edits against llm_suggestions to measure accept/override.
         db.add(ParsedImportDB(
             upload_job=upload_job,
-            transaction_id=db_txn.id,
+            transaction_id=db_txn.uuid,
             raw_parsed_data=parsed_data,
             user_edits=item.get("edited_data"),
             llm_suggestions=item.get("llm_suggestion_raw") or _to_raw_suggestion(suggestion),
@@ -1420,7 +1420,7 @@ async def confirm_statement_import(
         # Queue tag associations (need db_txn.db_id after flush)
         tag_ids = [tag_uuid_map[t] for t in final_data.get("tag_uuids", []) if t in tag_uuid_map]
         if is_approved_dup and approved_dup_tag:
-            tag_ids.append(approved_dup_tag.tag_id)
+            tag_ids.append(approved_dup_tag.db_id)
         # Tag rows whose final state has no category or no merchant — covers
         # both the preview path (user left it blank) and the bulk path (LLM
         # nulls survive untouched). #34 — Option A: derived from final state.
@@ -1431,7 +1431,7 @@ async def confirm_statement_import(
         missing_category = category_id_val is None
         missing_merchant = not merchant_name_val
         if needs_review_tag and not is_transfer and (missing_category or missing_merchant):
-            tag_ids.append(needs_review_tag.tag_id)
+            tag_ids.append(needs_review_tag.db_id)
             needs_review_count += 1
             # Record WHY on the transaction itself so the review inbox (#46)
             # shows what triggered the flag without opening each row.
@@ -1491,7 +1491,7 @@ async def confirm_statement_import(
             inv_api_symbol = final_data.get("api_symbol")
 
         db_inv = InvestmentTransactionDB(
-            id=uuid4(),
+            uuid=uuid4(),
             user_id=user_id,
             account_id=account_id,
             holding_id=None,
@@ -1505,7 +1505,7 @@ async def confirm_statement_import(
             transaction_date=inv_txn_date,
             description=display_description,
             security_type=final_data.get("security_type"),
-            upload_job_id=upload_job.id,
+            upload_job_id=upload_job.db_id,
         )
         db.add(db_inv)
         created_inv.append(db_inv)
@@ -1516,7 +1516,7 @@ async def confirm_statement_import(
         inv_suggestion = item.get("llm_suggestion") or None
         db.add(ParsedImportDB(
             upload_job=upload_job,
-            investment_transaction_id=db_inv.id,
+            investment_transaction_id=db_inv.uuid,
             raw_parsed_data=parsed_data,
             user_edits=item.get("edited_data"),
             llm_suggestions=item.get("llm_suggestion_raw") or _to_raw_suggestion(inv_suggestion),
@@ -1589,7 +1589,7 @@ async def confirm_statement_import(
         "investment_transactions_created": len(created_inv),
         "duplicates_imported": duplicates_imported,
         "skipped_unmapped_types": skipped_unmapped,
-        "upload_job_id": upload_job.id,
+        "upload_job_id": upload_job.db_id,
         "processing_time_ms": elapsed_ms,
         "suggestion_accepted": suggestion_accept_count,
         "suggestion_overridden": suggestion_override_count,

@@ -67,7 +67,7 @@ def test_upload_file_persists_document(client, db, cc_account, fake_llm):
     job = db.query(UploadJobDB).filter(UploadJobDB.uuid == UUID(doc_uuid)).first()
     assert job is not None
     assert job.status == "UPLOADED"
-    assert job.storage_key and job.account_id == cc_account.id
+    assert job.storage_key and job.account_id == cc_account.db_id
     assert file_storage.get_storage().exists(job.storage_key)
 
 
@@ -109,10 +109,10 @@ def test_bulk_import_happy_path(client, db, cc_account, fake_llm):
     batch = db.query(BulkImportBatchDB).filter(BulkImportBatchDB.uuid == UUID(batch_uuid)).first()
     assert batch.total_files == 1
     job = db.query(UploadJobDB).filter(UploadJobDB.uuid == UUID(doc_uuid)).first()
-    assert job.batch_id == batch.id and job.status == "PENDING"
+    assert job.batch_id == batch.db_id and job.status == "PENDING"
 
     # Drive the worker on the test session (endpoint's submit was stubbed).
-    process_batch(db, batch.id)
+    process_batch(db, batch.db_id)
 
     db.refresh(job)
     assert job.status == "COMPLETED"
@@ -181,7 +181,7 @@ def test_document_cross_user_content_404(client, db, cc_account):
     other = make_user(db, email="o2@x", username="o2")
     other_acct = make_account(db, other, account_type=AccountType.CREDIT_CARD)
     foreign = UploadJobDB(
-        uuid=uuid4(), user_id=other.db_id, account_id=other_acct.id,
+        uuid=uuid4(), user_id=other.db_id, account_id=other_acct.db_id,
         institution="amex", status="UPLOADED", storage_key=f"{other.db_id}/x.csv",
     )
     db.add(foreign)
@@ -199,12 +199,12 @@ def test_delete_document_cascades_transactions(client, db, cc_account, fake_llm)
     doc_uuid = _upload(client, cc_account.uuid).json()["document_uuid"]
     batch_uuid = _start_batch(client, [doc_uuid]).json()["batch_uuid"]
     batch = db.query(BulkImportBatchDB).filter(BulkImportBatchDB.uuid == UUID(batch_uuid)).first()
-    process_batch(db, batch.id)
+    process_batch(db, batch.db_id)
 
     from src.db.core import TransactionDB
     job = db.query(UploadJobDB).filter(UploadJobDB.uuid == UUID(doc_uuid)).first()
     # The imported rows are linked to this document.
-    assert db.query(TransactionDB).filter(TransactionDB.upload_job_id == job.id).count() == 4
+    assert db.query(TransactionDB).filter(TransactionDB.upload_job_id == job.db_id).count() == 4
 
     resp = client.delete(f"/uploads/documents/{doc_uuid}")
     assert resp.status_code == 204
@@ -212,4 +212,4 @@ def test_delete_document_cascades_transactions(client, db, cc_account, fake_llm)
     # File gone, document gone, and the transactions it imported are gone.
     assert not file_storage.get_storage().exists(job.storage_key)
     assert client.get(f"/uploads/documents/{doc_uuid}").status_code == 404
-    assert db.query(TransactionDB).filter(TransactionDB.account_id == cc_account.id).count() == 0
+    assert db.query(TransactionDB).filter(TransactionDB.account_id == cc_account.db_id).count() == 0

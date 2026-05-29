@@ -26,7 +26,7 @@ class DebtRepaymentPlanUpdate(BaseModel):
     status: Optional[str] = Field(None, max_length=50)
 
 class DebtRepaymentPlanResponse(BaseModel):
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     plan_name: str
     strategy: DebtStrategyEnum
     target_payoff_date: Optional[date]
@@ -61,7 +61,7 @@ class DebtRepaymentScheduleBulkCreate(BaseModel):
     schedules: List[MonthlyPaymentSchedule]
 
 class DebtRepaymentScheduleResponse(BaseModel):
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     account_uuid: UUID
     payment_month: date
     scheduled_payment_amount: Decimal
@@ -123,12 +123,10 @@ class DebtPaymentResponse(BaseModel):
     @classmethod
     def resolve_uuids(cls, data):
         if hasattr(data, '__dict__'):
-            if hasattr(data, 'id'):
-                data.__dict__['uuid'] = data.id
             if hasattr(data, 'loan_account') and data.loan_account:
                 data.__dict__['loan_account_uuid'] = data.loan_account.uuid
             if hasattr(data, 'payment_source_account') and data.payment_source_account:
                 data.__dict__['payment_source_account_uuid'] = data.payment_source_account.uuid
             if hasattr(data, 'transaction') and data.transaction:
-                data.__dict__['transaction_uuid'] = data.transaction.id
+                data.__dict__['transaction_uuid'] = data.transaction.uuid
         return data

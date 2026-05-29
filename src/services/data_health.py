@@ -41,12 +41,12 @@ def project_needs_review(db: Session, user_id: int) -> list[AttentionItem]:
     rows = (
         db.query(TransactionDB, TransactionTagDB, AccountDB, CategoryAlias, SubcategoryAlias)
         .join(TransactionTagDB, TransactionTagDB.transaction_id == TransactionDB.db_id)
-        .outerjoin(AccountDB, AccountDB.id == TransactionDB.account_id)
-        .outerjoin(CategoryAlias, CategoryAlias.id == TransactionDB.category_id)
-        .outerjoin(SubcategoryAlias, SubcategoryAlias.id == TransactionDB.subcategory_id)
+        .outerjoin(AccountDB, AccountDB.db_id == TransactionDB.account_id)
+        .outerjoin(CategoryAlias, CategoryAlias.db_id == TransactionDB.category_id)
+        .outerjoin(SubcategoryAlias, SubcategoryAlias.db_id == TransactionDB.subcategory_id)
         .filter(
             TransactionDB.user_id == user_id,
-            TransactionTagDB.tag_id == tag.tag_id,
+            TransactionTagDB.tag_id == tag.db_id,
         )
         .all()
     )
@@ -54,13 +54,13 @@ def project_needs_review(db: Session, user_id: int) -> list[AttentionItem]:
     items: list[AttentionItem] = []
     for txn, link, account, category, subcategory in rows:
         items.append(AttentionItem(
-            id=f"needs_review:{txn.id}",
+            id=f"needs_review:{txn.uuid}",
             kind="needs_review",
             severity="action_required",
-            subject=AttentionSubject(type="transaction", primary_uuid=txn.id),
+            subject=AttentionSubject(type="transaction", primary_uuid=txn.uuid),
             summary=f"Categorize {txn.amount} on {txn.transaction_date.isoformat()}",
             details={
-                "transaction_uuid": str(txn.id),
+                "transaction_uuid": str(txn.uuid),
                 "transaction_date": txn.transaction_date.isoformat(),
                 "amount": str(txn.amount),
                 "description": txn.description,
@@ -80,7 +80,7 @@ def project_needs_review(db: Session, user_id: int) -> list[AttentionItem]:
                 AttentionAction(
                     label="Mark reviewed",
                     method="DELETE",
-                    href=f"/tags/transactions/{txn.id}/tags/{tag.id}",
+                    href=f"/tags/transactions/{txn.uuid}/tags/{tag.uuid}",
                 ),
             ],
         ))
@@ -90,17 +90,17 @@ def project_needs_review(db: Session, user_id: int) -> list[AttentionItem]:
 def _uuid_for_side(db: Session, side: TxnSide) -> Optional[UUID]:
     if side.is_investment:
         row = db.query(InvestmentTransactionDB).filter(
-            InvestmentTransactionDB.investment_transaction_id == side.txn_id
+            InvestmentTransactionDB.db_id == side.txn_id
         ).first()
-        return row.id if row else None
+        return row.uuid if row else None
     row = db.query(TransactionDB).filter(TransactionDB.db_id == side.txn_id).first()
-    return row.id if row else None
+    return row.uuid if row else None
 
 
 def _side_created_at(db: Session, side: TxnSide):
     if side.is_investment:
         row = db.query(InvestmentTransactionDB).filter(
-            InvestmentTransactionDB.investment_transaction_id == side.txn_id
+            InvestmentTransactionDB.db_id == side.txn_id
         ).first()
     else:
         row = db.query(TransactionDB).filter(TransactionDB.db_id == side.txn_id).first()
@@ -113,7 +113,7 @@ def _account_for_side(db: Session, side: TxnSide) -> Optional[AccountDB]:
     investment transactions require an account — but we degrade gracefully)."""
     if side.account_id is None:
         return None
-    return db.query(AccountDB).filter(AccountDB.id == side.account_id).first()
+    return db.query(AccountDB).filter(AccountDB.db_id == side.account_id).first()
 
 
 def project_transfer_pairs(db: Session, user_id: int) -> list[AttentionItem]:
@@ -238,7 +238,7 @@ def project_snapshot_review(db: Session, user_id: int) -> list[AttentionItem]:
     needs_review=True for accounts owned by this user."""
     rows = (
         db.query(AccountValueHistoryDB, AccountDB)
-        .join(AccountDB, AccountDB.id == AccountValueHistoryDB.account_id)
+        .join(AccountDB, AccountDB.db_id == AccountValueHistoryDB.account_id)
         .filter(
             AccountDB.user_id == user_id,
             AccountValueHistoryDB.needs_review == True,

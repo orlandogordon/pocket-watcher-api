@@ -174,7 +174,7 @@ def classify_outflow(
     best_account_id: Optional[int] = None
 
     for account in user_accounts:
-        if account.id == source_account_id:
+        if account.db_id == source_account_id:
             continue
         if account.account_type not in (
             AccountType.CREDIT_CARD,
@@ -193,7 +193,7 @@ def classify_outflow(
             best_token is None or len(longest_match) > len(best_token)
         ):
             best_token = longest_match
-            best_account_id = account.id
+            best_account_id = account.db_id
 
     if best_account_id is None:
         return ClassificationResult(TransactionType.PURCHASE, None, None)
@@ -236,7 +236,7 @@ def classify_parsed_transactions(
             continue
         result = classify_outflow(
             description=parsed.description,
-            source_account_id=source_account.id,
+            source_account_id=source_account.db_id,
             user_accounts=user_accounts_list,
         )
         if result.transaction_type == TransactionType.TRANSFER_OUT:

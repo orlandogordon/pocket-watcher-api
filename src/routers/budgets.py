@@ -31,12 +31,12 @@ def create_template(
         db_cat = crud_category.read_db_category_by_uuid(db, cat.category_uuid)
         if not db_cat:
             raise HTTPException(status_code=404, detail=f"Category not found: {cat.category_uuid}")
-        resolved_ids[cat.category_uuid] = db_cat.id
+        resolved_ids[cat.category_uuid] = db_cat.db_id
         if cat.subcategory_uuid:
             db_sub = crud_category.read_db_category_by_uuid(db, cat.subcategory_uuid)
             if not db_sub:
                 raise HTTPException(status_code=404, detail=f"Subcategory not found: {cat.subcategory_uuid}")
-            resolved_ids[cat.subcategory_uuid] = db_sub.id
+            resolved_ids[cat.subcategory_uuid] = db_sub.db_id
 
     try:
         return crud_budget.create_template(db, user_id, data, resolved_category_ids=resolved_ids)
@@ -124,13 +124,13 @@ def add_template_category(
         db_sub = crud_category.read_db_category_by_uuid(db, data.subcategory_uuid)
         if not db_sub:
             raise HTTPException(status_code=404, detail="Subcategory not found")
-        sub_id = db_sub.id
+        sub_id = db_sub.db_id
 
     parsed = parse_uuid(template_uuid)
     try:
         return crud_budget.add_template_category(
             db, parsed, user_id, data,
-            category_id=db_cat.id, subcategory_id=sub_id,
+            category_id=db_cat.db_id, subcategory_id=sub_id,
         )
     except (NotFoundError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -198,7 +198,7 @@ def update_budget_month(
         template = crud_budget.read_template(db, data.template_uuid, user_id)
         if not template:
             raise HTTPException(status_code=404, detail="Template not found")
-        resolved_template_id = template.template_id
+        resolved_template_id = template.db_id
 
     try:
         crud_budget.update_budget_month(
@@ -228,10 +228,10 @@ def list_budget_months(
         if m.template_id:
             from sqlalchemy.orm import joinedload
             template = db.query(crud_budget.BudgetTemplateDB).filter(
-                crud_budget.BudgetTemplateDB.template_id == m.template_id
+                crud_budget.BudgetTemplateDB.db_id == m.template_id
             ).first()
         results.append({
-            "id": m.id,
+            "id": m.uuid,
             "year": m.year,
             "month": m.month,
             "template": template,

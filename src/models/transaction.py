@@ -10,7 +10,7 @@ from src.db.core import RelationshipType
 
 
 class EmbeddedTagResponse(BaseModel):
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     tag_name: str
     color: Optional[str] = None
     is_system: bool = False
@@ -115,7 +115,7 @@ class SplitAllocationCreate(BaseModel):
 
 
 class SplitAllocationResponse(BaseModel):
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     category_uuid: UUID
     category_name: str
     subcategory_uuid: Optional[UUID] = None
@@ -155,7 +155,7 @@ class TransactionSplitRequest(BaseModel):
 
 class TransactionResponse(BaseModel):
     """Transaction data returned to client"""
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     account_uuid: Optional[UUID] = None
     transaction_date: date
     amount: Decimal
@@ -187,7 +187,7 @@ class TransactionResponse(BaseModel):
 
 class TransactionSummary(BaseModel):
     """Lightweight transaction summary"""
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     transaction_date: date
     amount: Decimal
     transaction_type: TransactionTypeEnum
@@ -330,7 +330,7 @@ class TransactionRelationshipUpdate(BaseModel):
     notes: Optional[str] = None
 
 class TransactionRelationship(BaseModel):
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     from_transaction_uuid: UUID
     to_transaction_uuid: UUID
     relationship_type: RelationshipType
@@ -346,7 +346,7 @@ class TransactionRelationship(BaseModel):
     def resolve_uuids(cls, data):
         if hasattr(data, '__dict__'):
             if hasattr(data, 'from_transaction') and data.from_transaction:
-                data.__dict__['from_transaction_uuid'] = data.from_transaction.id
+                data.__dict__['from_transaction_uuid'] = data.from_transaction.uuid
             if hasattr(data, 'to_transaction') and data.to_transaction:
-                data.__dict__['to_transaction_uuid'] = data.to_transaction.id
+                data.__dict__['to_transaction_uuid'] = data.to_transaction.uuid
         return data

@@ -37,7 +37,7 @@ class LoanMathTestBase(unittest.TestCase):
         self.Session = sessionmaker(bind=self.engine)
         self.session = self.Session()
 
-        self.user = UserDB(id=uuid4(), email="t@x", username="t", password_hash="x")
+        self.user = UserDB(uuid=uuid4(), email="t@x", username="t", password_hash="x")
         self.session.add(self.user)
         self.session.flush()
 
@@ -113,8 +113,8 @@ class TestComputeDailyInterest(unittest.TestCase):
 class TestAnchorDateFallback(LoanMathTestBase):
     def test_uses_last_payment_date_when_present(self):
         payment = DebtPaymentDB(
-            id=uuid4(),
-            loan_account_id=self.loan.id,
+            uuid=uuid4(),
+            loan_account_id=self.loan.db_id,
             payment_amount=Decimal("100.00"),
             principal_amount=Decimal("60.00"),
             interest_amount=Decimal("40.00"),
@@ -145,16 +145,16 @@ class TestAnchorDateFallback(LoanMathTestBase):
         # update_debt_payment's case: when recomputing for an existing
         # payment, that payment must not be its own anchor.
         first = DebtPaymentDB(
-            id=uuid4(),
-            loan_account_id=self.loan.id,
+            uuid=uuid4(),
+            loan_account_id=self.loan.db_id,
             payment_amount=Decimal("100"),
             principal_amount=Decimal("60"),
             interest_amount=Decimal("40"),
             payment_date=date(2026, 2, 1),
         )
         second = DebtPaymentDB(
-            id=uuid4(),
-            loan_account_id=self.loan.id,
+            uuid=uuid4(),
+            loan_account_id=self.loan.db_id,
             payment_amount=Decimal("100"),
             principal_amount=Decimal("60"),
             interest_amount=Decimal("40"),
@@ -164,7 +164,7 @@ class TestAnchorDateFallback(LoanMathTestBase):
         self.session.commit()
 
         anchor = _anchor_date_for_loan(
-            self.session, self.loan, exclude_payment_id=second.payment_id
+            self.session, self.loan, exclude_payment_id=second.db_id
         )
         self.assertEqual(anchor, date(2026, 2, 1))
 
@@ -181,7 +181,7 @@ class TestCreateDebtPaymentDailyInterest(LoanMathTestBase):
                 payment_amount=Decimal("200.00"),
                 payment_date=date(2026, 1, 31),
             ),
-            loan_account_id=self.loan.id,
+            loan_account_id=self.loan.db_id,
         )
         self.assertEqual(payment.interest_amount, Decimal("41.10"))
         self.assertEqual(payment.principal_amount, Decimal("158.90"))
@@ -198,7 +198,7 @@ class TestCreateDebtPaymentDailyInterest(LoanMathTestBase):
                 payment_amount=Decimal("200.00"),
                 payment_date=date(2026, 3, 2),  # 60 days after 2026-01-01
             ),
-            loan_account_id=self.loan.id,
+            loan_account_id=self.loan.db_id,
         )
         # 10000 * 0.05 * 60 / 365 = 82.19
         self.assertEqual(payment.interest_amount, Decimal("82.19"))
@@ -214,7 +214,7 @@ class TestCreateDebtPaymentDailyInterest(LoanMathTestBase):
                 payment_amount=Decimal("200.00"),
                 payment_date=date(2026, 1, 31),
             ),
-            loan_account_id=self.loan.id,
+            loan_account_id=self.loan.db_id,
         )
         # Balance is now 10000 - 158.90 = 9841.10
         # Second payment: 9841.10 * 0.05 * 30 / 365 = 40.4427... → 40.44
@@ -226,7 +226,7 @@ class TestCreateDebtPaymentDailyInterest(LoanMathTestBase):
                 payment_amount=Decimal("200.00"),
                 payment_date=date(2026, 3, 2),
             ),
-            loan_account_id=self.loan.id,
+            loan_account_id=self.loan.db_id,
         )
         self.assertEqual(second.interest_amount, Decimal("40.44"))
         self.assertEqual(second.principal_amount, Decimal("159.56"))
@@ -255,8 +255,8 @@ class TestCurrentAccruedInterest(LoanMathTestBase):
     def test_accrues_from_last_payment_when_present(self):
         # Anchor moves forward when a payment exists.
         payment = DebtPaymentDB(
-            id=uuid4(),
-            loan_account_id=self.loan.id,
+            uuid=uuid4(),
+            loan_account_id=self.loan.db_id,
             payment_amount=Decimal("100"),
             principal_amount=Decimal("60"),
             interest_amount=Decimal("40"),
@@ -277,9 +277,9 @@ class TestDebtPaymentFKSetNull(LoanMathTestBase):
     def test_deleting_linked_transaction_sets_payment_transaction_id_to_null(self):
         # Bank-side checking outflow.
         txn = TransactionDB(
-            id=uuid4(),
+            uuid=uuid4(),
             user_id=self.user.db_id,
-            account_id=self.checking.id,
+            account_id=self.checking.db_id,
             transaction_hash=str(uuid4()),
             source_type=SourceType.MANUAL,
             transaction_date=date(2026, 2, 1),
@@ -291,9 +291,9 @@ class TestDebtPaymentFKSetNull(LoanMathTestBase):
         self.session.flush()
 
         payment = DebtPaymentDB(
-            id=uuid4(),
-            loan_account_id=self.loan.id,
-            payment_source_account_id=self.checking.id,
+            uuid=uuid4(),
+            loan_account_id=self.loan.db_id,
+            payment_source_account_id=self.checking.db_id,
             transaction_id=txn.db_id,
             payment_amount=Decimal("200.00"),
             principal_amount=Decimal("160.00"),
@@ -302,14 +302,14 @@ class TestDebtPaymentFKSetNull(LoanMathTestBase):
         )
         self.session.add(payment)
         self.session.commit()
-        payment_id = payment.payment_id
+        payment_id = payment.db_id
 
         # Delete the bank-side transaction. With SET NULL, the debt_payment
         # row survives with transaction_id cleared.
         self.session.delete(txn)
         self.session.commit()
 
-        surviving = self.session.query(DebtPaymentDB).filter_by(payment_id=payment_id).first()
+        surviving = self.session.query(DebtPaymentDB).filter_by(db_id=payment_id).first()
         self.assertIsNotNone(surviving)
         self.assertIsNone(surviving.transaction_id)
         # Other fields untouched.

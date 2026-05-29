@@ -87,7 +87,7 @@ def _attach_accrued_interest(db: Session, account: Optional[AccountDB]) -> Optio
 def read_db_account(db: Session, account_id: int, user_id: Optional[int] = None) -> Optional[AccountDB]:
     """Read an account by ID, optionally filtering by user"""
 
-    query = db.query(AccountDB).filter(AccountDB.id == account_id)
+    query = db.query(AccountDB).filter(AccountDB.db_id == account_id)
 
     if user_id:
         query = query.filter(AccountDB.user_id == user_id)
@@ -120,7 +120,7 @@ def update_db_account(db: Session, account_id: int, user_id: int, account_update
     
     # Get the existing account
     db_account = db.query(AccountDB).filter(
-        AccountDB.id == account_id,
+        AccountDB.db_id == account_id,
         AccountDB.user_id == user_id
     ).first()
     
@@ -132,7 +132,7 @@ def update_db_account(db: Session, account_id: int, user_id: int, account_update
         existing_name = db.query(AccountDB).filter(
             AccountDB.user_id == user_id,
             AccountDB.account_name == account_updates.account_name,
-            AccountDB.id != account_id
+            AccountDB.db_id != account_id
         ).first()
         if existing_name:
             raise ValueError(f"Account name '{account_updates.account_name}' already exists")
@@ -166,7 +166,7 @@ def delete_db_account(db: Session, account_id: int, user_id: int) -> bool:
     """Delete an account (only if it has no transactions)"""
     
     db_account = db.query(AccountDB).filter(
-        AccountDB.id == account_id,
+        AccountDB.db_id == account_id,
         AccountDB.user_id == user_id
     ).first()
     
@@ -193,7 +193,7 @@ def delete_db_account(db: Session, account_id: int, user_id: int) -> bool:
 def update_account_balance(db: Session, account_id: int, new_balance: Decimal) -> AccountDB:
     """Update an account's balance (used by transaction processing)"""
     
-    db_account = db.query(AccountDB).filter(AccountDB.id == account_id).first()
+    db_account = db.query(AccountDB).filter(AccountDB.db_id == account_id).first()
     if not db_account:
         raise NotFoundError(f"Account with id {account_id} not found")
     
@@ -309,7 +309,7 @@ def update_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int, acc
         existing_name = db.query(AccountDB).filter(
             AccountDB.user_id == user_id,
             AccountDB.account_name == account_updates.account_name,
-            AccountDB.id != db_account.id
+            AccountDB.db_id != db_account.db_id
         ).first()
         if existing_name:
             raise ValueError(f"Account name '{account_updates.account_name}' already exists")
@@ -386,7 +386,7 @@ def delete_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int, for
             raise ValueError(f"Failed to delete account: {str(e)}")
 
     # Force delete: cascade-delete all associated records
-    account_id = db_account.id
+    account_id = db_account.db_id
     deleted = {}
 
     try:

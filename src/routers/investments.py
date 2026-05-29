@@ -40,8 +40,8 @@ def read_account_summary(account_uuid: str, db: Session = Depends(get_db), user_
     account = crud_account.read_db_account_by_uuid(db=db, account_uuid=parsed_uuid, user_id=user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    state = account_snapshot.get_account_state_on_date(db, account.id, date.today())
-    securities_value = crud_investment.calculate_account_total_value(db, account.id)
+    state = account_snapshot.get_account_state_on_date(db, account.db_id, date.today())
+    securities_value = crud_investment.calculate_account_total_value(db, account.db_id)
     return InvestmentAccountSummary(
         cash_balance=state['cash_balance'],
         securities_value=securities_value,
@@ -57,7 +57,7 @@ def read_holdings_for_account(account_uuid: str, db: Session = Depends(get_db), 
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     try:
-        return crud_investment.read_db_investment_holdings_by_account(db=db, account_id=account.id, user_id=user_id)
+        return crud_investment.read_db_investment_holdings_by_account(db=db, account_id=account.db_id, user_id=user_id)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail="Account not found") from e
 
@@ -85,7 +85,7 @@ def rebuild_holdings(account_uuid: str, db: Session = Depends(get_db), user_id: 
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     try:
-        holdings = crud_investment.rebuild_holdings_from_transactions(db, account.id)
+        holdings = crud_investment.rebuild_holdings_from_transactions(db, account.db_id)
         db.commit()
         return holdings
     except Exception as e:
@@ -101,7 +101,7 @@ def create_transaction(transaction: InvestmentTransactionCreate, db: Session = D
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     try:
-        return crud_investment.create_db_investment_transaction(db=db, user_id=user_id, transaction_data=transaction, account_id=account.id)
+        return crud_investment.create_db_investment_transaction(db=db, user_id=user_id, transaction_data=transaction, account_id=account.db_id)
     except (ValueError, NotFoundError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -118,7 +118,7 @@ def read_transactions_for_account(account_uuid: str, skip: int = 0, limit: int =
     account = crud_account.read_db_account_by_uuid(db=db, account_uuid=parsed_uuid, user_id=user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    return crud_investment.read_db_investment_transactions(db=db, user_id=user_id, account_id=account.id, skip=skip, limit=limit)
+    return crud_investment.read_db_investment_transactions(db=db, user_id=user_id, account_id=account.db_id, skip=skip, limit=limit)
 
 @router.get("/transactions/{transaction_uuid}", response_model=InvestmentTransactionResponse)
 def read_transaction(transaction_uuid: str, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):

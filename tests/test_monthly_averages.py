@@ -74,8 +74,8 @@ def test_by_month_always_twelve_entries(db, user, account):
 def test_category_breakdown_sorted_by_total_desc(db, user, account):
     cat_a = make_category(db)
     cat_b = make_category(db)
-    _txn(db, user, account, "100", TransactionType.PURCHASE, date(2026, 1, 5), category_id=cat_a.id)
-    _txn(db, user, account, "250", TransactionType.PURCHASE, date(2026, 1, 6), category_id=cat_b.id)
+    _txn(db, user, account, "100", TransactionType.PURCHASE, date(2026, 1, 5), category_id=cat_a.db_id)
+    _txn(db, user, account, "250", TransactionType.PURCHASE, date(2026, 1, 6), category_id=cat_b.db_id)
 
     res = get_monthly_averages(db, user.db_id, 2026)
     assert [c.total for c in res.by_category] == [Decimal("250.00"), Decimal("100.00")]
@@ -88,7 +88,7 @@ def test_refund_reduces_monthly_expense_and_absorbs_refund(db, user, account):
     parent = _txn(db, user, account, "100", TransactionType.PURCHASE, date(2026, 1, 5))
     refund = _txn(db, user, account, "40", TransactionType.CREDIT, date(2026, 1, 6))
     db.add(TransactionRelationshipDB(
-        id=uuid4(), from_transaction_id=refund.db_id, to_transaction_id=parent.db_id,
+        uuid=uuid4(), from_transaction_id=refund.db_id, to_transaction_id=parent.db_id,
         relationship_type=RelationshipType.REFUNDS, amount_allocated=Decimal("40"),
     ))
     db.flush()
@@ -104,7 +104,7 @@ def test_split_distributed_across_category_breakdown(db, user, account):
     parent = _txn(db, user, account, "100", TransactionType.PURCHASE, date(2026, 1, 5), category_id=None)
     for cat, amt in ((cat_a, "60"), (cat_b, "40")):
         db.add(TransactionSplitAllocationDB(
-            id=uuid4(), transaction_id=parent.db_id, category_id=cat.id, amount=Decimal(amt)
+            uuid=uuid4(), transaction_id=parent.db_id, category_id=cat.db_id, amount=Decimal(amt)
         ))
     db.flush()
 

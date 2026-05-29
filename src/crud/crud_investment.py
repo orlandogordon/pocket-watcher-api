@@ -40,12 +40,12 @@ def read_db_investment_holding(db: Session, holding_id: int, user_id: int) -> Op
     return db.query(InvestmentHoldingDB).join(AccountDB).options(
         joinedload(InvestmentHoldingDB.account),
     ).filter(
-        InvestmentHoldingDB.holding_id == holding_id,
+        InvestmentHoldingDB.db_id == holding_id,
         AccountDB.user_id == user_id
     ).first()
 
 def read_db_investment_holdings_by_account(db: Session, account_id: int, user_id: int) -> List[InvestmentHoldingDB]:
-    account = db.query(AccountDB).filter(AccountDB.id == account_id, AccountDB.user_id == user_id).first()
+    account = db.query(AccountDB).filter(AccountDB.db_id == account_id, AccountDB.user_id == user_id).first()
     if not account:
         raise NotFoundError(f"Account with id {account_id} not found.")
     return db.query(InvestmentHoldingDB).options(
@@ -59,7 +59,7 @@ def read_db_investment_holding_by_uuid(db: Session, holding_uuid: 'UUID', user_i
     return db.query(InvestmentHoldingDB).join(AccountDB).options(
         joinedload(InvestmentHoldingDB.account),
     ).filter(
-        InvestmentHoldingDB.id == holding_uuid,
+        InvestmentHoldingDB.uuid == holding_uuid,
         AccountDB.user_id == user_id
     ).first()
 
@@ -92,7 +92,7 @@ def _holding_key(txn) -> Optional[str]:
         return txn.api_symbol
     if not txn.api_symbol and txn.security_type == "OPTION":
         logger.warning(
-            f"Option transaction {txn.id} has no OCC api_symbol, "
+            f"Option transaction {txn.uuid} has no OCC api_symbol, "
             f"will merge with stock holding for {txn.symbol}"
         )
     return txn.symbol
@@ -146,7 +146,7 @@ def rebuild_holdings_from_transactions(db: Session, account_id: int) -> List[Inv
     ).order_by(
         InvestmentTransactionDB.transaction_date.asc(),
         type_priority,
-        InvestmentTransactionDB.investment_transaction_id.asc()
+        InvestmentTransactionDB.db_id.asc()
     ).all()
 
     # holding_key -> InvestmentHoldingDB
@@ -162,7 +162,7 @@ def rebuild_holdings_from_transactions(db: Session, account_id: int) -> List[Inv
                 continue
             if key not in holdings_map:
                 holding = InvestmentHoldingDB(
-                    id=uuid4(),
+                    uuid=uuid4(),
                     account_id=account_id,
                     symbol=key,
                     quantity=Decimal('0'),
@@ -181,7 +181,7 @@ def rebuild_holdings_from_transactions(db: Session, account_id: int) -> List[Inv
                 new_total_cost = qty * pps
                 holding.average_cost_basis = (old_total_cost + new_total_cost) / new_quantity
             holding.quantity = new_quantity
-            txn.holding_id = holding.holding_id
+            txn.holding_id = holding.db_id
 
         elif txn_type == InvestmentTransactionType.SELL:
             if not key or key not in holdings_map:
@@ -190,7 +190,7 @@ def rebuild_holdings_from_transactions(db: Session, account_id: int) -> List[Inv
             qty = txn.quantity or Decimal('0')
             txn.cost_basis_at_sale = holding.average_cost_basis
             holding.quantity -= qty
-            txn.holding_id = holding.holding_id
+            txn.holding_id = holding.db_id
 
         elif txn_type == InvestmentTransactionType.EXPIRATION:
             if not key or key not in holdings_map:
@@ -198,7 +198,7 @@ def rebuild_holdings_from_transactions(db: Session, account_id: int) -> List[Inv
             holding = holdings_map[key]
             txn.cost_basis_at_sale = holding.average_cost_basis
             holding.quantity = Decimal('0')
-            txn.holding_id = holding.holding_id
+            txn.holding_id = holding.db_id
 
         elif txn_type == InvestmentTransactionType.SPLIT:
             if not key or key not in holdings_map:
@@ -209,12 +209,12 @@ def rebuild_holdings_from_transactions(db: Session, account_id: int) -> List[Inv
                 holding.quantity = holding.quantity * ratio
                 if holding.average_cost_basis and holding.average_cost_basis > 0:
                     holding.average_cost_basis = holding.average_cost_basis / ratio
-            txn.holding_id = holding.holding_id
+            txn.holding_id = holding.db_id
 
         else:
             # DIVIDEND, INTEREST, FEE, TRANSFER — link to holding if key matches
             if key and key in holdings_map:
-                txn.holding_id = holdings_map[key].holding_id
+                txn.holding_id = holdings_map[key].db_id
 
     # 5. Derive option fields and security_type
     for key, holding in holdings_map.items():
@@ -251,7 +251,7 @@ def rebuild_holdings_from_transactions(db: Session, account_id: int) -> List[Inv
         holding = holdings_map.pop(sym)
         # Null out holding_id on transactions that reference this holding
         for txn in transactions:
-            if txn.holding_id == holding.holding_id:
+            if txn.holding_id == holding.db_id:
                 txn.holding_id = None
         db.delete(holding)
 
@@ -269,7 +269,7 @@ def _create_investment_transaction_no_rebuild(db: Session, user_id: int, transac
     """Create an investment transaction without triggering a holdings rebuild.
     Used internally by both single-create and bulk-create paths."""
     account = db.query(AccountDB).filter(
-        AccountDB.id == account_id,
+        AccountDB.db_id == account_id,
         AccountDB.user_id == user_id
     ).first()
     if not account:
@@ -289,7 +289,7 @@ def _create_investment_transaction_no_rebuild(db: Session, user_id: int, transac
     transaction_hash = hashlib.sha256(hash_string.encode()).hexdigest()
 
     db_transaction = InvestmentTransactionDB(
-        id=uuid4(),
+        uuid=uuid4(),
         user_id=user_id,
         account_id=account_id,
         transaction_type=InvestmentTransactionType(transaction_data.transaction_type.value),
@@ -318,7 +318,7 @@ def _update_investment_account_balance(db: Session, account_id: int) -> None:
     initial_cash_balance must be set correctly on the account (via account creation or update).
     """
     from src.services.account_snapshot import get_account_state_on_date
-    account = db.query(AccountDB).filter(AccountDB.id == account_id).first()
+    account = db.query(AccountDB).filter(AccountDB.db_id == account_id).first()
     if account and account.account_type == AccountType.INVESTMENT:
         holdings_value = calculate_account_total_value(db, account_id)
         state = get_account_state_on_date(db, account_id, date.today())
@@ -483,7 +483,7 @@ def bulk_create_investment_transactions_from_parsed_data(
     """
     account = None
     if account_id:
-        account = db.query(AccountDB).filter(AccountDB.id == account_id, AccountDB.user_id == user_id).first()
+        account = db.query(AccountDB).filter(AccountDB.db_id == account_id, AccountDB.user_id == user_id).first()
         if not account:
             raise NotFoundError(f"Account with id {account_id} not found for this user.")
 
@@ -501,7 +501,7 @@ def bulk_create_investment_transactions_from_parsed_data(
 
     for t_data in transactions:
         # Generate transaction hash for deduplication
-        transaction_hash = generate_investment_transaction_hash(t_data, user_id, account.id if account else 0, make_unique=account is None)
+        transaction_hash = generate_investment_transaction_hash(t_data, user_id, account.db_id if account else 0, make_unique=account is None)
 
         # Check if transaction hash existed in database BEFORE this upload
         existing_transaction = existing_hashes_dict.get(transaction_hash)
@@ -546,7 +546,7 @@ def bulk_create_investment_transactions_from_parsed_data(
             t_data_api_symbol = t_data.api_symbol
 
         db_transaction = InvestmentTransactionDB(
-            id=uuid4(),  # Generate UUID for new transaction
+            uuid=uuid4(),  # Generate UUID for new transaction
             user_id=user_id,
             account_id=account_id,
             holding_id=None,
@@ -602,8 +602,8 @@ def bulk_create_investment_transactions_from_parsed_data(
                 ).first()
 
                 if existing_job:
-                    logger.info(f"Backfill job {existing_job.id} already running for account {account_id}")
-                    return created_transactions, skipped_duplicates, existing_job.id
+                    logger.info(f"Backfill job {existing_job.db_id} already running for account {account_id}")
+                    return created_transactions, skipped_duplicates, existing_job.db_id
 
                 # Limit backfill to last 10 years
                 max_backfill_date = date.today() - timedelta(days=365 * 10)
@@ -623,16 +623,16 @@ def bulk_create_investment_transactions_from_parsed_data(
                 db.commit()
                 db.refresh(job)
 
-                backfill_job_id = job.id
+                backfill_job_id = job.db_id
 
-                logger.info(f"Created backfill job {job.id} for account {account_id} ({earliest_date} to {date.today()})")
+                logger.info(f"Created backfill job {job.db_id} for account {account_id} ({earliest_date} to {date.today()})")
 
                 # Submit job to runner (async)
                 try:
                     job_runner = get_job_runner()
-                    job_runner.submit_job(job.id, account_id, earliest_date, date.today())
+                    job_runner.submit_job(job.db_id, account_id, earliest_date, date.today())
                 except Exception as e:
-                    logger.error(f"Failed to submit backfill job {job.id}: {str(e)}")
+                    logger.error(f"Failed to submit backfill job {job.db_id}: {str(e)}")
                     # Don't fail the transaction upload if job submission fails
                     # Job will remain in PENDING status and can be retried
 
@@ -660,7 +660,7 @@ def bulk_create_investment_transactions(db: Session, user_id: int, bulk_data: In
             ).first()
             if not account:
                 raise NotFoundError(f"Account not found for UUID {transaction_data.account_uuid}")
-            account_id_map[acct_uuid_str] = account.id
+            account_id_map[acct_uuid_str] = account.db_id
         acct_id = account_id_map[acct_uuid_str]
         db_txn = _create_investment_transaction_no_rebuild(db, user_id, transaction_data, account_id=acct_id)
         db_transactions.append(db_txn)
@@ -683,7 +683,7 @@ def bulk_create_investment_transactions(db: Session, user_id: int, bulk_data: In
 
 def read_db_investment_transaction(db: Session, transaction_id: int, user_id: int) -> Optional[InvestmentTransactionDB]:
     return db.query(InvestmentTransactionDB).join(AccountDB).filter(
-        InvestmentTransactionDB.investment_transaction_id == transaction_id,
+        InvestmentTransactionDB.db_id == transaction_id,
         AccountDB.user_id == user_id
     ).first()
 
@@ -760,7 +760,7 @@ def read_db_investment_transaction_by_uuid(db: Session, transaction_uuid: 'UUID'
         joinedload(InvestmentTransactionDB.account),
         joinedload(InvestmentTransactionDB.holding),
     ).filter(
-        InvestmentTransactionDB.id == transaction_uuid,
+        InvestmentTransactionDB.uuid == transaction_uuid,
         InvestmentTransactionDB.user_id == user_id
     ).first()
 
@@ -769,13 +769,13 @@ def update_db_investment_transaction_by_uuid(db: Session, transaction_uuid: 'UUI
     db_transaction = read_db_investment_transaction_by_uuid(db, transaction_uuid, user_id)
     if not db_transaction:
         raise NotFoundError(f"Investment transaction not found.")
-    return update_db_investment_transaction(db, db_transaction.investment_transaction_id, user_id, transaction_updates)
+    return update_db_investment_transaction(db, db_transaction.db_id, user_id, transaction_updates)
 
 def delete_db_investment_transaction_by_uuid(db: Session, transaction_uuid: 'UUID', user_id: int) -> bool:
     db_transaction = read_db_investment_transaction_by_uuid(db, transaction_uuid, user_id)
     if not db_transaction:
         raise NotFoundError(f"Investment transaction not found.")
-    return delete_db_investment_transaction(db, db_transaction.investment_transaction_id, user_id)
+    return delete_db_investment_transaction(db, db_transaction.db_id, user_id)
 
 
 # ===== UTILITY FUNCTIONS =====

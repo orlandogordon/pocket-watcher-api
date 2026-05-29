@@ -38,7 +38,7 @@ def create_template(db: Session, user_id: int, data: TemplateCreate,
         raise ValueError(f"Template with name '{data.template_name}' already exists")
 
     template = BudgetTemplateDB(
-        id=uuid4(),
+        uuid=uuid4(),
         user_id=user_id,
         template_name=data.template_name.strip(),
         is_default=data.is_default,
@@ -69,7 +69,7 @@ def create_template(db: Session, user_id: int, data: TemplateCreate,
 def read_template(db: Session, template_uuid: UUID, user_id: int) -> Optional[BudgetTemplateDB]:
     return (
         db.query(BudgetTemplateDB)
-        .filter(BudgetTemplateDB.id == template_uuid, BudgetTemplateDB.user_id == user_id)
+        .filter(BudgetTemplateDB.uuid == template_uuid, BudgetTemplateDB.user_id == user_id)
         .options(
             joinedload(BudgetTemplateDB.categories).joinedload(BudgetTemplateCategoryDB.category),
             joinedload(BudgetTemplateDB.categories).joinedload(BudgetTemplateCategoryDB.subcategory),
@@ -95,7 +95,7 @@ def read_templates(db: Session, user_id: int, skip: int = 0, limit: int = 100) -
 def update_template(db: Session, template_uuid: UUID, user_id: int,
                      updates: TemplateUpdate) -> BudgetTemplateDB:
     template = db.query(BudgetTemplateDB).filter(
-        BudgetTemplateDB.id == template_uuid, BudgetTemplateDB.user_id == user_id
+        BudgetTemplateDB.uuid == template_uuid, BudgetTemplateDB.user_id == user_id
     ).first()
     if not template:
         raise NotFoundError("Template not found")
@@ -106,13 +106,13 @@ def update_template(db: Session, template_uuid: UUID, user_id: int,
         existing = db.query(BudgetTemplateDB).filter(
             BudgetTemplateDB.user_id == user_id,
             BudgetTemplateDB.template_name.ilike(update_data['template_name'].strip()),
-            BudgetTemplateDB.template_id != template.template_id,
+            BudgetTemplateDB.db_id != template.db_id,
         ).first()
         if existing:
             raise ValueError(f"Template with name '{update_data['template_name']}' already exists")
 
     if update_data.get('is_default'):
-        _clear_default_template(db, user_id, exclude_id=template.template_id)
+        _clear_default_template(db, user_id, exclude_id=template.db_id)
 
     for field, value in update_data.items():
         setattr(template, field, value)
@@ -129,14 +129,14 @@ def update_template(db: Session, template_uuid: UUID, user_id: int,
 
 def delete_template(db: Session, template_uuid: UUID, user_id: int) -> bool:
     template = db.query(BudgetTemplateDB).filter(
-        BudgetTemplateDB.id == template_uuid, BudgetTemplateDB.user_id == user_id
+        BudgetTemplateDB.uuid == template_uuid, BudgetTemplateDB.user_id == user_id
     ).first()
     if not template:
         raise NotFoundError("Template not found")
 
     # Unassign from any months using this template
     db.query(BudgetMonthDB).filter(
-        BudgetMonthDB.template_id == template.template_id
+        BudgetMonthDB.template_id == template.db_id
     ).update({BudgetMonthDB.template_id: None})
 
     db.delete(template)  # cascade deletes categories
@@ -151,7 +151,7 @@ def add_template_category(db: Session, template_uuid: UUID, user_id: int,
                            *, category_id: int,
                            subcategory_id: Optional[int] = None) -> BudgetTemplateCategoryDB:
     template = db.query(BudgetTemplateDB).filter(
-        BudgetTemplateDB.id == template_uuid, BudgetTemplateDB.user_id == user_id
+        BudgetTemplateDB.uuid == template_uuid, BudgetTemplateDB.user_id == user_id
     ).first()
     if not template:
         raise NotFoundError("Template not found")
@@ -162,7 +162,7 @@ def add_template_category(db: Session, template_uuid: UUID, user_id: int,
 
     # Check for duplicate
     existing = db.query(BudgetTemplateCategoryDB).filter(
-        BudgetTemplateCategoryDB.template_id == template.template_id,
+        BudgetTemplateCategoryDB.template_id == template.db_id,
         BudgetTemplateCategoryDB.category_id == category_id,
         BudgetTemplateCategoryDB.subcategory_id == subcategory_id,
     ).first()
@@ -171,11 +171,11 @@ def add_template_category(db: Session, template_uuid: UUID, user_id: int,
 
     # Envelope validation: subcategory allocations must not exceed parent
     if subcategory_id:
-        _validate_envelope(db, template.template_id, category_id, data.allocated_amount)
+        _validate_envelope(db, template.db_id, category_id, data.allocated_amount)
 
     alloc = BudgetTemplateCategoryDB(
-        id=uuid4(),
-        template_id=template.template_id,
+        uuid=uuid4(),
+        template_id=template.db_id,
         category_id=category_id,
         subcategory_id=subcategory_id,
         allocated_amount=data.allocated_amount,
@@ -197,7 +197,7 @@ def update_template_category(db: Session, allocation_uuid: UUID, user_id: int,
     alloc = (
         db.query(BudgetTemplateCategoryDB)
         .join(BudgetTemplateDB)
-        .filter(BudgetTemplateCategoryDB.id == allocation_uuid, BudgetTemplateDB.user_id == user_id)
+        .filter(BudgetTemplateCategoryDB.uuid == allocation_uuid, BudgetTemplateDB.user_id == user_id)
         .first()
     )
     if not alloc:
@@ -206,7 +206,7 @@ def update_template_category(db: Session, allocation_uuid: UUID, user_id: int,
     # Envelope validation
     if alloc.subcategory_id:
         _validate_envelope(db, alloc.template_id, alloc.category_id,
-                          updates.allocated_amount, exclude_allocation_id=alloc.allocation_id)
+                          updates.allocated_amount, exclude_allocation_id=alloc.db_id)
     else:
         # Updating a parent allocation — ensure it's still >= sum of subcategory allocations
         sub_sum = _subcategory_sum(db, alloc.template_id, alloc.category_id)
@@ -231,7 +231,7 @@ def delete_template_category(db: Session, allocation_uuid: UUID, user_id: int) -
     alloc = (
         db.query(BudgetTemplateCategoryDB)
         .join(BudgetTemplateDB)
-        .filter(BudgetTemplateCategoryDB.id == allocation_uuid, BudgetTemplateDB.user_id == user_id)
+        .filter(BudgetTemplateCategoryDB.uuid == allocation_uuid, BudgetTemplateDB.user_id == user_id)
         .first()
     )
     if not alloc:
@@ -273,9 +273,9 @@ def get_or_create_budget_month(db: Session, user_id: int, year: int, month: int)
     ).first()
 
     budget_month = BudgetMonthDB(
-        id=uuid4(),
+        uuid=uuid4(),
         user_id=user_id,
-        template_id=default_template.template_id if default_template else None,
+        template_id=default_template.db_id if default_template else None,
         year=year,
         month=month,
         created_at=datetime.utcnow(),
@@ -490,7 +490,7 @@ def get_budget_month_with_spending(db: Session, user_id: int, year: int, month: 
     if budget_month.template_id:
         template = (
             db.query(BudgetTemplateDB)
-            .filter(BudgetTemplateDB.template_id == budget_month.template_id)
+            .filter(BudgetTemplateDB.db_id == budget_month.template_id)
             .options(
                 joinedload(BudgetTemplateDB.categories).joinedload(BudgetTemplateCategoryDB.category),
                 joinedload(BudgetTemplateDB.categories).joinedload(BudgetTemplateCategoryDB.subcategory),
@@ -519,7 +519,7 @@ def get_budget_month_with_spending(db: Session, user_id: int, year: int, month: 
                 total_spent += spent
 
     return {
-        "id": budget_month.id,
+        "id": budget_month.uuid,
         "year": budget_month.year,
         "month": budget_month.month,
         "template": template,
@@ -656,13 +656,13 @@ def _clear_default_template(db: Session, user_id: int, exclude_id: Optional[int]
         BudgetTemplateDB.is_default == True,
     )
     if exclude_id:
-        query = query.filter(BudgetTemplateDB.template_id != exclude_id)
+        query = query.filter(BudgetTemplateDB.db_id != exclude_id)
     query.update({BudgetTemplateDB.is_default: False})
 
 
 def _validate_subcategory(db: Session, parent_category_id: int, subcategory_id: int):
     """Validate that a subcategory belongs to the given parent category."""
-    sub = db.query(CategoryDB).filter(CategoryDB.id == subcategory_id).first()
+    sub = db.query(CategoryDB).filter(CategoryDB.db_id == subcategory_id).first()
     if not sub:
         raise NotFoundError("Subcategory not found")
     if sub.parent_category_id != parent_category_id:
@@ -678,7 +678,7 @@ def _subcategory_sum(db: Session, template_id: int, category_id: int,
         BudgetTemplateCategoryDB.subcategory_id.isnot(None),
     )
     if exclude_allocation_id:
-        query = query.filter(BudgetTemplateCategoryDB.allocation_id != exclude_allocation_id)
+        query = query.filter(BudgetTemplateCategoryDB.db_id != exclude_allocation_id)
     return sum(a.allocated_amount for a in query.all())
 
 
@@ -719,8 +719,8 @@ def _add_template_categories(db: Session, template: BudgetTemplateDB,
             _validate_subcategory(db, cat_id, sub_id)
 
         alloc = BudgetTemplateCategoryDB(
-            id=uuid4(),
-            template_id=template.template_id,
+            uuid=uuid4(),
+            template_id=template.db_id,
             category_id=cat_id,
             subcategory_id=sub_id,
             allocated_amount=cat_data.allocated_amount,
@@ -730,7 +730,7 @@ def _add_template_categories(db: Session, template: BudgetTemplateDB,
 
     # Validate envelopes after all categories are added
     db.flush()
-    _validate_envelopes_bulk(db, template.template_id)
+    _validate_envelopes_bulk(db, template.db_id)
 
 
 def _validate_envelopes_bulk(db: Session, template_id: int):

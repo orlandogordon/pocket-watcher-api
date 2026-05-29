@@ -48,7 +48,7 @@ class TestUploadDedupRoundtrip(unittest.TestCase):
         self.Session = sessionmaker(bind=self.engine)
         self.session = self.Session()
 
-        self.user = UserDB(id=uuid4(), email="t@x.com", username="t", password_hash="x")
+        self.user = UserDB(uuid=uuid4(), email="t@x.com", username="t", password_hash="x")
         self.session.add(self.user)
         self.session.flush()
 
@@ -72,16 +72,16 @@ class TestUploadDedupRoundtrip(unittest.TestCase):
         txn_type_value = TransactionType[parsed.transaction_type.upper()].value
         txn_hash = generate_transaction_hash(
             user_id=self.user.db_id,
-            account_id=self.account.id,
+            account_id=self.account.db_id,
             transaction_date=parsed.transaction_date,
             transaction_type_value=txn_type_value,
             amount=parsed.amount,
             description=parsed.description,
         )
         t = TransactionDB(
-            id=uuid4(),
+            uuid=uuid4(),
             user_id=self.user.db_id,
-            account_id=self.account.id,
+            account_id=self.account.db_id,
             transaction_hash=txn_hash,
             source_type=SourceType.PDF,
             transaction_date=parsed.transaction_date,
@@ -103,7 +103,7 @@ class TestUploadDedupRoundtrip(unittest.TestCase):
         self.session.commit()
 
         rejected, ready = analyze_regular_transactions(
-            parsed, self.user.db_id, self.account.id, self.session,
+            parsed, self.user.db_id, self.account.db_id, self.session,
         )
 
         self.assertEqual(len(rejected), 3, "every parsed row should be rejected as a DB duplicate")
@@ -129,7 +129,7 @@ class TestUploadDedupRoundtrip(unittest.TestCase):
         self.session.commit()
 
         rejected, ready = analyze_regular_transactions(
-            parsed, self.user.db_id, other.id, self.session,
+            parsed, self.user.db_id, other.db_id, self.session,
         )
         self.assertEqual(len(rejected), 0)
         self.assertEqual(len(ready), 1)

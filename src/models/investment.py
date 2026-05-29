@@ -55,7 +55,7 @@ class InvestmentHoldingUpdate(BaseModel):
     expiration_date: Optional[date] = None
 
 class InvestmentHoldingResponse(InvestmentHoldingBase):
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     account_uuid: UUID
     current_price: Optional[Decimal]
     last_price_update: Optional[datetime]
@@ -118,7 +118,7 @@ class InvestmentTransactionUpdate(BaseModel):
 
 
 class InvestmentTransactionResponse(InvestmentTransactionBase):
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     account_uuid: UUID
     holding_uuid: Optional[UUID] = None
     cost_basis_at_sale: Optional[Decimal] = None
@@ -135,5 +135,5 @@ class InvestmentTransactionResponse(InvestmentTransactionBase):
             if hasattr(data, 'account') and data.account:
                 data.__dict__['account_uuid'] = data.account.uuid
             if hasattr(data, 'holding') and data.holding:
-                data.__dict__['holding_uuid'] = data.holding.id
+                data.__dict__['holding_uuid'] = data.holding.uuid
         return data

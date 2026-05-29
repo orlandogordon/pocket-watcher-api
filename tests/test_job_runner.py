@@ -32,7 +32,7 @@ def job_env(monkeypatch):
     user = make_user(s)
     account = make_account(s, user)
     s.commit()
-    uid, aid = user.db_id, account.id
+    uid, aid = user.db_id, account.db_id
     s.close()
     monkeypatch.setattr(jr, "SessionLocal", Session)
     yield Session, uid, aid
@@ -46,7 +46,7 @@ def _seed_job(Session, uid, aid, status="PENDING"):
     )
     s.add(job)
     s.commit()
-    job_id = job.id
+    job_id = job.db_id
     s.close()
     return job_id
 
@@ -54,7 +54,7 @@ def _seed_job(Session, uid, aid, status="PENDING"):
 def _get_job(Session, job_id):
     s = Session()
     try:
-        return s.query(SnapshotBackfillJobDB).filter(SnapshotBackfillJobDB.id == job_id).first()
+        return s.query(SnapshotBackfillJobDB).filter(SnapshotBackfillJobDB.db_id == job_id).first()
     finally:
         s.close()
 

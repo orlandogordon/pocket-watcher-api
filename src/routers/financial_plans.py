@@ -79,10 +79,10 @@ def create_financial_plan_month(plan_uuid: str, month_data: financial_plan_model
         cat = crud_category.read_db_category_by_uuid(db, expense.category_uuid)
         if not cat:
             raise HTTPException(status_code=404, detail=f"Category not found: {expense.category_uuid}")
-        resolved_category_ids[str(expense.category_uuid)] = cat.id
+        resolved_category_ids[str(expense.category_uuid)] = cat.db_id
 
     try:
-        return crud_financial_plan.create_financial_plan_month(db=db, plan_id=db_plan.plan_id, month_data=month_data, resolved_category_ids=resolved_category_ids)
+        return crud_financial_plan.create_financial_plan_month(db=db, plan_id=db_plan.db_id, month_data=month_data, resolved_category_ids=resolved_category_ids)
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="A month entry for this year/month already exists in the plan")
@@ -109,7 +109,7 @@ def bulk_create_financial_plan_months(
     resolved_category_ids: dict[str, int] = {}
     if unique_cat_uuids:
         cats = crud_category.read_db_categories_by_uuids(db, list(unique_cat_uuids))
-        resolved_category_ids = {str(c.uuid): c.id for c in cats}
+        resolved_category_ids = {str(c.uuid): c.db_id for c in cats}
         missing = unique_cat_uuids - {UUID(k) for k in resolved_category_ids}
         if missing:
             raise HTTPException(status_code=404, detail=f"Categories not found: {', '.join(str(u) for u in missing)}")
@@ -117,7 +117,7 @@ def bulk_create_financial_plan_months(
     try:
         return crud_financial_plan.bulk_create_financial_plan_months(
             db=db,
-            plan_id=db_plan.plan_id,
+            plan_id=db_plan.db_id,
             months=bulk_data.months,
             resolved_category_ids=resolved_category_ids,
         )
@@ -133,7 +133,7 @@ def get_financial_plan_months(plan_uuid: str, db: Session = Depends(get_db), use
     db_plan = crud_financial_plan.get_financial_plan_by_uuid(db, user_id=user_id, plan_uuid=parsed_uuid)
     if db_plan is None:
         raise HTTPException(status_code=404, detail="Financial plan not found")
-    return crud_financial_plan.get_financial_plan_months(db=db, plan_id=db_plan.plan_id)
+    return crud_financial_plan.get_financial_plan_months(db=db, plan_id=db_plan.db_id)
 
 @router.put("/months/{month_uuid}", response_model=financial_plan_models.FinancialPlanMonth)
 def update_financial_plan_month(month_uuid: str, month_data: financial_plan_models.FinancialPlanMonthUpdate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
@@ -164,7 +164,7 @@ def create_financial_plan_expense(month_uuid: str, expense: financial_plan_model
     if not cat:
         raise HTTPException(status_code=404, detail="Category not found")
 
-    return crud_financial_plan.create_financial_plan_expense(db=db, month_id=db_month.month_id, expense=expense, category_id=cat.id)
+    return crud_financial_plan.create_financial_plan_expense(db=db, month_id=db_month.db_id, expense=expense, category_id=cat.db_id)
 
 @router.post("/months/{month_uuid}/expenses/bulk", response_model=List[financial_plan_models.FinancialPlanExpense], status_code=201)
 def bulk_create_financial_plan_expenses(month_uuid: str, bulk_data: financial_plan_models.FinancialPlanExpenseBulkCreate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
@@ -183,11 +183,11 @@ def bulk_create_financial_plan_expenses(month_uuid: str, bulk_data: financial_pl
         cat = crud_category.read_db_category_by_uuid(db, expense.category_uuid)
         if not cat:
             raise HTTPException(status_code=404, detail=f"Category not found: {expense.category_uuid}")
-        category_ids.append(cat.id)
+        category_ids.append(cat.db_id)
 
     try:
         created_expenses = crud_financial_plan.bulk_create_financial_plan_expenses(
-            db=db, month_id=db_month.month_id, expenses=bulk_data.expenses, category_ids=category_ids
+            db=db, month_id=db_month.db_id, expenses=bulk_data.expenses, category_ids=category_ids
         )
         return created_expenses
     except ValueError as e:
@@ -199,7 +199,7 @@ def get_financial_plan_expenses(month_uuid: str, db: Session = Depends(get_db), 
     db_month = crud_financial_plan.get_financial_plan_month_by_uuid(db, month_uuid=parsed_uuid, user_id=user_id)
     if db_month is None:
         raise HTTPException(status_code=404, detail="Financial plan month not found")
-    return crud_financial_plan.get_financial_plan_expenses(db=db, month_id=db_month.month_id)
+    return crud_financial_plan.get_financial_plan_expenses(db=db, month_id=db_month.db_id)
 
 @router.put("/expenses/{expense_uuid}", response_model=financial_plan_models.FinancialPlanExpense)
 def update_financial_plan_expense(expense_uuid: str, expense: financial_plan_models.FinancialPlanExpenseUpdate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
@@ -215,7 +215,7 @@ def update_financial_plan_expense(expense_uuid: str, expense: financial_plan_mod
         cat = crud_category.read_db_category_by_uuid(db, expense.category_uuid)
         if not cat:
             raise HTTPException(status_code=404, detail="Category not found")
-        category_id = cat.id
+        category_id = cat.db_id
 
     return crud_financial_plan.update_financial_plan_expense(db=db, db_expense=db_expense, expense_in=expense, category_id=category_id)
 

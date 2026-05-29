@@ -44,7 +44,7 @@ def _parsed(txn_type="BUY", symbol="AAPL", qty="10", price="150", total="-1500",
 
 
 def test_empty_returns_empty(db, user, account):
-    assert analyze_investment_transactions([], user.db_id, account.id, db) == ([], [])
+    assert analyze_investment_transactions([], user.db_id, account.db_id, db) == ([], [])
 
 
 def test_none_account_raises(db, user):
@@ -53,7 +53,7 @@ def test_none_account_raises(db, user):
 
 
 def test_unique_goes_to_ready(db, user, account):
-    rejected, ready = analyze_investment_transactions([_parsed()], user.db_id, account.id, db)
+    rejected, ready = analyze_investment_transactions([_parsed()], user.db_id, account.db_id, db)
     assert rejected == []
     assert len(ready) == 1
     assert ready[0]["is_duplicate"] is False
@@ -62,7 +62,7 @@ def test_unique_goes_to_ready(db, user, account):
 
 def test_unmapped_type_is_rejected(db, user, account):
     rejected, ready = analyze_investment_transactions(
-        [_parsed(txn_type="MYSTERY")], user.db_id, account.id, db
+        [_parsed(txn_type="MYSTERY")], user.db_id, account.db_id, db
     )
     assert ready == []
     assert len(rejected) == 1
@@ -72,7 +72,7 @@ def test_unmapped_type_is_rejected(db, user, account):
 
 def test_db_duplicate_is_rejected(db, user, account):
     parsed = _parsed()
-    existing_hash = generate_investment_transaction_hash(parsed, user.db_id, account.id)
+    existing_hash = generate_investment_transaction_hash(parsed, user.db_id, account.db_id)
     make_investment_txn(
         db, user, account,
         transaction_hash=existing_hash,
@@ -81,7 +81,7 @@ def test_db_duplicate_is_rejected(db, user, account):
         total_amount=Decimal("-1500"), transaction_date=date(2026, 1, 1),
     )
 
-    rejected, ready = analyze_investment_transactions([parsed], user.db_id, account.id, db)
+    rejected, ready = analyze_investment_transactions([parsed], user.db_id, account.db_id, db)
     assert ready == []
     assert len(rejected) == 1
     assert rejected[0]["is_duplicate"] is True
@@ -90,7 +90,7 @@ def test_db_duplicate_is_rejected(db, user, account):
 
 def test_within_statement_duplicate_flows_to_ready_flagged(db, user, account):
     parsed = _parsed()
-    rejected, ready = analyze_investment_transactions([parsed, parsed], user.db_id, account.id, db)
+    rejected, ready = analyze_investment_transactions([parsed, parsed], user.db_id, account.db_id, db)
     # Policy: only DB matches auto-reject; an in-statement repeat ships to
     # ready_to_import flagged so the user decides per-row.
     assert rejected == []
@@ -104,13 +104,13 @@ def test_different_account_same_data_not_flagged(db, user):
     a1 = make_account(db, user, account_name="Brokerage 1")
     a2 = make_account(db, user, account_name="Brokerage 2")
     parsed = _parsed()
-    existing_hash = generate_investment_transaction_hash(parsed, user.db_id, a1.id)
+    existing_hash = generate_investment_transaction_hash(parsed, user.db_id, a1.db_id)
     make_investment_txn(
         db, user, a1, transaction_hash=existing_hash,
         transaction_type=InvestmentTransactionType.BUY, total_amount=Decimal("-1500"),
         transaction_date=date(2026, 1, 1),
     )
     # Same parsed row analyzed against the OTHER account must not collide.
-    rejected, ready = analyze_investment_transactions([parsed], user.db_id, a2.id, db)
+    rejected, ready = analyze_investment_transactions([parsed], user.db_id, a2.db_id, db)
     assert rejected == []
     assert len(ready) == 1

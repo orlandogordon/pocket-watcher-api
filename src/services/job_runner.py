@@ -80,7 +80,7 @@ def run_backfill_worker(job_id: int, account_id: int, start_date: date, end_date
         try:
             # Update job status to IN_PROGRESS
             job = db.query(SnapshotBackfillJobDB).filter(
-                SnapshotBackfillJobDB.id == job_id
+                SnapshotBackfillJobDB.db_id == job_id
             ).first()
 
             if not job:
@@ -118,7 +118,7 @@ def run_backfill_worker(job_id: int, account_id: int, start_date: date, end_date
 
             try:
                 job = db.query(SnapshotBackfillJobDB).filter(
-                    SnapshotBackfillJobDB.id == job_id
+                    SnapshotBackfillJobDB.db_id == job_id
                 ).first()
 
                 if job:

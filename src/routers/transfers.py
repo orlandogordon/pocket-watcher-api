@@ -79,12 +79,12 @@ def _resolve_uuid(
     """Look up a UUID in both regular and investment transactions. Returns
     (regular, investment) where exactly one is non-None on success."""
     reg = db.query(TransactionDB).filter(
-        TransactionDB.id == txn_uuid, TransactionDB.user_id == user_id
+        TransactionDB.uuid == txn_uuid, TransactionDB.user_id == user_id
     ).first()
     if reg is not None:
         return reg, None
     inv = db.query(InvestmentTransactionDB).filter(
-        InvestmentTransactionDB.id == txn_uuid,
+        InvestmentTransactionDB.uuid == txn_uuid,
         InvestmentTransactionDB.user_id == user_id,
     ).first()
     return None, inv
@@ -112,17 +112,17 @@ def _serialize_side(
 def _uuid_for_side(db: Session, side: TxnSide) -> Optional[UUID]:
     if side.is_investment:
         row = db.query(InvestmentTransactionDB).filter(
-            InvestmentTransactionDB.investment_transaction_id == side.txn_id
+            InvestmentTransactionDB.db_id == side.txn_id
         ).first()
-        return row.id if row else None
+        return row.uuid if row else None
     row = db.query(TransactionDB).filter(TransactionDB.db_id == side.txn_id).first()
-    return row.id if row else None
+    return row.uuid if row else None
 
 
 def _type_value_for_side(db: Session, side: TxnSide) -> str:
     if side.is_investment:
         row = db.query(InvestmentTransactionDB).filter(
-            InvestmentTransactionDB.investment_transaction_id == side.txn_id
+            InvestmentTransactionDB.db_id == side.txn_id
         ).first()
         return row.transaction_type.value if row else ""
     row = db.query(TransactionDB).filter(TransactionDB.db_id == side.txn_id).first()
@@ -137,7 +137,7 @@ def get_suggestions(
     """List pending transfer-pair suggestions for the current user."""
     candidates = find_pair_suggestions(db, user_id)
     accounts_by_id = {
-        a.id: a for a in db.query(AccountDB).filter(AccountDB.user_id == user_id).all()
+        a.db_id: a for a in db.query(AccountDB).filter(AccountDB.user_id == user_id).all()
     }
     out: list[PairSuggestionResponse] = []
     for c in candidates:
@@ -170,7 +170,7 @@ def get_orphans(
     upload on the partner side."""
     orphans = find_orphans(db, user_id)
     accounts_by_id = {
-        a.id: a for a in db.query(AccountDB).filter(AccountDB.user_id == user_id).all()
+        a.db_id: a for a in db.query(AccountDB).filter(AccountDB.user_id == user_id).all()
     }
     out: list[TransferTxnRef] = []
     for s in orphans:
@@ -197,7 +197,7 @@ def _side_from_resolved(
     assert inv is not None
     return TxnSide(
         is_investment=True,
-        txn_id=inv.investment_transaction_id,
+        txn_id=inv.db_id,
         user_id=inv.user_id,
         account_id=inv.account_id,
         transaction_date=inv.transaction_date,
@@ -248,7 +248,7 @@ def confirm_suggestion(
     rel = create_offsets_relationship(db, from_side, to_side)
     db.commit()
     db.refresh(rel)
-    return {"relationship_id": str(rel.id)}
+    return {"relationship_id": str(rel.uuid)}
 
 
 @router.post("/suggestions/dismiss", status_code=201)
@@ -268,9 +268,9 @@ def dismiss_suggestion(
     dismissal = DismissedTransferPairDB(
         user_id=user_id,
         from_transaction_id=from_reg.db_id if from_reg else None,
-        from_investment_transaction_id=from_inv.investment_transaction_id if from_inv else None,
+        from_investment_transaction_id=from_inv.db_id if from_inv else None,
         to_transaction_id=to_reg.db_id if to_reg else None,
-        to_investment_transaction_id=to_inv.investment_transaction_id if to_inv else None,
+        to_investment_transaction_id=to_inv.db_id if to_inv else None,
         created_at=datetime.utcnow(),
     )
     db.add(dismissal)

@@ -187,7 +187,7 @@ def create_synthetic_expiration(
         return None
 
     txn = InvestmentTransactionDB(
-        id=uuid4(),
+        uuid=uuid4(),
         user_id=orphan.user_id,
         account_id=orphan.account_id,
         transaction_hash=txn_hash,

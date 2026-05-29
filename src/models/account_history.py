@@ -1,4 +1,4 @@
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, List
 from datetime import date, datetime
 from decimal import Decimal
@@ -101,7 +101,7 @@ class AccountValueHistoryResponse(BaseModel):
 
 class SnapshotBackfillJobResponse(BaseModel):
     """Response model for snapshot backfill jobs"""
-    id: int
+    id: int = Field(validation_alias="db_id")
     account_uuid: UUID
     start_date: date
     end_date: date

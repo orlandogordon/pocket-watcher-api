@@ -66,14 +66,14 @@ def count_attention_items(
             .join(TransactionDB, TransactionDB.db_id == TransactionTagDB.transaction_id)
             .filter(
                 TransactionDB.user_id == user_id,
-                TransactionTagDB.tag_id == tag.tag_id,
+                TransactionTagDB.tag_id == tag.db_id,
             )
             .count()
         )
 
     snapshot_review_count = (
         db.query(AccountValueHistoryDB)
-        .join(AccountDB, AccountDB.id == AccountValueHistoryDB.account_id)
+        .join(AccountDB, AccountDB.db_id == AccountValueHistoryDB.account_id)
         .filter(
             AccountDB.user_id == user_id,
             AccountValueHistoryDB.needs_review == True,

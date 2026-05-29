@@ -30,7 +30,7 @@ class TemplateCategoryUpdate(BaseModel):
 
 
 class TemplateCategoryResponse(BaseModel):
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     category: CategoryResponse
     subcategory: Optional[CategoryResponse] = None
     allocated_amount: Decimal
@@ -62,7 +62,7 @@ class TemplateUpdate(BaseModel):
 
 
 class TemplateResponse(BaseModel):
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     template_name: str
     is_default: bool
     created_at: datetime

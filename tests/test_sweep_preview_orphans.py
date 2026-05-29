@@ -27,7 +27,7 @@ def test_sweep_deletes_old_orphan_keeps_referenced_and_recent(db, test_user):
     store.save(b"ref", ref_key)
     _backdate(store, ref_key, 48)
     db.add(UploadJobDB(
-        uuid=uuid4(), user_id=test_user.db_id, account_id=acct.id,
+        uuid=uuid4(), user_id=test_user.db_id, account_id=acct.db_id,
         institution="amex", status="COMPLETED", storage_key=ref_key,
     ))
     db.commit()

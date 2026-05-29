@@ -109,7 +109,7 @@ def trigger_backfill_if_needed(
     from src.db.core import SnapshotBackfillJobDB
     from src.services.job_runner import get_job_runner
 
-    account = db.query(AccountDB).filter(AccountDB.id == account_id).first()
+    account = db.query(AccountDB).filter(AccountDB.db_id == account_id).first()
     if not account:
         return
 
@@ -146,8 +146,8 @@ def trigger_backfill_if_needed(
 
     try:
         runner = get_job_runner()
-        runner.submit_job(job.id, account_id, earliest_date, today)
-        logger.info(f"Submitted backfill job {job.id} for account {account_id}")
+        runner.submit_job(job.db_id, account_id, earliest_date, today)
+        logger.info(f"Submitted backfill job {job.db_id} for account {account_id}")
     except Exception as e:
         logger.error(f"Failed to submit backfill job: {e}")
 
@@ -230,7 +230,7 @@ def get_account_state_on_date(
         7. Return holdings snapshot and cash balance
     """
     # Get account to retrieve initial cash balance
-    account = db.query(AccountDB).filter(AccountDB.id == account_id).first()
+    account = db.query(AccountDB).filter(AccountDB.db_id == account_id).first()
     if not account:
         raise ValueError(f"Account {account_id} not found")
 
@@ -256,7 +256,7 @@ def get_account_state_on_date(
     ).order_by(
         InvestmentTransactionDB.transaction_date.asc(),
         type_priority,
-        InvestmentTransactionDB.investment_transaction_id.asc(),
+        InvestmentTransactionDB.db_id.asc(),
     ).all()
 
     # Initialize state
@@ -489,7 +489,7 @@ def get_non_investment_balance_on_date(
     """
     # Get all transactions after the target date, ordered newest first
     future_transactions = db.query(TransactionDB).filter(
-        TransactionDB.account_id == account.id,
+        TransactionDB.account_id == account.db_id,
         TransactionDB.transaction_date > target_date
     ).order_by(TransactionDB.transaction_date.desc()).all()
 
@@ -521,7 +521,7 @@ def recalculate_non_investment_snapshots(
     3. Create/update snapshot with snapshot_source="BACKFILL"
     4. Flag needs_review=True for dates before earliest transaction (uncertain data)
     """
-    account = db.query(AccountDB).filter(AccountDB.id == account_id).first()
+    account = db.query(AccountDB).filter(AccountDB.db_id == account_id).first()
     if not account:
         raise ValueError(f"Account {account_id} not found")
 
@@ -637,7 +637,7 @@ def recalculate_account_snapshots(
         - Continues processing other dates even if one fails
     """
     # Verify account exists
-    account = db.query(AccountDB).filter(AccountDB.id == account_id).first()
+    account = db.query(AccountDB).filter(AccountDB.db_id == account_id).first()
     if not account:
         raise ValueError(f"Account {account_id} not found")
 
@@ -783,7 +783,7 @@ def calculate_investment_account_snapshot(
     Returns: balance, total_cost_basis, unrealized_gain_loss
     """
     holdings = db.query(InvestmentHoldingDB).filter(
-        InvestmentHoldingDB.account_id == account.id
+        InvestmentHoldingDB.account_id == account.db_id
     ).all()
 
     total_value = Decimal('0.00')
@@ -826,7 +826,7 @@ def calculate_loan_account_snapshot(
         func.sum(DebtPaymentDB.principal_amount).label('principal_ytd'),
         func.sum(DebtPaymentDB.interest_amount).label('interest_ytd')
     ).filter(
-        DebtPaymentDB.loan_account_id == account.id,
+        DebtPaymentDB.loan_account_id == account.db_id,
         DebtPaymentDB.payment_date >= year_start,
         DebtPaymentDB.payment_date <= snapshot_date
     ).first()
@@ -848,7 +848,7 @@ def create_account_snapshot(
     Create a daily snapshot of an account's value.
     Handles all account types: checking, savings, credit cards, loans, and investments.
     """
-    account = db.query(AccountDB).filter(AccountDB.id == account_id).first()
+    account = db.query(AccountDB).filter(AccountDB.db_id == account_id).first()
     if not account:
         raise ValueError(f"Account {account_id} not found")
 
@@ -920,7 +920,7 @@ def update_investment_prices(
         return {'updated': 0, 'failed': 0}
 
     # Get all holdings across all investment accounts
-    account_ids = [acc.id for acc in investment_accounts]
+    account_ids = [acc.db_id for acc in investment_accounts]
     holdings = db.query(InvestmentHoldingDB).filter(
         InvestmentHoldingDB.account_id.in_(account_ids)
     ).all()
@@ -957,7 +957,7 @@ def update_investment_prices(
     if updated > 0:
         from src.crud.crud_investment import _update_investment_account_balance
         for acc in investment_accounts:
-            _update_investment_account_balance(db, acc.id)
+            _update_investment_account_balance(db, acc.db_id)
         db.commit()
 
     logger.info(f"Updated {updated} holdings, {failed} failed")
@@ -992,13 +992,13 @@ def create_all_account_snapshots(
         try:
             snapshot = create_account_snapshot(
                 db=db,
-                account_id=account.id,
+                account_id=account.db_id,
                 snapshot_date=snapshot_date,
                 snapshot_source=snapshot_source
             )
             snapshots.append(snapshot)
         except Exception as e:
-            logger.error(f"Error creating snapshot for account {account.id}: {str(e)}", exc_info=True)
+            logger.error(f"Error creating snapshot for account {account.db_id}: {str(e)}", exc_info=True)
             # Continue with other accounts even if one fails
             continue
 
@@ -1064,10 +1064,10 @@ def get_net_worth_history(
     earliest_snapshot: Optional[date] = None
     for account in accounts:
         rows = db.query(AccountValueHistoryDB).filter(
-            AccountValueHistoryDB.account_id == account.id,
+            AccountValueHistoryDB.account_id == account.db_id,
             AccountValueHistoryDB.value_date <= end_date,
         ).order_by(AccountValueHistoryDB.value_date).all()
-        snapshots_by_account[account.id] = rows
+        snapshots_by_account[account.db_id] = rows
         if rows and (earliest_snapshot is None or rows[0].value_date < earliest_snapshot):
             earliest_snapshot = rows[0].value_date
 
@@ -1081,7 +1081,7 @@ def get_net_worth_history(
 
     # Per-account pointer into its snapshots list. Advance it forward as the
     # date cursor moves, so each step is O(1) amortized.
-    pointers: Dict[int, int] = {a.id: -1 for a in accounts}
+    pointers: Dict[int, int] = {a.db_id: -1 for a in accounts}
 
     output: List[Dict] = []
     cursor = start_date
@@ -1095,11 +1095,11 @@ def get_net_worth_history(
         oldest: Optional[date] = None
 
         for account in accounts:
-            rows = snapshots_by_account[account.id]
-            idx = pointers[account.id]
+            rows = snapshots_by_account[account.db_id]
+            idx = pointers[account.db_id]
             while idx + 1 < len(rows) and rows[idx + 1].value_date <= cursor:
                 idx += 1
-            pointers[account.id] = idx
+            pointers[account.db_id] = idx
 
             if idx < 0:
                 continue
@@ -1144,7 +1144,7 @@ def get_account_value_history(
     `value_date` is earlier than the point's date.
     """
     account = db.query(AccountDB).filter(
-        AccountDB.id == account_id,
+        AccountDB.db_id == account_id,
         AccountDB.user_id == user_id
     ).first()
 

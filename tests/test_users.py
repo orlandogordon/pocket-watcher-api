@@ -82,9 +82,9 @@ def test_read_unknown_user_as_admin_404(admin_client):
 
 
 def test_read_user_by_uuid_self(client, test_user):
-    resp = client.get(f"/users/uuid/{test_user.id}")
+    resp = client.get(f"/users/uuid/{test_user.uuid}")
     assert resp.status_code == 200
-    assert resp.json()["id"] == str(test_user.id)
+    assert resp.json()["id"] == str(test_user.uuid)
 
 
 def test_update_self_200(client, test_user):

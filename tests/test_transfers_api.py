@@ -62,8 +62,8 @@ def test_suggestions_lists_pair(client, db, test_user):
     assert resp.status_code == 200
     body = resp.json()
     assert len(body) == 1
-    assert body[0]["out_side"]["id"] == str(out.id)
-    assert body[0]["in_side"]["id"] == str(in_.id)
+    assert body[0]["out_side"]["id"] == str(out.uuid)
+    assert body[0]["in_side"]["id"] == str(in_.uuid)
 
 
 def test_suggestions_empty(client, db, test_user):
@@ -81,7 +81,7 @@ def test_confirm_creates_offsets(client, db, test_user):
     checking, amex = _accounts(db, test_user)
     out, in_ = _make_pair(db, test_user, checking, amex)
     resp = client.post("/transfers/suggestions/confirm",
-                       json={"from_transaction_uuid": str(out.id), "to_transaction_uuid": str(in_.id)})
+                       json={"from_transaction_uuid": str(out.uuid), "to_transaction_uuid": str(in_.uuid)})
     assert resp.status_code == 201
     assert "relationship_id" in resp.json()
     assert _offsets_count(db) == 1
@@ -99,7 +99,7 @@ def test_confirm_reclassify_updates_type_and_hash(client, db, test_user):
     old_hash = out.transaction_hash
 
     resp = client.post("/transfers/suggestions/confirm", json={
-        "from_transaction_uuid": str(out.id), "to_transaction_uuid": str(in_.id), "reclassify_from": True,
+        "from_transaction_uuid": str(out.uuid), "to_transaction_uuid": str(in_.uuid), "reclassify_from": True,
     })
     assert resp.status_code == 201
     db.refresh(out)
@@ -111,14 +111,14 @@ def test_confirm_unknown_uuid_404(client, db, test_user):
     checking, amex = _accounts(db, test_user)
     out, _ = _make_pair(db, test_user, checking, amex)
     resp = client.post("/transfers/suggestions/confirm",
-                       json={"from_transaction_uuid": str(out.id), "to_transaction_uuid": str(uuid4())})
+                       json={"from_transaction_uuid": str(out.uuid), "to_transaction_uuid": str(uuid4())})
     assert resp.status_code == 404
 
 
 def test_confirm_409_already_linked(client, db, test_user):
     checking, amex = _accounts(db, test_user)
     out, in_ = _make_pair(db, test_user, checking, amex)
-    body = {"from_transaction_uuid": str(out.id), "to_transaction_uuid": str(in_.id)}
+    body = {"from_transaction_uuid": str(out.uuid), "to_transaction_uuid": str(in_.uuid)}
     assert client.post("/transfers/suggestions/confirm", json=body).status_code == 201
     assert client.post("/transfers/suggestions/confirm", json=body).status_code == 409
 
@@ -133,14 +133,14 @@ def test_reclassify_strips_needs_review_tag(client, db, test_user):
     in_ = make_transaction(db, test_user, amex, amount=Decimal("100"),
                            transaction_type=TransactionType.TRANSFER_IN,
                            transaction_date=date(2026, 2, 4), description="AUTOPAY")
-    db.add(TransactionTagDB(transaction_id=out.db_id, tag_id=nr_tag.tag_id))
+    db.add(TransactionTagDB(transaction_id=out.db_id, tag_id=nr_tag.db_id))
     db.flush()
 
     client.post("/transfers/suggestions/confirm", json={
-        "from_transaction_uuid": str(out.id), "to_transaction_uuid": str(in_.id), "reclassify_from": True,
+        "from_transaction_uuid": str(out.uuid), "to_transaction_uuid": str(in_.uuid), "reclassify_from": True,
     })
     remaining = db.query(TransactionTagDB).filter(
-        TransactionTagDB.transaction_id == out.db_id, TransactionTagDB.tag_id == nr_tag.tag_id,
+        TransactionTagDB.transaction_id == out.db_id, TransactionTagDB.tag_id == nr_tag.db_id,
     ).count()
     assert remaining == 0
 
@@ -150,13 +150,13 @@ def test_confirm_without_reclassify_preserves_tag(client, db, test_user):
     nr_tag = get_system_tag(test_user.db_id, db, "Needs Review")
     checking, amex = _accounts(db, test_user)
     out, in_ = _make_pair(db, test_user, checking, amex)
-    db.add(TransactionTagDB(transaction_id=out.db_id, tag_id=nr_tag.tag_id))
+    db.add(TransactionTagDB(transaction_id=out.db_id, tag_id=nr_tag.db_id))
     db.flush()
 
     client.post("/transfers/suggestions/confirm",
-                json={"from_transaction_uuid": str(out.id), "to_transaction_uuid": str(in_.id)})
+                json={"from_transaction_uuid": str(out.uuid), "to_transaction_uuid": str(in_.uuid)})
     remaining = db.query(TransactionTagDB).filter(
-        TransactionTagDB.transaction_id == out.db_id, TransactionTagDB.tag_id == nr_tag.tag_id,
+        TransactionTagDB.transaction_id == out.db_id, TransactionTagDB.tag_id == nr_tag.db_id,
     ).count()
     assert remaining == 1
 
@@ -172,7 +172,7 @@ def test_investment_side_confirm_does_not_crash(client, db, test_user):
                                  transaction_type=InvestmentTransactionType.TRANSFER_IN,
                                  transaction_date=date(2026, 3, 9), description="MoneyLink deposit")
     resp = client.post("/transfers/suggestions/confirm",
-                       json={"from_transaction_uuid": str(out.id), "to_transaction_uuid": str(inv_in.id)})
+                       json={"from_transaction_uuid": str(out.uuid), "to_transaction_uuid": str(inv_in.uuid)})
     assert resp.status_code == 201
     assert "relationship_id" in resp.json()
 
@@ -183,7 +183,7 @@ def test_dismiss_persists_and_excludes(client, db, test_user):
     checking, amex = _accounts(db, test_user)
     out, in_ = _make_pair(db, test_user, checking, amex)
     resp = client.post("/transfers/suggestions/dismiss",
-                       json={"from_transaction_uuid": str(out.id), "to_transaction_uuid": str(in_.id)})
+                       json={"from_transaction_uuid": str(out.uuid), "to_transaction_uuid": str(in_.uuid)})
     assert resp.status_code == 201
     assert db.query(DismissedTransferPairDB).count() == 1
     assert client.get("/transfers/suggestions").json() == []
@@ -195,10 +195,10 @@ def test_dismissal_cascades_on_transaction_delete(client, db, test_user):
     checking, amex = _accounts(db, test_user)
     out, in_ = _make_pair(db, test_user, checking, amex)
     client.post("/transfers/suggestions/dismiss",
-                json={"from_transaction_uuid": str(out.id), "to_transaction_uuid": str(in_.id)})
+                json={"from_transaction_uuid": str(out.uuid), "to_transaction_uuid": str(in_.uuid)})
     assert db.query(DismissedTransferPairDB).count() == 1
 
-    assert client.delete(f"/transactions/{out.id}").status_code == 204
+    assert client.delete(f"/transactions/{out.uuid}").status_code == 204
     assert db.query(DismissedTransferPairDB).count() == 0
 
 
@@ -206,10 +206,10 @@ def test_offsets_cascades_on_transaction_delete(client, db, test_user):
     checking, amex = _accounts(db, test_user)
     out, in_ = _make_pair(db, test_user, checking, amex)
     client.post("/transfers/suggestions/confirm",
-                json={"from_transaction_uuid": str(out.id), "to_transaction_uuid": str(in_.id)})
+                json={"from_transaction_uuid": str(out.uuid), "to_transaction_uuid": str(in_.uuid)})
     assert _offsets_count(db) == 1
 
-    assert client.delete(f"/transactions/{out.id}").status_code == 204
+    assert client.delete(f"/transactions/{out.uuid}").status_code == 204
     assert _offsets_count(db) == 0
 
 
@@ -217,18 +217,18 @@ def test_dismiss_delete_reimport_resurfaces(client, db, test_user):
     checking, amex = _accounts(db, test_user)
     out, in_ = _make_pair(db, test_user, checking, amex)
     client.post("/transfers/suggestions/dismiss",
-                json={"from_transaction_uuid": str(out.id), "to_transaction_uuid": str(in_.id)})
+                json={"from_transaction_uuid": str(out.uuid), "to_transaction_uuid": str(in_.uuid)})
     assert client.get("/transfers/suggestions").json() == []
 
     out_date, out_amount, out_desc = out.transaction_date, out.amount, out.description
-    assert client.delete(f"/transactions/{out.id}").status_code == 204
+    assert client.delete(f"/transactions/{out.uuid}").status_code == 204
 
     new_out = make_transaction(db, test_user, checking, amount=out_amount,
                                transaction_type=TransactionType.TRANSFER_OUT,
                                transaction_date=out_date, description=out_desc)
     suggestions = client.get("/transfers/suggestions").json()
     assert len(suggestions) == 1
-    assert suggestions[0]["out_side"]["id"] == str(new_out.id)
+    assert suggestions[0]["out_side"]["id"] == str(new_out.uuid)
 
 
 # ===== ORPHANS =====
@@ -240,4 +240,4 @@ def test_orphan_with_no_partner(client, db, test_user):
                            transaction_date=date(2026, 1, 1), description="LONELY TRANSFER")
     resp = client.get("/transfers/orphans")
     assert resp.status_code == 200
-    assert [o["id"] for o in resp.json()] == [str(out.id)]
+    assert [o["id"] for o in resp.json()] == [str(out.uuid)]

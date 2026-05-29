@@ -82,7 +82,7 @@ class UserUpdate(BaseModel):
 
 class UserResponse(BaseModel):
     """User data returned to client - no sensitive info"""
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     email: str
     username: str
     first_name: Optional[str]

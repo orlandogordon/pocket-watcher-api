@@ -25,7 +25,7 @@ def _sync_plan_dates(db: Session, plan_id: int):
         return
     earliest = min(months, key=lambda m: (m.year, m.month))
     latest = max(months, key=lambda m: (m.year, m.month))
-    plan = db.query(FinancialPlanDB).filter(FinancialPlanDB.plan_id == plan_id).first()
+    plan = db.query(FinancialPlanDB).filter(FinancialPlanDB.db_id == plan_id).first()
     plan.start_date = date(earliest.year, earliest.month, 1)
     _, last_day = calendar.monthrange(latest.year, latest.month)
     plan.end_date = date(latest.year, latest.month, last_day)
@@ -34,14 +34,14 @@ def _sync_plan_dates(db: Session, plan_id: int):
 # Financial Plan CRUD
 
 def create_financial_plan(db: Session, user_id: int, plan: FinancialPlanCreate) -> FinancialPlanDB:
-    db_plan = FinancialPlanDB(id=uuid4(), **plan.model_dump(), user_id=user_id)
+    db_plan = FinancialPlanDB(uuid=uuid4(), **plan.model_dump(), user_id=user_id)
     db.add(db_plan)
     db.commit()
     db.refresh(db_plan)
     return db_plan
 
 def get_financial_plan(db: Session, user_id: int, plan_id: int) -> Optional[FinancialPlanDB]:
-    return db.query(FinancialPlanDB).filter(FinancialPlanDB.plan_id == plan_id, FinancialPlanDB.user_id == user_id).first()
+    return db.query(FinancialPlanDB).filter(FinancialPlanDB.db_id == plan_id, FinancialPlanDB.user_id == user_id).first()
 
 def get_financial_plans(db: Session, user_id: int, skip: int = 0, limit: int = 100) -> List[FinancialPlanDB]:
     return db.query(FinancialPlanDB).filter(FinancialPlanDB.user_id == user_id).offset(skip).limit(limit).all()
@@ -62,7 +62,7 @@ def delete_financial_plan(db: Session, db_plan: FinancialPlanDB):
 
 def create_financial_plan_month(db: Session, plan_id: int, month_data: FinancialPlanMonthCreate, *, resolved_category_ids: Optional[Dict[str, int]] = None) -> FinancialPlanMonthDB:
     month_dict = month_data.model_dump(exclude={'expenses'})
-    db_month = FinancialPlanMonthDB(id=uuid4(), **month_dict, plan_id=plan_id)
+    db_month = FinancialPlanMonthDB(uuid=uuid4(), **month_dict, plan_id=plan_id)
     db.add(db_month)
     db.commit()
     db.refresh(db_month)
@@ -72,7 +72,7 @@ def create_financial_plan_month(db: Session, plan_id: int, month_data: Financial
         cat_id = resolved_category_ids.get(str(expense_data.category_uuid)) if resolved_category_ids else None
         if cat_id is None:
             raise ValueError(f"Category UUID {expense_data.category_uuid} was not resolved")
-        create_financial_plan_expense(db, db_month.month_id, expense_data, category_id=cat_id)
+        create_financial_plan_expense(db, db_month.db_id, expense_data, category_id=cat_id)
 
     # Refresh to get the expenses
     db.refresh(db_month)
@@ -80,7 +80,7 @@ def create_financial_plan_month(db: Session, plan_id: int, month_data: Financial
     return db_month
 
 def get_financial_plan_month(db: Session, month_id: int) -> Optional[FinancialPlanMonthDB]:
-    return db.query(FinancialPlanMonthDB).filter(FinancialPlanMonthDB.month_id == month_id).first()
+    return db.query(FinancialPlanMonthDB).filter(FinancialPlanMonthDB.db_id == month_id).first()
 
 def get_financial_plan_months(db: Session, plan_id: int) -> List[FinancialPlanMonthDB]:
     return db.query(FinancialPlanMonthDB).filter(FinancialPlanMonthDB.plan_id == plan_id).order_by(FinancialPlanMonthDB.year, FinancialPlanMonthDB.month).all()
@@ -111,7 +111,7 @@ def bulk_create_financial_plan_months(
     try:
         for month_data in months:
             month_dict = month_data.model_dump(exclude={'expenses'})
-            db_month = FinancialPlanMonthDB(id=uuid4(), **month_dict, plan_id=plan_id)
+            db_month = FinancialPlanMonthDB(uuid=uuid4(), **month_dict, plan_id=plan_id)
             db.add(db_month)
             db.flush()  # get month_id for expense FK
 
@@ -120,8 +120,8 @@ def bulk_create_financial_plan_months(
                 if cat_id is None:
                     raise ValueError(f"Category UUID {expense_data.category_uuid} was not resolved")
                 db_expense = FinancialPlanExpenseDB(
-                    id=uuid4(),
-                    month_id=db_month.month_id,
+                    uuid=uuid4(),
+                    month_id=db_month.db_id,
                     category_id=cat_id,
                     description=expense_data.description,
                     amount=expense_data.amount,
@@ -145,7 +145,7 @@ def bulk_create_financial_plan_months(
 
 def create_financial_plan_expense(db: Session, month_id: int, expense: FinancialPlanExpenseCreate, *, category_id: int) -> FinancialPlanExpenseDB:
     db_expense = FinancialPlanExpenseDB(
-        id=uuid4(),
+        uuid=uuid4(),
         month_id=month_id,
         category_id=category_id,
         description=expense.description,
@@ -167,7 +167,7 @@ def bulk_create_financial_plan_expenses(db: Session, month_id: int, expenses: Li
     try:
         for i, expense in enumerate(expenses):
             db_expense = FinancialPlanExpenseDB(
-                id=uuid4(),
+                uuid=uuid4(),
                 month_id=month_id,
                 category_id=category_ids[i],
                 description=expense.description,
@@ -189,7 +189,7 @@ def bulk_create_financial_plan_expenses(db: Session, month_id: int, expenses: Li
         raise ValueError(f"Bulk expense creation failed: {str(e)}")
 
 def get_financial_plan_expense(db: Session, expense_id: int) -> Optional[FinancialPlanExpenseDB]:
-    return db.query(FinancialPlanExpenseDB).filter(FinancialPlanExpenseDB.expense_id == expense_id).first()
+    return db.query(FinancialPlanExpenseDB).filter(FinancialPlanExpenseDB.db_id == expense_id).first()
 
 def get_financial_plan_expenses(db: Session, month_id: int) -> List[FinancialPlanExpenseDB]:
     return db.query(FinancialPlanExpenseDB).filter(FinancialPlanExpenseDB.month_id == month_id).all()
@@ -235,7 +235,7 @@ def get_financial_plan_summary(db_plan: FinancialPlanDB):
         total_expenses += month_expenses
 
     return FinancialPlanSummary(
-        id=db_plan.id,
+        id=db_plan.uuid,
         plan_name=db_plan.plan_name,
         start_date=db_plan.start_date,
         end_date=db_plan.end_date,
@@ -251,24 +251,24 @@ def get_financial_plan_summary(db_plan: FinancialPlanDB):
 
 def get_financial_plan_by_uuid(db: Session, user_id: int, plan_uuid: UUID) -> Optional[FinancialPlanDB]:
     return db.query(FinancialPlanDB).filter(
-        FinancialPlanDB.id == plan_uuid,
+        FinancialPlanDB.uuid == plan_uuid,
         FinancialPlanDB.user_id == user_id
     ).first()
 
 def get_financial_plan_month_by_uuid(db: Session, month_uuid: UUID, user_id: int) -> Optional[FinancialPlanMonthDB]:
     return db.query(FinancialPlanMonthDB).join(
-        FinancialPlanDB, FinancialPlanMonthDB.plan_id == FinancialPlanDB.plan_id
+        FinancialPlanDB, FinancialPlanMonthDB.plan_id == FinancialPlanDB.db_id
     ).filter(
-        FinancialPlanMonthDB.id == month_uuid,
+        FinancialPlanMonthDB.uuid == month_uuid,
         FinancialPlanDB.user_id == user_id,
     ).first()
 
 def get_financial_plan_expense_by_uuid(db: Session, expense_uuid: UUID, user_id: int) -> Optional[FinancialPlanExpenseDB]:
     return db.query(FinancialPlanExpenseDB).join(
-        FinancialPlanMonthDB, FinancialPlanExpenseDB.month_id == FinancialPlanMonthDB.month_id
+        FinancialPlanMonthDB, FinancialPlanExpenseDB.month_id == FinancialPlanMonthDB.db_id
     ).join(
-        FinancialPlanDB, FinancialPlanMonthDB.plan_id == FinancialPlanDB.plan_id
+        FinancialPlanDB, FinancialPlanMonthDB.plan_id == FinancialPlanDB.db_id
     ).filter(
-        FinancialPlanExpenseDB.id == expense_uuid,
+        FinancialPlanExpenseDB.uuid == expense_uuid,
         FinancialPlanDB.user_id == user_id,
     ).first()

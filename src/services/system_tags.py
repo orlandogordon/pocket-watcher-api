@@ -43,7 +43,7 @@ def ensure_system_tags(user_id: int, db: Session) -> list[TagDB]:
     for defn in SYSTEM_TAG_DEFINITIONS:
         if defn["tag_name"] not in existing_names:
             tag = TagDB(
-                id=_make_system_tag_uuid(user_id, defn["tag_name"]),
+                uuid=_make_system_tag_uuid(user_id, defn["tag_name"]),
                 user_id=user_id,
                 tag_name=defn["tag_name"],
                 color=defn["color"],
@@ -79,6 +79,6 @@ def remove_system_tag(db: Session, user_id: int, transaction_id: int, tag_name: 
         return False
     deleted = db.query(TransactionTagDB).filter(
         TransactionTagDB.transaction_id == transaction_id,
-        TransactionTagDB.tag_id == tag.tag_id,
+        TransactionTagDB.tag_id == tag.db_id,
     ).delete(synchronize_session=False)
     return deleted > 0

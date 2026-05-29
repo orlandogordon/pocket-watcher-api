@@ -159,7 +159,7 @@ def list_backfill_jobs(
         raise HTTPException(status_code=404, detail="Account not found")
 
     jobs = db.query(SnapshotBackfillJobDB).filter(
-        SnapshotBackfillJobDB.account_id == account.id
+        SnapshotBackfillJobDB.account_id == account.db_id
     ).order_by(SnapshotBackfillJobDB.created_at.desc()).offset(skip).limit(limit).all()
 
     return jobs
@@ -181,8 +181,8 @@ def get_backfill_job(
         raise HTTPException(status_code=404, detail="Account not found")
 
     job = db.query(SnapshotBackfillJobDB).filter(
-        SnapshotBackfillJobDB.id == job_id,
-        SnapshotBackfillJobDB.account_id == account.id
+        SnapshotBackfillJobDB.db_id == job_id,
+        SnapshotBackfillJobDB.account_id == account.db_id
     ).first()
 
     if not job:
@@ -217,20 +217,20 @@ def manually_recalculate_snapshots(
 
     # Check for existing running job
     existing_job = db.query(SnapshotBackfillJobDB).filter(
-        SnapshotBackfillJobDB.account_id == account.id,
+        SnapshotBackfillJobDB.account_id == account.db_id,
         SnapshotBackfillJobDB.status.in_(['PENDING', 'IN_PROGRESS'])
     ).first()
 
     if existing_job:
         raise HTTPException(
             status_code=409,
-            detail=f"Backfill job {existing_job.id} already running for this account"
+            detail=f"Backfill job {existing_job.db_id} already running for this account"
         )
 
     # Create job
     job = SnapshotBackfillJobDB(
         user_id=user_id,
-        account_id=account.id,
+        account_id=account.db_id,
         start_date=start_date,
         end_date=end_date,
         status='PENDING'
@@ -241,11 +241,11 @@ def manually_recalculate_snapshots(
 
     # Submit to runner
     job_runner = get_job_runner()
-    job_runner.submit_job(job.id, account.id, start_date, end_date)
+    job_runner.submit_job(job.db_id, account.db_id, start_date, end_date)
 
     return {
         "message": "Snapshot recalculation started",
-        "job_id": job.id,
+        "job_id": job.db_id,
         "account_uuid": str(account.uuid),
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
@@ -268,7 +268,7 @@ def get_snapshots_needing_review(
         raise HTTPException(status_code=404, detail="Account not found")
 
     snapshots = db.query(AccountValueHistoryDB).filter(
-        AccountValueHistoryDB.account_id == account.id,
+        AccountValueHistoryDB.account_id == account.db_id,
         AccountValueHistoryDB.needs_review == True
     ).order_by(AccountValueHistoryDB.value_date.desc()).all()
 

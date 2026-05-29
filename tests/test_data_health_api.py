@@ -29,7 +29,7 @@ def _accounts(db, user):
 
 def _tag_needs_review(db, user, txn, when):
     nr_tag = get_system_tag(user.db_id, db, "Needs Review")
-    db.add(TransactionTagDB(transaction_id=txn.db_id, tag_id=nr_tag.tag_id, created_at=when))
+    db.add(TransactionTagDB(transaction_id=txn.db_id, tag_id=nr_tag.db_id, created_at=when))
     db.flush()
 
 
@@ -51,7 +51,7 @@ def _seed_one_of_each_kind(db, user, checking, amex):
                      transaction_date=date(2025, 11, 1), description="LONELY TRANSFER",
                      created_at=BASE + timedelta(hours=3))
 
-    db.add(AccountValueHistoryDB(uuid=uuid4(), account_id=checking.id, value_date=date(2024, 1, 1),
+    db.add(AccountValueHistoryDB(uuid=uuid4(), account_id=checking.db_id, value_date=date(2024, 1, 1),
                                  balance=Decimal("500"), needs_review=True,
                                  review_reason="before earliest transaction",
                                  created_at=BASE + timedelta(hours=4)))
@@ -135,8 +135,8 @@ def test_uncategorized_row_emits_nulls(client, db, test_user):
 
 def test_fully_categorized_row_emits_real_values(client, db, test_user):
     food = make_category(db, name="Food")
-    coffee = make_category(db, name="Coffee", parent_category_id=food.id)
-    d = _needs_review_details(client, db, test_user, category_id=food.id, subcategory_id=coffee.id,
+    coffee = make_category(db, name="Coffee", parent_category_id=food.db_id)
+    d = _needs_review_details(client, db, test_user, category_id=food.db_id, subcategory_id=coffee.db_id,
                               comments="business expense — reimburse")
     assert d["category_uuid"] == str(food.uuid)
     assert d["category_name"] == "Food"
@@ -147,7 +147,7 @@ def test_fully_categorized_row_emits_real_values(client, db, test_user):
 
 def test_category_only_no_subcategory(client, db, test_user):
     food = make_category(db, name="Food")
-    d = _needs_review_details(client, db, test_user, category_id=food.id)
+    d = _needs_review_details(client, db, test_user, category_id=food.db_id)
     assert d["category_name"] == "Food"
     assert d["subcategory_uuid"] is None
     assert d["subcategory_name"] is None

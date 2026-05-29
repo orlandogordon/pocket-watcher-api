@@ -103,7 +103,7 @@ def add_account_to_debt_plan(
     if not db_account:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     try:
-        crud_debt.add_account_to_plan(db=db, user_id=user_id, link_data=link_data, plan_id=db_plan.plan_id, account_id=db_account.id)
+        crud_debt.add_account_to_plan(db=db, user_id=user_id, link_data=link_data, plan_id=db_plan.db_id, account_id=db_account.db_id)
         return {"message": "Account successfully added to plan."}
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -121,7 +121,7 @@ def read_accounts_for_plan(
     db_plan = crud_debt.read_debt_repayment_plan_by_uuid(db=db, plan_uuid=parsed_uuid, user_id=user_id)
     if db_plan is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
-    accounts = crud_debt.read_accounts_for_plan(db=db, plan_id=db_plan.plan_id, user_id=user_id)
+    accounts = crud_debt.read_accounts_for_plan(db=db, plan_id=db_plan.db_id, user_id=user_id)
     return [{"account_uuid": a.uuid} for a in accounts]
 
 @router.delete("/plans/{plan_uuid}/accounts/{account_uuid}", status_code=status.HTTP_204_NO_CONTENT)
@@ -143,7 +143,7 @@ def remove_account_from_debt_plan(
     if db_account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     try:
-        if not crud_debt.remove_account_from_plan(db=db, user_id=user_id, plan_id=db_plan.plan_id, account_id=db_account.id):
+        if not crud_debt.remove_account_from_plan(db=db, user_id=user_id, plan_id=db_plan.db_id, account_id=db_account.db_id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account link to plan not found.")
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -164,7 +164,7 @@ def create_or_update_payment_schedule(
     if not db_account:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     try:
-        count = crud_debt.bulk_create_or_update_schedule(db=db, user_id=user_id, schedule_data=schedule_data, account_id=db_account.id)
+        count = crud_debt.bulk_create_or_update_schedule(db=db, user_id=user_id, schedule_data=schedule_data, account_id=db_account.db_id)
         return {"message": f"{count} schedule entries created/updated for account."}
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -183,7 +183,7 @@ def read_payment_schedule_for_account(
     if db_account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     try:
-        return crud_debt.read_schedule_for_account(db=db, user_id=user_id, account_id=db_account.id)
+        return crud_debt.read_schedule_for_account(db=db, user_id=user_id, account_id=db_account.db_id)
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
@@ -208,7 +208,7 @@ def create_debt_payment(
         source = crud_account.read_db_account_by_uuid(db, payment_data.payment_source_account_uuid, user_id)
         if not source:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment source account not found")
-        payment_source_account_id = source.id
+        payment_source_account_id = source.db_id
 
     transaction_id = None
     if payment_data.transaction_uuid:
@@ -221,7 +221,7 @@ def create_debt_payment(
     try:
         return crud_debt.create_debt_payment(
             db=db, user_id=user_id, payment_data=payment_data,
-            loan_account_id=loan_account.id,
+            loan_account_id=loan_account.db_id,
             payment_source_account_id=payment_source_account_id,
             transaction_id=transaction_id,
         )
@@ -239,13 +239,13 @@ def create_bulk_debt_payments(bulk_data: debt_models.DebtPaymentBulkCreate, db: 
         if not loan_account:
             raise HTTPException(status_code=404, detail="Loan account not found")
 
-        ids = {'loan_account_id': loan_account.id}
+        ids = {'loan_account_id': loan_account.db_id}
 
         if payment_data.payment_source_account_uuid:
             source = crud_account.read_db_account_by_uuid(db, payment_data.payment_source_account_uuid, user_id)
             if not source:
                 raise HTTPException(status_code=404, detail="Payment source account not found")
-            ids['payment_source_account_id'] = source.id
+            ids['payment_source_account_id'] = source.db_id
 
         if payment_data.transaction_uuid:
             from src.crud.crud_transaction import read_db_transaction_by_uuid
@@ -277,7 +277,7 @@ def read_debt_payments_for_account(
     if db_account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     try:
-        return crud_debt.read_all_debt_payments_for_account(db=db, user_id=user_id, account_id=db_account.id)
+        return crud_debt.read_all_debt_payments_for_account(db=db, user_id=user_id, account_id=db_account.db_id)
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
@@ -317,7 +317,7 @@ def update_debt_payment(
             source = crud_account.read_db_account_by_uuid(db, payment_data.payment_source_account_uuid, user_id)
             if not source:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment source account not found")
-            resolved_updates['payment_source_account_id'] = source.id
+            resolved_updates['payment_source_account_id'] = source.db_id
         else:
             resolved_updates['payment_source_account_id'] = None
 

@@ -245,7 +245,7 @@ def test_confirm_auto_flags_uncategorized_rows(client, fake_llm, cc_account, db,
         assert "Auto-flagged for review" in (txn.comments or "")
         link = db.query(TransactionTagDB).filter(
             TransactionTagDB.transaction_id == txn.db_id,
-            TransactionTagDB.tag_id == needs_review.tag_id,
+            TransactionTagDB.tag_id == needs_review.db_id,
         ).first()
         assert link is not None, f"{txn.description} not tagged Needs Review"
 
@@ -280,4 +280,4 @@ def test_confirm_persists_viewable_document(client, fake_llm, cc_account, db):
     assert content.content == _csv_bytes()
 
     job = db.query(UploadJobDB).filter(UploadJobDB.uuid == UUID(doc["document_uuid"])).first()
-    assert db.query(TransactionDB).filter(TransactionDB.upload_job_id == job.id).count() == 4
+    assert db.query(TransactionDB).filter(TransactionDB.upload_job_id == job.db_id).count() == 4

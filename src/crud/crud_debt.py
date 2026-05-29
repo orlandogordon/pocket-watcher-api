@@ -30,7 +30,7 @@ from src.models.debt import (
 
 def create_debt_repayment_plan(db: Session, user_id: int, plan_data: DebtRepaymentPlanCreate) -> DebtRepaymentPlanDB:
     db_plan = DebtRepaymentPlanDB(
-        id=uuid4(),
+        uuid=uuid4(),
         **plan_data.model_dump(exclude={"strategy"}),
         strategy=DebtStrategy(plan_data.strategy.value),
         user_id=user_id
@@ -42,7 +42,7 @@ def create_debt_repayment_plan(db: Session, user_id: int, plan_data: DebtRepayme
 
 def read_debt_repayment_plan(db: Session, plan_id: int, user_id: int) -> Optional[DebtRepaymentPlanDB]:
     return db.query(DebtRepaymentPlanDB).filter(
-        DebtRepaymentPlanDB.plan_id == plan_id, 
+        DebtRepaymentPlanDB.db_id == plan_id, 
         DebtRepaymentPlanDB.user_id == user_id
     ).first()
 
@@ -54,7 +54,7 @@ def add_account_to_plan(db: Session, user_id: int, link_data: DebtPlanAccountLin
     if not plan:
         raise NotFoundError("Repayment plan not found.")
 
-    account = db.query(AccountDB).filter(AccountDB.id == account_id, AccountDB.user_id == user_id).first()
+    account = db.query(AccountDB).filter(AccountDB.db_id == account_id, AccountDB.user_id == user_id).first()
     if not account:
         raise NotFoundError("Account not found.")
 
@@ -77,7 +77,7 @@ def read_accounts_for_plan(db: Session, plan_id: int, user_id: int) -> List[Acco
     if not account_ids:
         return []
     return db.query(AccountDB).filter(
-        AccountDB.id.in_(account_ids),
+        AccountDB.db_id.in_(account_ids),
         AccountDB.user_id == user_id
     ).all()
 
@@ -98,7 +98,7 @@ def remove_account_from_plan(db: Session, user_id: int, plan_id: int, account_id
 # ===== DATABASE OPERATIONS - SCHEDULES =====
 
 def bulk_create_or_update_schedule(db: Session, user_id: int, schedule_data: DebtRepaymentScheduleBulkCreate, *, account_id: int):
-    account = db.query(AccountDB).filter(AccountDB.id == account_id, AccountDB.user_id == user_id).first()
+    account = db.query(AccountDB).filter(AccountDB.db_id == account_id, AccountDB.user_id == user_id).first()
     if not account:
         raise NotFoundError("Account not found.")
 
@@ -112,7 +112,7 @@ def bulk_create_or_update_schedule(db: Session, user_id: int, schedule_data: Deb
     for schedule in schedule_data.schedules:
         new_schedules.append(
             DebtRepaymentScheduleDB(
-                id=uuid4(),
+                uuid=uuid4(),
                 user_id=user_id,
                 account_id=account_id,
                 payment_month=schedule.payment_month,
@@ -125,7 +125,7 @@ def bulk_create_or_update_schedule(db: Session, user_id: int, schedule_data: Deb
     return len(new_schedules)
 
 def read_schedule_for_account(db: Session, user_id: int, account_id: int) -> List[DebtRepaymentScheduleDB]:
-    account = db.query(AccountDB).filter(AccountDB.id == account_id, AccountDB.user_id == user_id).first()
+    account = db.query(AccountDB).filter(AccountDB.db_id == account_id, AccountDB.user_id == user_id).first()
     if not account:
         raise NotFoundError("Account not found.")
 
@@ -156,10 +156,10 @@ def _anchor_date_for_loan(
     → created_at. The exclude_payment_id is used by update_debt_payment so
     a payment isn't considered its own anchor."""
     q = db.query(func.max(DebtPaymentDB.payment_date)).filter(
-        DebtPaymentDB.loan_account_id == loan_account.id
+        DebtPaymentDB.loan_account_id == loan_account.db_id
     )
     if exclude_payment_id is not None:
-        q = q.filter(DebtPaymentDB.payment_id != exclude_payment_id)
+        q = q.filter(DebtPaymentDB.db_id != exclude_payment_id)
     last_payment_date = q.scalar()
     if last_payment_date is not None:
         return last_payment_date
@@ -211,7 +211,7 @@ def current_accrued_interest(
 def create_debt_payment(db: Session, user_id: int, payment_data: DebtPaymentCreate, *, loan_account_id: int, payment_source_account_id: Optional[int] = None, transaction_id: Optional[int] = None) -> DebtPaymentDB:
     # Verify that the loan account exists and belongs to the user
     loan_account = db.query(AccountDB).filter(
-        AccountDB.id == loan_account_id,
+        AccountDB.db_id == loan_account_id,
         AccountDB.user_id == user_id
     ).first()
     if not loan_account:
@@ -224,7 +224,7 @@ def create_debt_payment(db: Session, user_id: int, payment_data: DebtPaymentCrea
     # Optionally, verify the source account if provided
     if payment_source_account_id:
         source_account = db.query(AccountDB).filter(
-            AccountDB.id == payment_source_account_id,
+            AccountDB.db_id == payment_source_account_id,
             AccountDB.user_id == user_id
         ).first()
         if not source_account:
@@ -272,7 +272,7 @@ def create_debt_payment(db: Session, user_id: int, payment_data: DebtPaymentCrea
 
     # Create the payment record
     db_payment = DebtPaymentDB(
-        id=uuid4(),
+        uuid=uuid4(),
         loan_account_id=loan_account_id,
         payment_source_account_id=payment_source_account_id,
         transaction_id=transaction_id,
@@ -307,19 +307,19 @@ def bulk_create_debt_payments(db: Session, user_id: int, bulk_data: DebtPaymentB
     return db_payments
 
 def read_debt_payment(db: Session, payment_id: int, user_id: int) -> Optional[DebtPaymentDB]:
-    return db.query(DebtPaymentDB).join(AccountDB, DebtPaymentDB.loan_account_id == AccountDB.id).options(
+    return db.query(DebtPaymentDB).join(AccountDB, DebtPaymentDB.loan_account_id == AccountDB.db_id).options(
         joinedload(DebtPaymentDB.loan_account),
         joinedload(DebtPaymentDB.payment_source_account),
         joinedload(DebtPaymentDB.transaction),
     ).filter(
-        DebtPaymentDB.payment_id == payment_id,
+        DebtPaymentDB.db_id == payment_id,
         AccountDB.user_id == user_id
     ).first()
 
 def read_all_debt_payments_for_account(db: Session, account_id: int, user_id: int) -> List[DebtPaymentDB]:
     # Verify account ownership first
     account = db.query(AccountDB).filter(
-        AccountDB.id == account_id,
+        AccountDB.db_id == account_id,
         AccountDB.user_id == user_id
     ).first()
     if not account:
@@ -369,7 +369,7 @@ def update_debt_payment(db: Session, payment_id: int, user_id: int, payment_data
             # payment (otherwise days_elapsed would be zero on update).
             new_payment_date = update_data.get('payment_date', db_payment.payment_date)
             anchor = _anchor_date_for_loan(
-                db, loan_account, exclude_payment_id=db_payment.payment_id
+                db, loan_account, exclude_payment_id=db_payment.db_id
             )
             days_elapsed = max((new_payment_date - anchor).days, 0)
             calculated_interest = _compute_daily_interest(
@@ -438,7 +438,7 @@ def delete_debt_payment(db: Session, payment_id: int, user_id: int) -> bool:
 
 def read_debt_repayment_plan_by_uuid(db: Session, plan_uuid: UUID, user_id: int) -> Optional[DebtRepaymentPlanDB]:
     return db.query(DebtRepaymentPlanDB).filter(
-        DebtRepaymentPlanDB.id == plan_uuid,
+        DebtRepaymentPlanDB.uuid == plan_uuid,
         DebtRepaymentPlanDB.user_id == user_id
     ).first()
 
@@ -471,12 +471,12 @@ def delete_debt_repayment_plan_by_uuid(db: Session, plan_uuid: UUID, user_id: in
 # ===== UUID-BASED OPERATIONS - PAYMENTS =====
 
 def read_debt_payment_by_uuid(db: Session, payment_uuid: UUID, user_id: int) -> Optional[DebtPaymentDB]:
-    return db.query(DebtPaymentDB).join(AccountDB, DebtPaymentDB.loan_account_id == AccountDB.id).options(
+    return db.query(DebtPaymentDB).join(AccountDB, DebtPaymentDB.loan_account_id == AccountDB.db_id).options(
         joinedload(DebtPaymentDB.loan_account),
         joinedload(DebtPaymentDB.payment_source_account),
         joinedload(DebtPaymentDB.transaction),
     ).filter(
-        DebtPaymentDB.id == payment_uuid,
+        DebtPaymentDB.uuid == payment_uuid,
         AccountDB.user_id == user_id
     ).first()
 
@@ -484,10 +484,10 @@ def update_debt_payment_by_uuid(db: Session, payment_uuid: UUID, user_id: int, p
     db_payment = read_debt_payment_by_uuid(db, payment_uuid, user_id)
     if not db_payment:
         return None
-    return update_debt_payment(db, db_payment.payment_id, user_id, payment_data, resolved_updates=resolved_updates)
+    return update_debt_payment(db, db_payment.db_id, user_id, payment_data, resolved_updates=resolved_updates)
 
 def delete_debt_payment_by_uuid(db: Session, payment_uuid: UUID, user_id: int) -> bool:
     db_payment = read_debt_payment_by_uuid(db, payment_uuid, user_id)
     if not db_payment:
         return False
-    return delete_debt_payment(db, db_payment.payment_id, user_id)
+    return delete_debt_payment(db, db_payment.db_id, user_id)

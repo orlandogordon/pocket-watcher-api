@@ -27,7 +27,7 @@ from src.services.account_snapshot import (
 
 def _make_user(session) -> UserDB:
     user = UserDB(
-        id=uuid4(),
+        uuid=uuid4(),
         email="test@example.com",
         username="test",
         password_hash="x",
@@ -85,9 +85,9 @@ class TestSparseSnapshotDates(TestLOCFBase):
     def test_locf_fills_per_account(self):
         a = _make_account(self.session, self.user.db_id, "A", AccountType.CHECKING)
         b = _make_account(self.session, self.user.db_id, "B", AccountType.CHECKING)
-        _add_snapshot(self.session, a.id, date(2026, 2, 1), 100)
-        _add_snapshot(self.session, a.id, date(2026, 2, 10), 150)
-        _add_snapshot(self.session, b.id, date(2026, 2, 5), 50)
+        _add_snapshot(self.session, a.db_id, date(2026, 2, 1), 100)
+        _add_snapshot(self.session, a.db_id, date(2026, 2, 10), 150)
+        _add_snapshot(self.session, b.db_id, date(2026, 2, 5), 50)
 
         out = get_net_worth_history(
             self.session, self.user.db_id,
@@ -119,7 +119,7 @@ class TestLookbackBeforeStart(TestLOCFBase):
 
     def test_lookback(self):
         a = _make_account(self.session, self.user.db_id, "A", AccountType.SAVINGS)
-        _add_snapshot(self.session, a.id, date(2026, 1, 20), 500)
+        _add_snapshot(self.session, a.db_id, date(2026, 1, 20), 500)
 
         out = get_net_worth_history(
             self.session, self.user.db_id,
@@ -138,10 +138,10 @@ class TestFreshnessFields(TestLOCFBase):
     def test_fresh_total_and_oldest(self):
         a = _make_account(self.session, self.user.db_id, "A", AccountType.CHECKING)
         b = _make_account(self.session, self.user.db_id, "B", AccountType.CHECKING)
-        _add_snapshot(self.session, a.id, date(2026, 2, 1), 100)
-        _add_snapshot(self.session, a.id, date(2026, 2, 10), 150)
-        _add_snapshot(self.session, b.id, date(2026, 2, 5), 50)
-        _add_snapshot(self.session, b.id, date(2026, 2, 10), 75)
+        _add_snapshot(self.session, a.db_id, date(2026, 2, 1), 100)
+        _add_snapshot(self.session, a.db_id, date(2026, 2, 10), 150)
+        _add_snapshot(self.session, b.db_id, date(2026, 2, 5), 50)
+        _add_snapshot(self.session, b.db_id, date(2026, 2, 10), 75)
 
         out = get_net_worth_history(
             self.session, self.user.db_id,
@@ -172,9 +172,9 @@ class TestLiabilityNegation(TestLOCFBase):
         asset = _make_account(self.session, self.user.db_id, "Asset", AccountType.CHECKING)
         cc = _make_account(self.session, self.user.db_id, "CC", AccountType.CREDIT_CARD)
         loan = _make_account(self.session, self.user.db_id, "Loan", AccountType.LOAN)
-        _add_snapshot(self.session, asset.id, date(2026, 2, 1), 1000)
-        _add_snapshot(self.session, cc.id, date(2026, 2, 1), 300)
-        _add_snapshot(self.session, loan.id, date(2026, 2, 1), 200)
+        _add_snapshot(self.session, asset.db_id, date(2026, 2, 1), 1000)
+        _add_snapshot(self.session, cc.db_id, date(2026, 2, 1), 300)
+        _add_snapshot(self.session, loan.db_id, date(2026, 2, 1), 200)
 
         out = get_net_worth_history(
             self.session, self.user.db_id,
@@ -192,8 +192,8 @@ class TestExcludeUntilFirstObservation(TestLOCFBase):
     def test_account_not_yet_observed_excluded(self):
         a = _make_account(self.session, self.user.db_id, "A", AccountType.CHECKING)
         b = _make_account(self.session, self.user.db_id, "B", AccountType.CHECKING)
-        _add_snapshot(self.session, a.id, date(2026, 2, 1), 100)
-        _add_snapshot(self.session, b.id, date(2026, 2, 5), 200)
+        _add_snapshot(self.session, a.db_id, date(2026, 2, 1), 100)
+        _add_snapshot(self.session, b.db_id, date(2026, 2, 5), 200)
 
         out = get_net_worth_history(
             self.session, self.user.db_id,
@@ -213,11 +213,11 @@ class TestExcludeUntilFirstObservation(TestLOCFBase):
 class TestPerAccountLOCF(TestLOCFBase):
     def test_gaps_filled_with_carried_forward_flag(self):
         a = _make_account(self.session, self.user.db_id, "A", AccountType.CHECKING)
-        _add_snapshot(self.session, a.id, date(2026, 2, 1), 100)
-        _add_snapshot(self.session, a.id, date(2026, 2, 5), 120)
+        _add_snapshot(self.session, a.db_id, date(2026, 2, 1), 100)
+        _add_snapshot(self.session, a.db_id, date(2026, 2, 5), 120)
 
         out = get_account_value_history(
-            self.session, a.id, self.user.db_id,
+            self.session, a.db_id, self.user.db_id,
             start_date=date(2026, 2, 1), end_date=date(2026, 2, 7),
         )
 
@@ -242,10 +242,10 @@ class TestPerAccountLOCF(TestLOCFBase):
     def test_start_before_first_snapshot_clamps(self):
         """Per-account: don't fabricate $0 points before account has any data."""
         a = _make_account(self.session, self.user.db_id, "A", AccountType.CHECKING)
-        _add_snapshot(self.session, a.id, date(2026, 2, 5), 100)
+        _add_snapshot(self.session, a.db_id, date(2026, 2, 5), 100)
 
         out = get_account_value_history(
-            self.session, a.id, self.user.db_id,
+            self.session, a.db_id, self.user.db_id,
             start_date=date(2026, 2, 1), end_date=date(2026, 2, 7),
         )
 
@@ -261,7 +261,7 @@ class TestMonthlyDownsample(TestLOCFBase):
     def test_no_downsample_at_exactly_365_days(self):
         """365-day span is the boundary — stays daily (threshold is > 365)."""
         a = _make_account(self.session, self.user.db_id, "A", AccountType.CHECKING)
-        _add_snapshot(self.session, a.id, date(2024, 1, 1), 100)
+        _add_snapshot(self.session, a.db_id, date(2024, 1, 1), 100)
 
         out = get_net_worth_history(
             self.session, self.user.db_id,
@@ -274,7 +274,7 @@ class TestMonthlyDownsample(TestLOCFBase):
         """18-month span → 18 monthly buckets, last day of each month
         within the range."""
         a = _make_account(self.session, self.user.db_id, "A", AccountType.CHECKING)
-        _add_snapshot(self.session, a.id, date(2024, 1, 1), 100)
+        _add_snapshot(self.session, a.db_id, date(2024, 1, 1), 100)
 
         out = get_net_worth_history(
             self.session, self.user.db_id,
@@ -292,9 +292,9 @@ class TestMonthlyDownsample(TestLOCFBase):
         """Snapshots on Jan 5/20/31; the Jan bucket reflects Jan 31's
         balance, not the earlier-in-month values."""
         a = _make_account(self.session, self.user.db_id, "A", AccountType.CHECKING)
-        _add_snapshot(self.session, a.id, date(2024, 1, 5), 100)
-        _add_snapshot(self.session, a.id, date(2024, 1, 20), 200)
-        _add_snapshot(self.session, a.id, date(2024, 1, 31), 350)
+        _add_snapshot(self.session, a.db_id, date(2024, 1, 5), 100)
+        _add_snapshot(self.session, a.db_id, date(2024, 1, 20), 200)
+        _add_snapshot(self.session, a.db_id, date(2024, 1, 31), 350)
 
         out = get_net_worth_history(
             self.session, self.user.db_id,
@@ -309,7 +309,7 @@ class TestMonthlyDownsample(TestLOCFBase):
         bucket should reflect carried-forward freshness — not roll up
         across the bucket."""
         a = _make_account(self.session, self.user.db_id, "A", AccountType.CHECKING)
-        _add_snapshot(self.session, a.id, date(2024, 1, 15), 100)
+        _add_snapshot(self.session, a.db_id, date(2024, 1, 15), 100)
         # No snapshot Jan 16..31, so Jan 31 is carried-forward.
 
         out = get_net_worth_history(
@@ -326,10 +326,10 @@ class TestMonthlyDownsample(TestLOCFBase):
         """get_account_value_history's bucketed point inherits the
         kept day's is_carried_forward flag."""
         a = _make_account(self.session, self.user.db_id, "A", AccountType.CHECKING)
-        _add_snapshot(self.session, a.id, date(2024, 1, 15), 100)
+        _add_snapshot(self.session, a.db_id, date(2024, 1, 15), 100)
 
         out = get_account_value_history(
-            self.session, a.id, self.user.db_id,
+            self.session, a.db_id, self.user.db_id,
             start_date=date(2024, 1, 1), end_date=date(2025, 6, 30),
         )
         jan = next(p for p in out if p["date"].month == 1 and p["date"].year == 2024)
@@ -378,9 +378,9 @@ class TestHoldAtCostValuation(unittest.TestCase):
         quantity = Decimal(str(qty))
         price_per_share = Decimal(str(price))
         txn = InvestmentTransactionDB(
-            id=uuid4(),
+            uuid=uuid4(),
             user_id=self.user.db_id,
-            account_id=account.id,
+            account_id=account.db_id,
             transaction_hash=str(uuid4()),
             transaction_type=txn_type,
             symbol=api_symbol[: api_symbol.index("2")],
@@ -401,13 +401,13 @@ class TestHoldAtCostValuation(unittest.TestCase):
             return_value={},
         ):
             recalculate_account_snapshots(
-                self.session, account.id, start_date=start, end_date=end,
+                self.session, account.db_id, start_date=start, end_date=end,
                 delay_between_prices=0,
             )
 
     def _snapshot(self, account, value_date) -> AccountValueHistoryDB:
         return self.session.query(AccountValueHistoryDB).filter(
-            AccountValueHistoryDB.account_id == account.id,
+            AccountValueHistoryDB.account_id == account.db_id,
             AccountValueHistoryDB.value_date == value_date,
         ).first()
 

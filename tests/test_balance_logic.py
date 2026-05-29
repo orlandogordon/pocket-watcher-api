@@ -9,7 +9,7 @@ from src.services.account_snapshot import _reverse_balance_for_type
 
 class FakeAccount:
     def __init__(self, account_type, balance):
-        self.id = 1
+        self.db_id = 1
         self.account_type = account_type
         self.balance = Decimal(str(balance))
 

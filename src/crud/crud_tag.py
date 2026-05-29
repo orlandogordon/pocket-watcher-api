@@ -30,7 +30,7 @@ def create_db_tag(db: Session, user_id: int, tag_data: TagCreate) -> TagDB:
     
     # Create new tag
     db_tag = TagDB(
-        id=uuid4(),
+        uuid=uuid4(),
         user_id=user_id,
         tag_name=tag_data.tag_name.strip(),
         color=tag_data.color,
@@ -50,7 +50,7 @@ def create_db_tag(db: Session, user_id: int, tag_data: TagCreate) -> TagDB:
 def read_db_tag(db: Session, tag_id: int, user_id: Optional[int] = None) -> Optional[TagDB]:
     """Read a tag by ID"""
     
-    query = db.query(TagDB).filter(TagDB.tag_id == tag_id)
+    query = db.query(TagDB).filter(TagDB.db_id == tag_id)
     
     if user_id:
         query = query.filter(TagDB.user_id == user_id)
@@ -78,7 +78,7 @@ def update_db_tag(db: Session, tag_id: int, user_id: int, tag_updates: TagUpdate
     
     # Get the existing tag
     db_tag = db.query(TagDB).filter(
-        TagDB.tag_id == tag_id,
+        TagDB.db_id == tag_id,
         TagDB.user_id == user_id
     ).first()
     
@@ -91,7 +91,7 @@ def update_db_tag(db: Session, tag_id: int, user_id: int, tag_updates: TagUpdate
         existing_tag = db.query(TagDB).filter(
             TagDB.user_id == user_id,
             TagDB.tag_name.ilike(update_data['tag_name'].strip()),
-            TagDB.tag_id != tag_id
+            TagDB.db_id != tag_id
         ).first()
         if existing_tag:
             raise ValueError(f"Tag with name '{update_data['tag_name']}' already exists")
@@ -113,7 +113,7 @@ def delete_db_tag(db: Session, tag_id: int, user_id: int) -> bool:
     """Delete a tag and all its transaction associations"""
     
     db_tag = db.query(TagDB).filter(
-        TagDB.tag_id == tag_id,
+        TagDB.db_id == tag_id,
         TagDB.user_id == user_id
     ).first()
     
@@ -146,7 +146,7 @@ def add_tag_to_transaction(db: Session, user_id: int, transaction_id: int, tag_i
     
     # Verify tag belongs to user
     tag = db.query(TagDB).filter(
-        TagDB.tag_id == tag_id,
+        TagDB.db_id == tag_id,
         TagDB.user_id == user_id
     ).first()
     if not tag:
@@ -190,7 +190,7 @@ def remove_tag_from_transaction(db: Session, user_id: int, transaction_id: int, 
     
     # Verify tag belongs to user
     tag = db.query(TagDB).filter(
-        TagDB.tag_id == tag_id,
+        TagDB.db_id == tag_id,
         TagDB.user_id == user_id
     ).first()
     if not tag:
@@ -238,7 +238,7 @@ def get_transactions_for_tag(db: Session, tag_id: int, user_id: int, skip: int =
     
     # Verify tag belongs to user
     tag = db.query(TagDB).filter(
-        TagDB.tag_id == tag_id,
+        TagDB.db_id == tag_id,
         TagDB.user_id == user_id
     ).first()
     if not tag:
@@ -257,7 +257,7 @@ def get_tag_stats(db: Session, tag_id: int, user_id: int) -> TagStats:
     
     # Verify tag belongs to user
     tag = db.query(TagDB).filter(
-        TagDB.tag_id == tag_id,
+        TagDB.db_id == tag_id,
         TagDB.user_id == user_id
     ).first()
     if not tag:
@@ -271,7 +271,7 @@ def get_tag_stats(db: Session, tag_id: int, user_id: int) -> TagStats:
     
     if not transactions:
         return TagStats(
-            id=tag.id,
+            id=tag.uuid,
             tag_name=tag.tag_name,
             color=tag.color,
             transaction_count=0,
@@ -285,7 +285,7 @@ def get_tag_stats(db: Session, tag_id: int, user_id: int) -> TagStats:
     most_recent_use = max(t.transaction_date for t in transactions)
     
     return TagStats(
-        id=tag.id,
+        id=tag.uuid,
         tag_name=tag.tag_name,
         color=tag.color,
         transaction_count=len(transactions),
@@ -303,12 +303,12 @@ def get_all_tag_stats(db: Session, user_id: int) -> List[TagStats]:
     stats = []
     for tag in tags:
         try:
-            tag_stats = get_tag_stats(db, tag.tag_id, user_id)
+            tag_stats = get_tag_stats(db, tag.db_id, user_id)
             stats.append(tag_stats)
         except Exception:
             # If we can't get stats for a tag, include it with zero stats
             stats.append(TagStats(
-                id=tag.id,
+                id=tag.uuid,
                 tag_name=tag.tag_name,
                 color=tag.color,
                 transaction_count=0,
@@ -332,14 +332,14 @@ def search_tags(db: Session, user_id: int, search_term: str) -> List[TagDB]:
 def read_db_tag_by_uuid(db: Session, tag_uuid: UUID, user_id: int) -> Optional[TagDB]:
     """Read a tag by UUID"""
     return db.query(TagDB).filter(
-        TagDB.id == tag_uuid,
+        TagDB.uuid == tag_uuid,
         TagDB.user_id == user_id
     ).first()
 
 def read_db_tags_by_uuids(db: Session, uuids: List[UUID], user_id: int) -> List[TagDB]:
     """Read multiple tags by their UUIDs in a single query"""
     return db.query(TagDB).filter(
-        TagDB.id.in_(uuids),
+        TagDB.uuid.in_(uuids),
         TagDB.user_id == user_id,
     ).all()
 
@@ -348,33 +348,33 @@ def update_db_tag_by_uuid(db: Session, tag_uuid: UUID, user_id: int, tag_updates
     db_tag = read_db_tag_by_uuid(db, tag_uuid, user_id)
     if not db_tag:
         raise NotFoundError(f"Tag not found")
-    return update_db_tag(db, db_tag.tag_id, user_id, tag_updates)
+    return update_db_tag(db, db_tag.db_id, user_id, tag_updates)
 
 def delete_db_tag_by_uuid(db: Session, tag_uuid: UUID, user_id: int) -> bool:
     """Delete a tag by UUID"""
     db_tag = read_db_tag_by_uuid(db, tag_uuid, user_id)
     if not db_tag:
         raise NotFoundError(f"Tag not found")
-    return delete_db_tag(db, db_tag.tag_id, user_id)
+    return delete_db_tag(db, db_tag.db_id, user_id)
 
 def get_tag_stats_by_uuid(db: Session, tag_uuid: UUID, user_id: int) -> TagStats:
     """Get tag stats by UUID"""
     db_tag = read_db_tag_by_uuid(db, tag_uuid, user_id)
     if not db_tag:
         raise NotFoundError(f"Tag not found")
-    return get_tag_stats(db, db_tag.tag_id, user_id)
+    return get_tag_stats(db, db_tag.db_id, user_id)
 
 def get_transactions_for_tag_by_uuid(db: Session, tag_uuid: UUID, user_id: int, skip: int = 0, limit: int = 100) -> List[TransactionDB]:
     """Get transactions for a tag identified by UUID"""
     db_tag = read_db_tag_by_uuid(db, tag_uuid, user_id)
     if not db_tag:
         raise NotFoundError(f"Tag not found")
-    return get_transactions_for_tag(db, db_tag.tag_id, user_id, skip, limit)
+    return get_transactions_for_tag(db, db_tag.db_id, user_id, skip, limit)
 
 def add_tag_to_transaction_by_uuids(db: Session, user_id: int, transaction_uuid: UUID, tag_uuid: UUID) -> TransactionTagDB:
     """Add a tag to a transaction using UUIDs"""
     transaction = db.query(TransactionDB).filter(
-        TransactionDB.id == transaction_uuid,
+        TransactionDB.uuid == transaction_uuid,
         TransactionDB.user_id == user_id
     ).first()
     if not transaction:
@@ -382,12 +382,12 @@ def add_tag_to_transaction_by_uuids(db: Session, user_id: int, transaction_uuid:
     tag = read_db_tag_by_uuid(db, tag_uuid, user_id)
     if not tag:
         raise NotFoundError(f"Tag not found")
-    return add_tag_to_transaction(db, user_id, transaction.db_id, tag.tag_id)
+    return add_tag_to_transaction(db, user_id, transaction.db_id, tag.db_id)
 
 def remove_tag_from_transaction_by_uuids(db: Session, user_id: int, transaction_uuid: UUID, tag_uuid: UUID) -> bool:
     """Remove a tag from a transaction using UUIDs"""
     transaction = db.query(TransactionDB).filter(
-        TransactionDB.id == transaction_uuid,
+        TransactionDB.uuid == transaction_uuid,
         TransactionDB.user_id == user_id
     ).first()
     if not transaction:
@@ -395,7 +395,7 @@ def remove_tag_from_transaction_by_uuids(db: Session, user_id: int, transaction_
     tag = read_db_tag_by_uuid(db, tag_uuid, user_id)
     if not tag:
         raise NotFoundError(f"Tag not found")
-    return remove_tag_from_transaction(db, user_id, transaction.db_id, tag.tag_id)
+    return remove_tag_from_transaction(db, user_id, transaction.db_id, tag.db_id)
 
 
 def bulk_tag_transactions(db: Session, user_id: int, transaction_ids: List[int], tag_id: int) -> List[TransactionTagDB]:
@@ -403,7 +403,7 @@ def bulk_tag_transactions(db: Session, user_id: int, transaction_ids: List[int],
     
     # Verify tag belongs to user
     tag = db.query(TagDB).filter(
-        TagDB.tag_id == tag_id,
+        TagDB.db_id == tag_id,
         TagDB.user_id == user_id
     ).first()
     if not tag:

@@ -32,7 +32,7 @@ _category_seq = count(1)
 
 def make_user(db, **kw):
     defaults = dict(
-        id=uuid4(),
+        uuid=uuid4(),
         email=fake.unique.email(),
         username=fake.unique.user_name(),
         password_hash="x",
@@ -74,9 +74,9 @@ def make_category(db, **kw):
 
 def make_transaction(db, user, account, **kw):
     defaults = dict(
-        id=uuid4(),
+        uuid=uuid4(),
         user_id=user.db_id,
-        account_id=account.id,
+        account_id=account.db_id,
         transaction_hash=uuid4().hex,
         source_type=SourceType.MANUAL,
         transaction_date=date(2026, 1, 1),
@@ -93,9 +93,9 @@ def make_transaction(db, user, account, **kw):
 
 def make_investment_txn(db, user, account, **kw):
     defaults = dict(
-        id=uuid4(),
+        uuid=uuid4(),
         user_id=user.db_id,
-        account_id=account.id,
+        account_id=account.db_id,
         transaction_hash=uuid4().hex,
         transaction_type=InvestmentTransactionType.BUY,
         total_amount=Decimal("100.00"),

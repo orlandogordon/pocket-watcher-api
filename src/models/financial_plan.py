@@ -25,7 +25,7 @@ class FinancialPlanExpenseUpdate(BaseModel):
     expense_type: Optional[Literal["recurring", "one_time"]] = None
 
 class FinancialPlanExpense(FinancialPlanExpenseBase):
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     created_at: datetime
 
     class Config:
@@ -48,7 +48,7 @@ class FinancialPlanMonthUpdate(BaseModel):
     planned_income: Optional[Decimal] = None
 
 class FinancialPlanMonth(FinancialPlanMonthBase):
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     created_at: datetime
     expenses: List[FinancialPlanExpense] = []
 
@@ -71,7 +71,7 @@ class FinancialPlanUpdate(BaseModel):
     end_date: Optional[date] = None
 
 class FinancialPlan(FinancialPlanBase):
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     created_at: datetime
     updated_at: datetime
     monthly_periods: List[FinancialPlanMonth] = []

@@ -105,7 +105,7 @@ def validate_refund_allocation(
     )
     if exclude_relationship_id is not None:
         existing_query = existing_query.filter(
-            TransactionRelationshipDB.relationship_id != exclude_relationship_id
+            TransactionRelationshipDB.db_id != exclude_relationship_id
         )
     existing_total = Decimal(str(existing_query.scalar()))
 
@@ -173,7 +173,7 @@ def update_transaction_type_with_hash(
 
     if txn.account_id is None:
         raise ValueError(
-            f"Cannot recompute hash for transaction {txn.id}: no account_id"
+            f"Cannot recompute hash for transaction {txn.uuid}: no account_id"
         )
 
     new_hash = generate_transaction_hash(
@@ -192,8 +192,8 @@ def update_transaction_type_with_hash(
     ).first()
     if collision is not None:
         raise ValueError(
-            f"Recomputed hash for transaction {txn.id} ({new_type.value}) "
-            f"collides with existing transaction {collision.id}"
+            f"Recomputed hash for transaction {txn.uuid} ({new_type.value}) "
+            f"collides with existing transaction {collision.uuid}"
         )
 
     txn.transaction_type = new_type
@@ -233,7 +233,7 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
     if account_id:
         # Verify account exists and belongs to user
         account = db.query(AccountDB).filter(
-            AccountDB.id == account_id,
+            AccountDB.db_id == account_id,
             AccountDB.user_id == user_id
         ).first()
         if not account:
@@ -241,14 +241,14 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
 
     # Verify category and subcategory exist and are valid
     if category_id:
-        category = db.query(CategoryDB).filter(CategoryDB.id == category_id).first()
+        category = db.query(CategoryDB).filter(CategoryDB.db_id == category_id).first()
         if not category:
             raise NotFoundError(f"Category with id {category_id} not found")
         if category.parent_category_id is not None:
             raise ValueError(f"Category with id {category_id} is a sub-category and cannot be a primary category.")
 
     if subcategory_id:
-        subcategory = db.query(CategoryDB).filter(CategoryDB.id == subcategory_id).first()
+        subcategory = db.query(CategoryDB).filter(CategoryDB.db_id == subcategory_id).first()
         if not subcategory:
             raise NotFoundError(f"Sub-category with id {subcategory_id} not found")
         if subcategory.parent_category_id != category_id:
@@ -277,7 +277,7 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
 
     # Create new transaction
     db_transaction = TransactionDB(
-        id=uuid4(),
+        uuid=uuid4(),
         user_id=user_id,
         account_id=account_id,
         category_id=category_id,
@@ -333,7 +333,7 @@ def create_transaction_relationship(db: Session, user_id: int, from_transaction_
 
     # Create new relationship
     db_relationship = TransactionRelationshipDB(
-        id=uuid4(),
+        uuid=uuid4(),
         from_transaction_id=from_transaction_id,
         to_transaction_id=relationship_data.to_transaction_id,
         relationship_type=relationship_data.relationship_type,
@@ -356,7 +356,7 @@ def update_transaction_relationship(db: Session, user_id: int, relationship_id: 
 
     # Get the existing relationship
     db_relationship = db.query(TransactionRelationshipDB).filter(
-        TransactionRelationshipDB.relationship_id == relationship_id
+        TransactionRelationshipDB.db_id == relationship_id
     ).first()
 
     if not db_relationship:
@@ -399,7 +399,7 @@ def delete_transaction_relationship(db: Session, user_id: int, relationship_id: 
 
     # Get the relationship
     db_relationship = db.query(TransactionRelationshipDB).filter(
-        TransactionRelationshipDB.relationship_id == relationship_id
+        TransactionRelationshipDB.db_id == relationship_id
     ).first()
 
     if not db_relationship:
@@ -437,7 +437,7 @@ def read_db_transaction(db: Session, transaction_id: int, user_id: Optional[int]
 def read_db_transaction_by_uuid(db: Session, transaction_uuid: UUID, user_id: Optional[int] = None) -> Optional[TransactionDB]:
     """Read a transaction by UUID"""
 
-    query = db.query(TransactionDB).filter(TransactionDB.id == transaction_uuid)
+    query = db.query(TransactionDB).filter(TransactionDB.uuid == transaction_uuid)
 
     if user_id:
         query = query.filter(TransactionDB.user_id == user_id)
@@ -468,7 +468,7 @@ def _apply_transaction_filters(query, filters: TransactionFilter):
         )
     if filters.category_ids:
         split_cat_exists = exists(
-            select(TransactionSplitAllocationDB.allocation_id).where(
+            select(TransactionSplitAllocationDB.db_id).where(
                 TransactionSplitAllocationDB.transaction_id == TransactionDB.db_id,
                 TransactionSplitAllocationDB.category_id.in_(filters.category_ids),
             )
@@ -481,7 +481,7 @@ def _apply_transaction_filters(query, filters: TransactionFilter):
         )
     if filters.subcategory_ids:
         split_sub_exists = exists(
-            select(TransactionSplitAllocationDB.allocation_id).where(
+            select(TransactionSplitAllocationDB.db_id).where(
                 TransactionSplitAllocationDB.transaction_id == TransactionDB.db_id,
                 TransactionSplitAllocationDB.subcategory_id.in_(filters.subcategory_ids),
             )
@@ -573,7 +573,7 @@ def update_db_transaction(db: Session, transaction_id: int, user_id: int,
     # Store old state for balance adjustment
     old_amount = db_transaction.amount
     old_account_id = db_transaction.account_id
-    old_account = db.query(AccountDB).filter(AccountDB.id == old_account_id).first() if old_account_id else None
+    old_account = db.query(AccountDB).filter(AccountDB.db_id == old_account_id).first() if old_account_id else None
     old_txn_type = db_transaction.transaction_type
 
     # Update only the fields that are provided
@@ -604,7 +604,7 @@ def update_db_transaction(db: Session, transaction_id: int, user_id: int,
 
     if category_id is not None or subcategory_id is not None:
         if resolved_category_id:
-            category = db.query(CategoryDB).filter(CategoryDB.id == resolved_category_id).first()
+            category = db.query(CategoryDB).filter(CategoryDB.db_id == resolved_category_id).first()
             if not category:
                 raise NotFoundError(f"Category with id {resolved_category_id} not found")
             if category.parent_category_id is not None:
@@ -613,7 +613,7 @@ def update_db_transaction(db: Session, transaction_id: int, user_id: int,
         if resolved_subcategory_id:
             if not resolved_category_id:
                 raise ValueError("Cannot assign a sub-category without a primary category.")
-            subcategory = db.query(CategoryDB).filter(CategoryDB.id == resolved_subcategory_id).first()
+            subcategory = db.query(CategoryDB).filter(CategoryDB.db_id == resolved_subcategory_id).first()
             if not subcategory:
                 raise NotFoundError(f"Sub-category with id {resolved_subcategory_id} not found")
             if subcategory.parent_category_id != resolved_category_id:
@@ -647,7 +647,7 @@ def update_db_transaction(db: Session, transaction_id: int, user_id: int,
             db.query(TransactionSplitAllocationDB).filter(
                 TransactionSplitAllocationDB.transaction_id == db_transaction.db_id
             ).delete()
-            logger.info(f"Cleared split allocations for transaction {db_transaction.id} — amount changed")
+            logger.info(f"Cleared split allocations for transaction {db_transaction.uuid} — amount changed")
 
     # Always update the updated_at timestamp
     db_transaction.updated_at = datetime.utcnow()
@@ -664,10 +664,10 @@ def update_db_transaction(db: Session, transaction_id: int, user_id: int,
             # Reverse old effect from OLD account
             if old_account:
                 reversed_balance = _reverse_balance_effect(old_account, old_txn_type, old_amount)
-                update_account_balance(db, old_account.id, reversed_balance)
+                update_account_balance(db, old_account.db_id, reversed_balance)
             # Apply new effect to NEW account
             if db_transaction.account_id:
-                new_account = db.query(AccountDB).filter(AccountDB.id == db_transaction.account_id).first()
+                new_account = db.query(AccountDB).filter(AccountDB.db_id == db_transaction.account_id).first()
                 if new_account:
                     update_account_balance_from_transaction(db, new_account, db_transaction)
         
@@ -689,7 +689,7 @@ def delete_db_transaction(db: Session, transaction_id: int, user_id: int) -> boo
         raise NotFoundError(f"Transaction with id {transaction_id} not found")
 
     # Get account for balance adjustment
-    account = db.query(AccountDB).filter(AccountDB.id == db_transaction.account_id).first()
+    account = db.query(AccountDB).filter(AccountDB.db_id == db_transaction.account_id).first()
 
     try:
         # Store transaction info for balance adjustment and snapshot recalculation
@@ -704,7 +704,7 @@ def delete_db_transaction(db: Session, transaction_id: int, user_id: int) -> boo
         # Update account balance (reverse the transaction)
         if account:
             new_balance = _reverse_balance_effect(account, transaction_type, transaction_amount)
-            update_account_balance(db, account.id, new_balance)
+            update_account_balance(db, account.db_id, new_balance)
 
         # Trigger snapshot recalculation from deleted transaction's date
         if account_id:
@@ -728,7 +728,7 @@ def bulk_create_transactions(db: Session, user_id: int, transaction_import: Tran
 
     # Verify account exists and belongs to user
     account = db.query(AccountDB).filter(
-        AccountDB.id == account_id,
+        AccountDB.db_id == account_id,
         AccountDB.user_id == user_id
     ).first()
     if not account:
@@ -746,7 +746,7 @@ def bulk_create_transactions(db: Session, user_id: int, transaction_import: Tran
             # Generate hash for deduplication
             transaction_hash = generate_transaction_hash(
                 user_id=user_id,
-                account_id=account.id,
+                account_id=account.db_id,
                 transaction_date=transaction_data.transaction_date,
                 transaction_type_value=transaction_data.transaction_type.value,
                 amount=transaction_data.amount,
@@ -768,7 +768,7 @@ def bulk_create_transactions(db: Session, user_id: int, transaction_import: Tran
                 continue
 
             db_transaction = TransactionDB(
-                id=uuid4(),
+                uuid=uuid4(),
                 user_id=user_id,
                 account_id=account_id,
                 category_id=None,
@@ -884,7 +884,7 @@ def update_account_balance_from_transaction(db: Session, account: AccountDB, tra
         else:
             raise ValueError(f"Unhandled transaction type: {transaction.transaction_type}")
 
-    update_account_balance(db, account.id, new_balance)
+    update_account_balance(db, account.db_id, new_balance)
 
 
 def get_transaction_stats(db: Session, user_id: int, filters: Optional[TransactionFilter] = None) -> TransactionStats:
@@ -1024,8 +1024,8 @@ def get_monthly_averages(db: Session, user_id: int, year: int, month: Optional[i
     # Batch-load all categories
     cat_map: Dict[int, CategoryDB] = {}
     if cat_ids_needed:
-        cats = db.query(CategoryDB).filter(CategoryDB.id.in_(cat_ids_needed)).all()
-        cat_map = {c.id: c for c in cats}
+        cats = db.query(CategoryDB).filter(CategoryDB.db_id.in_(cat_ids_needed)).all()
+        cat_map = {c.db_id: c for c in cats}
 
     # Build per-split-txn lookup: {txn_db_id: [alloc, ...]}
     split_map: Dict[int, list] = defaultdict(list)
@@ -1245,7 +1245,7 @@ def set_transaction_splits(db: Session, user_id: int, transaction_uuid: UUID,
             all_uuids.add(alloc.subcategory_uuid)
 
     categories = read_db_categories_by_uuids(db, list(all_uuids))
-    uuid_to_id = {c.uuid: c.id for c in categories}
+    uuid_to_id = {c.uuid: c.db_id for c in categories}
 
     missing = all_uuids - set(uuid_to_id.keys())
     if missing:
@@ -1259,7 +1259,7 @@ def set_transaction_splits(db: Session, user_id: int, transaction_uuid: UUID,
     # Create new allocations
     for alloc in split_request.allocations:
         db_alloc = TransactionSplitAllocationDB(
-            id=uuid4(),
+            uuid=uuid4(),
             transaction_id=txn.db_id,
             category_id=uuid_to_id[alloc.category_uuid],
             subcategory_id=uuid_to_id.get(alloc.subcategory_uuid),
@@ -1331,7 +1331,7 @@ def bulk_create_transactions_from_parsed_data(
     if account_id:
         account = (
             db.query(AccountDB)
-            .filter(AccountDB.id == account_id, AccountDB.user_id == user_id)
+            .filter(AccountDB.db_id == account_id, AccountDB.user_id == user_id)
             .first()
         )
         if not account:
@@ -1359,7 +1359,7 @@ def bulk_create_transactions_from_parsed_data(
 
         transaction_hash = generate_transaction_hash(
             user_id=user_id,
-            account_id=account.id if account else 0,
+            account_id=account.db_id if account else 0,
             transaction_date=t_data.transaction_date,
             transaction_type_value=transaction_type_enum.value,
             amount=t_data.amount,
@@ -1387,7 +1387,7 @@ def bulk_create_transactions_from_parsed_data(
             logger.debug(f"Found duplicate transaction in database (will create anyway): {t_data.transaction_date} - {t_data.description}")
 
         db_transaction = TransactionDB(
-            id=uuid4(),
+            uuid=uuid4(),
             user_id=user_id,
             account_id=account_id,
             transaction_hash=transaction_hash,
@@ -1431,12 +1431,12 @@ def bulk_update_db_transactions(db: Session, user_id: int, transaction_ids: List
     # Fetch transactions to ensure they belong to the user and exist
     transactions_to_update = db.query(TransactionDB).filter(
         TransactionDB.user_id == user_id,
-        TransactionDB.id.in_(transaction_ids)
+        TransactionDB.uuid.in_(transaction_ids)
     ).all()
     
     if len(transactions_to_update) != len(transaction_ids):
         # This indicates that some transaction IDs were not found or didn't belong to the user
-        found_ids = {t.id for t in transactions_to_update}
+        found_ids = {t.uuid for t in transactions_to_update}
         missing_ids = set(transaction_ids) - found_ids
         raise NotFoundError(f"Transactions with IDs {missing_ids} not found or not owned by user.")
 
@@ -1446,7 +1446,7 @@ def bulk_update_db_transactions(db: Session, user_id: int, transaction_ids: List
     # For this use case, it's acceptable.
     update_query = db.query(TransactionDB).filter(
         TransactionDB.user_id == user_id,
-        TransactionDB.id.in_(transaction_ids)
+        TransactionDB.uuid.in_(transaction_ids)
     )
     
     # Add updated_at timestamp
@@ -1476,7 +1476,7 @@ def update_db_transaction_by_uuid(db: Session, transaction_uuid: UUID, user_id: 
 
     # Get the existing transaction by UUID
     db_transaction = db.query(TransactionDB).filter(
-        TransactionDB.id == transaction_uuid,
+        TransactionDB.uuid == transaction_uuid,
         TransactionDB.user_id == user_id
     ).first()
 
@@ -1494,7 +1494,7 @@ def delete_db_transaction_by_uuid(db: Session, transaction_uuid: UUID, user_id: 
     """Delete a transaction by UUID (for API endpoints)"""
 
     db_transaction = db.query(TransactionDB).filter(
-        TransactionDB.id == transaction_uuid,
+        TransactionDB.uuid == transaction_uuid,
         TransactionDB.user_id == user_id
     ).first()
 
@@ -1510,7 +1510,7 @@ def read_transaction_relationships_by_uuid(
 ) -> List[TransactionRelationshipDB]:
     """Read all relationships for a transaction by UUID"""
     transaction = db.query(TransactionDB).filter(
-        TransactionDB.id == transaction_uuid,
+        TransactionDB.uuid == transaction_uuid,
         TransactionDB.user_id == user_id
     ).first()
     if not transaction:
@@ -1533,14 +1533,14 @@ def create_transaction_relationship_by_uuid(db: Session, user_id: int, from_tran
                                             relationship_data: 'TransactionRelationshipCreateByUUID') -> TransactionRelationshipDB:
     """Create a relationship between two transactions using UUIDs"""
     from_transaction = db.query(TransactionDB).filter(
-        TransactionDB.id == from_transaction_uuid,
+        TransactionDB.uuid == from_transaction_uuid,
         TransactionDB.user_id == user_id
     ).first()
     if not from_transaction:
         raise NotFoundError(f"Transaction not found")
 
     to_transaction = db.query(TransactionDB).filter(
-        TransactionDB.id == relationship_data.to_transaction_uuid,
+        TransactionDB.uuid == relationship_data.to_transaction_uuid,
         TransactionDB.user_id == user_id
     ).first()
     if not to_transaction:
@@ -1552,7 +1552,7 @@ def create_transaction_relationship_by_uuid(db: Session, user_id: int, from_tran
         validate_refund_allocation(db, to_transaction.db_id, relationship_data.amount_allocated)
 
     db_relationship = TransactionRelationshipDB(
-        id=uuid4(),
+        uuid=uuid4(),
         from_transaction_id=from_transaction.db_id,
         to_transaction_id=to_transaction.db_id,
         relationship_type=relationship_data.relationship_type,
@@ -1567,7 +1567,7 @@ def create_transaction_relationship_by_uuid(db: Session, user_id: int, from_tran
         db_relationship = db.query(TransactionRelationshipDB).options(
             joinedload(TransactionRelationshipDB.from_transaction),
             joinedload(TransactionRelationshipDB.to_transaction),
-        ).filter(TransactionRelationshipDB.id == db_relationship.id).first()
+        ).filter(TransactionRelationshipDB.uuid == db_relationship.uuid).first()
         return db_relationship
     except IntegrityError:
         db.rollback()
@@ -1578,7 +1578,7 @@ def update_transaction_relationship_by_uuid(db: Session, user_id: int, relations
                                             relationship_updates: dict) -> TransactionRelationshipDB:
     """Update a transaction relationship by UUID"""
     db_relationship = db.query(TransactionRelationshipDB).filter(
-        TransactionRelationshipDB.id == relationship_uuid
+        TransactionRelationshipDB.uuid == relationship_uuid
     ).first()
 
     if not db_relationship:
@@ -1598,7 +1598,7 @@ def update_transaction_relationship_by_uuid(db: Session, user_id: int, relations
     if new_type in ABSORBING_RELATIONSHIP_TYPES and new_amount is not None:
         validate_refund_allocation(
             db, db_relationship.to_transaction_id, new_amount,
-            exclude_relationship_id=db_relationship.relationship_id,
+            exclude_relationship_id=db_relationship.db_id,
         )
 
     for field, value in relationship_updates.items():
@@ -1611,7 +1611,7 @@ def update_transaction_relationship_by_uuid(db: Session, user_id: int, relations
         db_relationship = db.query(TransactionRelationshipDB).options(
             joinedload(TransactionRelationshipDB.from_transaction),
             joinedload(TransactionRelationshipDB.to_transaction),
-        ).filter(TransactionRelationshipDB.id == db_relationship.id).first()
+        ).filter(TransactionRelationshipDB.uuid == db_relationship.uuid).first()
         return db_relationship
     except IntegrityError:
         db.rollback()
@@ -1621,7 +1621,7 @@ def update_transaction_relationship_by_uuid(db: Session, user_id: int, relations
 def delete_transaction_relationship_by_uuid(db: Session, user_id: int, relationship_uuid: UUID) -> bool:
     """Delete a transaction relationship by UUID"""
     db_relationship = db.query(TransactionRelationshipDB).filter(
-        TransactionRelationshipDB.id == relationship_uuid
+        TransactionRelationshipDB.uuid == relationship_uuid
     ).first()
 
     if not db_relationship:
@@ -1700,7 +1700,7 @@ def create_or_replace_amortization_schedule(
     # Insert new rows
     for month_date, amount in alloc_pairs:
         db.add(TransactionAmortizationScheduleDB(
-            id=uuid4(),
+            uuid=uuid4(),
             transaction_id=txn.db_id,
             month_date=month_date,
             amount=amount,
@@ -1763,7 +1763,7 @@ def _build_amortization_response_from_rows(
     entries = []
     for r in rows:
         entries.append(AmortizationScheduleEntry(
-            id=r.id,
+            id=r.uuid,
             month=r.month_date.strftime("%Y-%m"),
             amount=r.amount,
             category_uuid=cat_uuid,
@@ -1772,7 +1772,7 @@ def _build_amortization_response_from_rows(
             subcategory_name=subcat_name,
         ))
     return AmortizationScheduleResponse(
-        transaction_uuid=txn.id,
+        transaction_uuid=txn.uuid,
         total_amount=abs(txn.amount),
         num_months=len(entries),
         allocations=entries,

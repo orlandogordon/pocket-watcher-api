@@ -34,7 +34,7 @@ class UserDB(Base):
 
     # Core User Identification
     db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     
     # Authentication
     email: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -82,13 +82,13 @@ class CategoryDB(Base):
         Index("idx_category_name", "name"),
     )
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    parent_category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
+    parent_category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.db_id"))
     
     # Relationship to self for subcategories
-    parent = relationship("CategoryDB", remote_side=[id], back_populates="children")
+    parent = relationship("CategoryDB", remote_side=[db_id], back_populates="children")
     children = relationship("CategoryDB", back_populates="parent")
 
     # Relationships to budget categories
@@ -156,8 +156,8 @@ class BudgetTemplateDB(Base):
     )
 
     # Primary Key
-    template_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
 
     # Foreign Key
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
@@ -185,13 +185,13 @@ class BudgetTemplateCategoryDB(Base):
     )
 
     # Primary Key
-    allocation_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
 
     # Foreign Keys
-    template_id: Mapped[int] = mapped_column(ForeignKey("budget_templates.template_id"))
-    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"))
-    subcategory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
+    template_id: Mapped[int] = mapped_column(ForeignKey("budget_templates.db_id"))
+    category_id: Mapped[int] = mapped_column(ForeignKey("categories.db_id"))
+    subcategory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.db_id"))
 
     # Budget Allocation
     allocated_amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
@@ -215,12 +215,12 @@ class BudgetMonthDB(Base):
     )
 
     # Primary Key
-    month_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
 
     # Foreign Keys
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
-    template_id: Mapped[Optional[int]] = mapped_column(ForeignKey("budget_templates.template_id"))
+    template_id: Mapped[Optional[int]] = mapped_column(ForeignKey("budget_templates.db_id"))
 
     # Month Data
     year: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -248,11 +248,11 @@ class InvestmentHoldingDB(Base):
     )
 
     # Primary Key
-    holding_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
 
     # Foreign Key
-    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.db_id"))
 
     # Holding Data
     symbol: Mapped[str] = mapped_column(String(20), nullable=False)  # e.g., "AAPL", "VTSAX", "AAPL250117C00150000"
@@ -293,17 +293,17 @@ class InvestmentTransactionDB(Base):
     )
 
     # Primary Key (internal)
-    investment_transaction_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
 
     # External-facing UUID (for API consistency with regular transactions)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
 
     # Foreign Keys
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"), nullable=False)
-    account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))
-    holding_id: Mapped[Optional[int]] = mapped_column(ForeignKey("investment_holdings.holding_id"))  # Optional for dividends, etc.
+    account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.db_id"))
+    holding_id: Mapped[Optional[int]] = mapped_column(ForeignKey("investment_holdings.db_id"))  # Optional for dividends, etc.
     # Document that imported this row (#59); null for manual/API rows.
-    upload_job_id: Mapped[Optional[int]] = mapped_column(ForeignKey("upload_jobs.id"))
+    upload_job_id: Mapped[Optional[int]] = mapped_column(ForeignKey("upload_jobs.db_id"))
 
     # Deduplication & Source Tracking
     transaction_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -356,12 +356,12 @@ class DebtPaymentDB(Base):
     )
 
     # Primary Key
-    payment_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
 
     # Foreign Keys
-    loan_account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))  # The loan account
-    payment_source_account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))  # Checking account used for payment
+    loan_account_id: Mapped[int] = mapped_column(ForeignKey("accounts.db_id"))  # The loan account
+    payment_source_account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.db_id"))  # Checking account used for payment
     transaction_id: Mapped[Optional[int]] = mapped_column(ForeignKey("transactions.db_id", ondelete="SET NULL"))  # Links to bank statement transaction (SET NULL on delete: payment history survives)
     
     # Payment Data
@@ -396,8 +396,8 @@ class DebtRepaymentPlanDB(Base):
         UniqueConstraint("user_id", "plan_name", name="uq_user_debt_plan_name"),
     )
 
-    plan_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
     plan_name: Mapped[str] = mapped_column(String(255), nullable=False)
     strategy: Mapped[DebtStrategy] = mapped_column(Enum(DebtStrategy), default=DebtStrategy.CUSTOM)
@@ -414,8 +414,8 @@ class DebtRepaymentPlanDB(Base):
 class DebtPlanAccountLinkDB(Base):
     __tablename__ = "debt_plan_account_links"
 
-    plan_id: Mapped[int] = mapped_column(ForeignKey("debt_repayment_plans.plan_id"), primary_key=True)
-    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("debt_repayment_plans.db_id"), primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.db_id"), primary_key=True)
     priority: Mapped[int] = mapped_column(Integer, default=0)
 
     plan = relationship("DebtRepaymentPlanDB", back_populates="linked_accounts")
@@ -429,10 +429,10 @@ class DebtRepaymentScheduleDB(Base):
         UniqueConstraint("user_id", "account_id", "payment_month", name="uq_user_account_month_payment"),
     )
 
-    schedule_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
-    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.db_id"))
 
     payment_month: Mapped[date] = mapped_column(Date, nullable=False)
     scheduled_payment_amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
@@ -454,14 +454,14 @@ class TransactionDB(Base):
 
     # Core Transaction Identification
     db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
-    account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))
-    category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
-    subcategory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
+    account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.db_id"))
+    category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.db_id"))
+    subcategory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.db_id"))
     # Document that imported this row (#59) — lets a document delete cascade to
     # the transactions it created. Null for manually-entered rows.
-    upload_job_id: Mapped[Optional[int]] = mapped_column(ForeignKey("upload_jobs.id"))
+    upload_job_id: Mapped[Optional[int]] = mapped_column(ForeignKey("upload_jobs.db_id"))
 
     # Deduplication & Source Tracking
     transaction_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -531,16 +531,16 @@ class TransactionRelationshipDB(Base):
         ),
     )
 
-    relationship_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
 
     from_transaction_id: Mapped[Optional[int]] = mapped_column(ForeignKey("transactions.db_id", ondelete="CASCADE"), nullable=True)
     to_transaction_id: Mapped[Optional[int]] = mapped_column(ForeignKey("transactions.db_id", ondelete="CASCADE"), nullable=True)
     from_investment_transaction_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("investment_transactions.investment_transaction_id", ondelete="CASCADE"), nullable=True
+        ForeignKey("investment_transactions.db_id", ondelete="CASCADE"), nullable=True
     )
     to_investment_transaction_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("investment_transactions.investment_transaction_id", ondelete="CASCADE"), nullable=True
+        ForeignKey("investment_transactions.db_id", ondelete="CASCADE"), nullable=True
     )
 
     relationship_type: Mapped[RelationshipType] = mapped_column(Enum(RelationshipType))
@@ -580,20 +580,20 @@ class DismissedTransferPairDB(Base):
         ),
     )
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id", ondelete="CASCADE"), nullable=False)
 
     from_transaction_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("transactions.db_id", ondelete="CASCADE"), nullable=True
     )
     from_investment_transaction_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("investment_transactions.investment_transaction_id", ondelete="CASCADE"), nullable=True
+        ForeignKey("investment_transactions.db_id", ondelete="CASCADE"), nullable=True
     )
     to_transaction_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("transactions.db_id", ondelete="CASCADE"), nullable=True
     )
     to_investment_transaction_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("investment_transactions.investment_transaction_id", ondelete="CASCADE"), nullable=True
+        ForeignKey("investment_transactions.db_id", ondelete="CASCADE"), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -611,11 +611,11 @@ class TransactionSplitAllocationDB(Base):
         Index("idx_split_alloc_category", "category_id"),
     )
 
-    allocation_id: Mapped[int]           = mapped_column(primary_key=True, autoincrement=True)
-    id:            Mapped[UUID]          = mapped_column(unique=True, nullable=False)
+    db_id: Mapped[int]                   = mapped_column(primary_key=True, autoincrement=True)
+    uuid:          Mapped[UUID]          = mapped_column(unique=True, nullable=False)
     transaction_id: Mapped[int]          = mapped_column(ForeignKey("transactions.db_id"))
-    category_id:   Mapped[int]           = mapped_column(ForeignKey("categories.id"))
-    subcategory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
+    category_id:   Mapped[int]           = mapped_column(ForeignKey("categories.db_id"))
+    subcategory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.db_id"))
     amount:        Mapped[Decimal]       = mapped_column(DECIMAL(15, 2), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -634,8 +634,8 @@ class TransactionAmortizationScheduleDB(Base):
         Index("idx_amortization_month", "month_date"),
     )
 
-    schedule_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     transaction_id: Mapped[int] = mapped_column(ForeignKey("transactions.db_id"))
     month_date: Mapped[date] = mapped_column(Date, nullable=False)
     amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
@@ -653,8 +653,8 @@ class TagDB(Base):
     )
 
     # Primary Key
-    tag_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
 
     # Foreign Key
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
@@ -677,7 +677,7 @@ class TransactionTagDB(Base):
 
     # Composite Primary Key
     transaction_id: Mapped[int] = mapped_column(ForeignKey("transactions.db_id"), primary_key=True)
-    tag_id: Mapped[int] = mapped_column(ForeignKey("tags.tag_id"), primary_key=True)
+    tag_id: Mapped[int] = mapped_column(ForeignKey("tags.db_id"), primary_key=True)
     
     # Audit Trail
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -696,7 +696,7 @@ class AccountDB(Base):
     )
 
     # Core Account Identification
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
 
@@ -763,11 +763,11 @@ class AccountValueHistoryDB(Base):
     )
 
     # Primary Key
-    snapshot_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
 
     # Foreign Key
-    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.db_id"))
 
     # Snapshot Data
     value_date: Mapped[date] = mapped_column(Date, nullable=False)  # The date of this snapshot
@@ -808,8 +808,8 @@ class FinancialPlanDB(Base):
         UniqueConstraint("user_id", "plan_name", name="uq_user_financial_plan_name"),
     )
 
-    plan_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
     plan_name: Mapped[str] = mapped_column(String(255), nullable=False)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -827,9 +827,9 @@ class FinancialPlanMonthDB(Base):
     __table_args__ = (
         UniqueConstraint("plan_id", "year", "month", name="uq_plan_year_month"),
     )
-    month_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
-    plan_id: Mapped[int] = mapped_column(ForeignKey("financial_plans.plan_id"))
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("financial_plans.db_id"))
     year: Mapped[int] = mapped_column(nullable=False)
     month: Mapped[int] = mapped_column(nullable=False)
     planned_income: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
@@ -842,10 +842,10 @@ class FinancialPlanMonthDB(Base):
 class FinancialPlanExpenseDB(Base):
     __tablename__ = "financial_plan_expenses"
 
-    expense_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    id: Mapped[UUID] = mapped_column(unique=True, nullable=False)
-    month_id: Mapped[int] = mapped_column(ForeignKey("financial_plan_months.month_id"))
-    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"))
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
+    month_id: Mapped[int] = mapped_column(ForeignKey("financial_plan_months.db_id"))
+    category_id: Mapped[int] = mapped_column(ForeignKey("categories.db_id"))
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
     expense_type: Mapped[str] = mapped_column(String(20), nullable=False)  # 'recurring' or 'one_time'
@@ -873,11 +873,11 @@ class SnapshotBackfillJobDB(Base):
     )
 
     # Primary Key
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
 
     # Foreign Keys
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))
-    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.db_id"))
 
     # Job Parameters
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -916,7 +916,7 @@ class BulkImportBatchDB(Base):
         Index("idx_bulk_batches_created", "created_at"),
     )
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"), nullable=False)
 
@@ -952,13 +952,13 @@ class UploadJobDB(Base):
     )
 
     # Primary Key
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)  # public id (#59)
 
     # Foreign Keys
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"), nullable=False)
-    account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.id"))
-    batch_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bulk_import_batches.id"))  # null for single-file imports
+    account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("accounts.db_id"))
+    batch_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bulk_import_batches.db_id"))  # null for single-file imports
 
     # Upload Details
     file_path: Mapped[Optional[str]] = mapped_column(String(500))  # original uploaded filename (display/reference)
@@ -1009,10 +1009,10 @@ class SkippedTransactionDB(Base):
     )
 
     # Primary Key
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
 
     # Foreign Keys
-    upload_job_id: Mapped[int] = mapped_column(ForeignKey("upload_jobs.id"), nullable=False)
+    upload_job_id: Mapped[int] = mapped_column(ForeignKey("upload_jobs.db_id"), nullable=False)
 
     # Transaction Type
     transaction_type: Mapped[str] = mapped_column(String(20), nullable=False)  # "REGULAR" or "INVESTMENT"
@@ -1028,10 +1028,10 @@ class SkippedTransactionDB(Base):
 
     # References to Existing Transactions (SET NULL on delete for audit preservation)
     existing_transaction_id: Mapped[Optional[UUID]] = mapped_column(
-        ForeignKey("transactions.id", ondelete="SET NULL")
+        ForeignKey("transactions.uuid", ondelete="SET NULL")
     )
     existing_investment_transaction_id: Mapped[Optional[UUID]] = mapped_column(
-        ForeignKey("investment_transactions.id", ondelete="SET NULL")
+        ForeignKey("investment_transactions.uuid", ondelete="SET NULL")
     )
 
     # Timestamp
@@ -1057,17 +1057,17 @@ class ParsedImportDB(Base):
         Index("idx_parsed_imports_inv_txn", "investment_transaction_id"),
     )
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
 
     # SET NULL on delete for all FKs — audit rows survive parent deletion
     upload_job_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("upload_jobs.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("upload_jobs.db_id", ondelete="SET NULL"), nullable=True
     )
     transaction_id: Mapped[Optional[UUID]] = mapped_column(
-        ForeignKey("transactions.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("transactions.uuid", ondelete="SET NULL"), nullable=True
     )
     investment_transaction_id: Mapped[Optional[UUID]] = mapped_column(
-        ForeignKey("investment_transactions.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("investment_transactions.uuid", ondelete="SET NULL"), nullable=True
     )
 
     raw_parsed_data: Mapped[dict] = mapped_column(JSON, nullable=False)

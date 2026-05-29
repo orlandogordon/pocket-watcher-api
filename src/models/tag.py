@@ -43,7 +43,7 @@ class TagUpdate(BaseModel):
 
 class TagResponse(BaseModel):
     """Tag data returned to client"""
-    id: UUID
+    id: UUID = Field(validation_alias="uuid")
     tag_name: str
     color: Optional[str]
     is_system: bool = False
@@ -74,9 +74,9 @@ class TransactionTagResponse(BaseModel):
     def resolve_uuids(cls, data):
         if hasattr(data, '__dict__'):
             if hasattr(data, 'transaction') and data.transaction:
-                data.__dict__['transaction_uuid'] = data.transaction.id
+                data.__dict__['transaction_uuid'] = data.transaction.uuid
             if hasattr(data, 'tag') and data.tag:
-                data.__dict__['tag_uuid'] = data.tag.id
+                data.__dict__['tag_uuid'] = data.tag.uuid
         return data
 
 

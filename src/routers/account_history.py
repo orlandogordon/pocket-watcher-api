@@ -77,7 +77,7 @@ def create_account_snapshot(
     try:
         snapshot = account_snapshot.create_account_snapshot(
             db=db,
-            account_id=account.id,
+            account_id=account.db_id,
             snapshot_date=snapshot_date,
             snapshot_source="MANUAL"
         )
@@ -135,7 +135,7 @@ def get_account_value_history(
     try:
         points = account_snapshot.get_account_value_history(
             db=db,
-            account_id=account.id,
+            account_id=account.db_id,
             user_id=user_id,
             start_date=start_date,
             end_date=end_date
@@ -184,7 +184,7 @@ def update_snapshot(
     try:
         snapshot = account_snapshot.update_snapshot(
             db=db,
-            account_id=account.id,
+            account_id=account.db_id,
             snapshot_uuid=parsed_snapshot_uuid,
             updates=updates,
         )
@@ -214,7 +214,7 @@ def dismiss_snapshot_reviews(
 
     dismissed_count = account_snapshot.dismiss_snapshot_reviews(
         db=db,
-        account_id=account.id,
+        account_id=account.db_id,
         snapshot_uuids=request.snapshot_uuids,
         dismiss_reason=request.reason
     )

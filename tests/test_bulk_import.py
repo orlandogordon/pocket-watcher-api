@@ -34,7 +34,7 @@ def test_process_file_imports_amex_csv(db, test_user, fake_llm):
         file_bytes=_CSV_BYTES,
         filename="amex_sample.csv",
         institution="amex",
-        account_id=account.id,
+        account_id=account.db_id,
         user_id=test_user.db_id,
     )
 
@@ -46,7 +46,7 @@ def test_process_file_imports_amex_csv(db, test_user, fake_llm):
 
     rows = (
         db.query(TransactionDB)
-        .filter(TransactionDB.account_id == account.id)
+        .filter(TransactionDB.account_id == account.db_id)
         .all()
     )
     assert len(rows) == 4
@@ -57,7 +57,7 @@ def test_process_file_imports_amex_csv(db, test_user, fake_llm):
     review_tag = get_system_tag(test_user.db_id, db, "Needs Review")
     tagged = (
         db.query(TransactionTagDB)
-        .filter(TransactionTagDB.tag_id == review_tag.tag_id)
+        .filter(TransactionTagDB.tag_id == review_tag.db_id)
         .count()
     )
     assert tagged == 4
@@ -69,7 +69,7 @@ def test_process_file_dedups_on_reupload(db, test_user, fake_llm):
         file_bytes=_CSV_BYTES,
         filename="amex_sample.csv",
         institution="amex",
-        account_id=account.id,
+        account_id=account.db_id,
         user_id=test_user.db_id,
     )
 
@@ -80,7 +80,7 @@ def test_process_file_dedups_on_reupload(db, test_user, fake_llm):
     assert second.ok
     assert second.transactions_created == 0
     assert second.transactions_skipped == 4
-    assert db.query(TransactionDB).filter(TransactionDB.account_id == account.id).count() == 4
+    assert db.query(TransactionDB).filter(TransactionDB.account_id == account.db_id).count() == 4
 
 
 def test_process_file_unknown_institution_returns_error(db, test_user, fake_llm):
@@ -91,10 +91,10 @@ def test_process_file_unknown_institution_returns_error(db, test_user, fake_llm)
         file_bytes=_CSV_BYTES,
         filename="amex_sample.csv",
         institution="not-a-real-bank",
-        account_id=account.id,
+        account_id=account.db_id,
         user_id=test_user.db_id,
     )
 
     assert not result.ok
     assert "parser" in result.error.lower()
-    assert db.query(TransactionDB).filter(TransactionDB.account_id == account.id).count() == 0
+    assert db.query(TransactionDB).filter(TransactionDB.account_id == account.db_id).count() == 0

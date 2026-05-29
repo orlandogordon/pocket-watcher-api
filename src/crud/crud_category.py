@@ -40,7 +40,7 @@ def read_db_categories(db: Session, skip: int = 0, limit: int = 100) -> List[Cat
 
 def read_db_category(db: Session, category_id: int) -> Optional[CategoryDB]:
     """Read a single category by its ID"""
-    return db.query(CategoryDB).options(joinedload(CategoryDB.parent)).filter(CategoryDB.id == category_id).first()
+    return db.query(CategoryDB).options(joinedload(CategoryDB.parent)).filter(CategoryDB.db_id == category_id).first()
 
 def update_db_category(db: Session, category_id: int, category_updates: CategoryUpdate, *, parent_category_id=_UNSET) -> CategoryDB:
     """Update a category's details"""
@@ -53,7 +53,7 @@ def update_db_category(db: Session, category_id: int, category_updates: Category
     # Check for duplicate name if name is being updated
     if 'name' in update_data:
         new_name = update_data['name'].strip()
-        existing = db.query(CategoryDB).filter(CategoryDB.name.ilike(new_name), CategoryDB.id != category_id).first()
+        existing = db.query(CategoryDB).filter(CategoryDB.name.ilike(new_name), CategoryDB.db_id != category_id).first()
         if existing:
             raise ValueError(f"Category with name '{new_name}' already exists")
         db_category.name = new_name
@@ -144,11 +144,11 @@ def update_db_category_by_uuid(db: Session, category_uuid: UUID, category_update
     db_category = read_db_category_by_uuid(db, category_uuid)
     if not db_category:
         raise NotFoundError(f"Category not found")
-    return update_db_category(db, db_category.id, category_updates, parent_category_id=parent_category_id)
+    return update_db_category(db, db_category.db_id, category_updates, parent_category_id=parent_category_id)
 
 def delete_db_category_by_uuid(db: Session, category_uuid: UUID, force: bool = False) -> bool:
     """Delete a category by UUID"""
     db_category = read_db_category_by_uuid(db, category_uuid)
     if not db_category:
         raise NotFoundError(f"Category not found")
-    return delete_db_category(db, db_category.id, force=force)
+    return delete_db_category(db, db_category.db_id, force=force)

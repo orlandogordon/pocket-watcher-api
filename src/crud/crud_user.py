@@ -42,7 +42,7 @@ def create_db_user(db: Session, user_data: UserCreate) -> UserDB:
     
     # Create new user
     db_user = UserDB(
-        id=uuid4(),
+        uuid=uuid4(),
         email=user_data.email,
         username=user_data.username,
         password_hash=hash_password(user_data.password),
@@ -73,7 +73,7 @@ def read_db_user(db: Session, user_id: int = None, user_uuid: UUID = None,
     if user_id:
         return query.filter(UserDB.db_id == user_id).first()
     elif user_uuid:
-        return query.filter(UserDB.id == user_uuid).first()
+        return query.filter(UserDB.uuid == user_uuid).first()
     elif email:
         return query.filter(UserDB.email == email.lower()).first()
     elif username:

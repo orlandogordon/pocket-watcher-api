@@ -84,7 +84,7 @@ def _build_filters(
             found = {a.uuid for a in accounts}
             missing = [str(u) for u in parsed if u not in found]
             raise HTTPException(status_code=404, detail=f"Accounts not found: {', '.join(missing)}")
-        account_ids = [a.id for a in accounts]
+        account_ids = [a.db_id for a in accounts]
 
     category_ids = None
     if category_uuids:
@@ -94,7 +94,7 @@ def _build_filters(
             found = {c.uuid for c in cats}
             missing = [str(u) for u in parsed if u not in found]
             raise HTTPException(status_code=404, detail=f"Categories not found: {', '.join(missing)}")
-        category_ids = [c.id for c in cats]
+        category_ids = [c.db_id for c in cats]
 
     subcategory_ids = None
     if subcategory_uuids:
@@ -104,17 +104,17 @@ def _build_filters(
             found = {c.uuid for c in subcats}
             missing = [str(u) for u in parsed if u not in found]
             raise HTTPException(status_code=404, detail=f"Subcategories not found: {', '.join(missing)}")
-        subcategory_ids = [c.id for c in subcats]
+        subcategory_ids = [c.db_id for c in subcats]
 
     tag_ids = None
     if tag_uuids:
         parsed = [parse_uuid(u) for u in tag_uuids]
         tags = read_db_tags_by_uuids(db, parsed, user_id)
         if len(tags) != len(parsed):
-            found = {t.id for t in tags}
+            found = {t.uuid for t in tags}
             missing = [str(u) for u in parsed if u not in found]
             raise HTTPException(status_code=404, detail=f"Tags not found: {', '.join(missing)}")
-        tag_ids = [t.tag_id for t in tags]
+        tag_ids = [t.db_id for t in tags]
 
     return TransactionFilter(
         account_ids=account_ids,
@@ -210,7 +210,7 @@ def monthly_averages(
             found = {a.uuid for a in accounts}
             missing = [str(u) for u in parsed if u not in found]
             raise HTTPException(status_code=404, detail=f"Accounts not found: {', '.join(missing)}")
-        account_ids = [a.id for a in accounts]
+        account_ids = [a.db_id for a in accounts]
 
     return get_monthly_averages(db, user_id, year, month=month, account_ids=account_ids)
 
@@ -224,21 +224,21 @@ def create_transaction(transaction: TransactionCreate, db: Session = Depends(get
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
         _reject_if_investment_account(account)
-        account_id = account.id
+        account_id = account.db_id
 
     category_id = None
     if transaction.category_uuid:
         cat = read_db_category_by_uuid(db, transaction.category_uuid)
         if not cat:
             raise HTTPException(status_code=404, detail="Category not found")
-        category_id = cat.id
+        category_id = cat.db_id
 
     subcategory_id = None
     if transaction.subcategory_uuid:
         subcat = read_db_category_by_uuid(db, transaction.subcategory_uuid)
         if not subcat:
             raise HTTPException(status_code=404, detail="Subcategory not found")
-        subcategory_id = subcat.id
+        subcategory_id = subcat.db_id
 
     try:
         db_transaction = create_db_transaction(db, user_id, transaction, account_id=account_id, category_id=category_id, subcategory_id=subcategory_id)
@@ -250,7 +250,7 @@ def create_transaction(transaction: TransactionCreate, db: Session = Depends(get
 
 @router.patch("/bulk-update")
 def bulk_update_transactions(bulk_update_data: TransactionBulkUpdate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)) -> Dict[str, Any]:
-    # Resolve transaction UUIDs - bulk_update_db_transactions filters by TransactionDB.id (UUID)
+    # Resolve transaction UUIDs - bulk_update_db_transactions filters by TransactionDB.uuid (UUID)
     transaction_ids = list(bulk_update_data.transaction_uuids)
 
     # Build update payload with resolved int IDs
@@ -262,17 +262,17 @@ def bulk_update_transactions(bulk_update_data: TransactionBulkUpdate, db: Sessio
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
         _reject_if_investment_account(account)
-        update_payload["account_id"] = account.id
+        update_payload["account_id"] = account.db_id
     if bulk_update_data.category_uuid is not None:
         cat = read_db_category_by_uuid(db, bulk_update_data.category_uuid)
         if not cat:
             raise HTTPException(status_code=404, detail="Category not found")
-        update_payload["category_id"] = cat.id
+        update_payload["category_id"] = cat.db_id
     if bulk_update_data.subcategory_uuid is not None:
         subcat = read_db_category_by_uuid(db, bulk_update_data.subcategory_uuid)
         if not subcat:
             raise HTTPException(status_code=404, detail="Subcategory not found")
-        update_payload["subcategory_id"] = subcat.id
+        update_payload["subcategory_id"] = subcat.db_id
 
     if not update_payload:
         raise HTTPException(status_code=400, detail="No update fields provided.")
@@ -299,7 +299,7 @@ def create_transactions(transaction_import: TransactionImport, db: Session = Dep
     _reject_if_investment_account(account)
 
     try:
-        created_transactions = bulk_create_transactions(db, user_id, transaction_import, account_id=account.id)
+        created_transactions = bulk_create_transactions(db, user_id, transaction_import, account_id=account.db_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except IntegrityError as e:
@@ -328,7 +328,7 @@ def update_transaction(transaction_uuid: str, transaction: TransactionUpdate, db
             if not account:
                 raise HTTPException(status_code=404, detail="Account not found")
             _reject_if_investment_account(account)
-            account_id = account.id
+            account_id = account.db_id
         else:
             clear_account = True
 
@@ -340,7 +340,7 @@ def update_transaction(transaction_uuid: str, transaction: TransactionUpdate, db
             cat = read_db_category_by_uuid(db, transaction.category_uuid)
             if not cat:
                 raise HTTPException(status_code=404, detail="Category not found")
-            category_id = cat.id
+            category_id = cat.db_id
         else:
             clear_category = True
 
@@ -351,7 +351,7 @@ def update_transaction(transaction_uuid: str, transaction: TransactionUpdate, db
             subcat = read_db_category_by_uuid(db, transaction.subcategory_uuid)
             if not subcat:
                 raise HTTPException(status_code=404, detail="Subcategory not found")
-            subcategory_id = subcat.id
+            subcategory_id = subcat.db_id
         else:
             clear_subcategory = True
 

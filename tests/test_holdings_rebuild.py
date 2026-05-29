@@ -37,7 +37,7 @@ def _buy(db, user, account, **kw):
 
 
 def _holdings_by_symbol(db, account):
-    return {h.symbol: h for h in rebuild_holdings_from_transactions(db, account.id)}
+    return {h.symbol: h for h in rebuild_holdings_from_transactions(db, account.db_id)}
 
 
 def test_weighted_average_cost_basis_across_buys(db, user, account):

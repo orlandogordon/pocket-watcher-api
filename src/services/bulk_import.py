@@ -66,7 +66,7 @@ def _build_result_lookup(parsed_txns, results: list[CleanedResult]) -> dict:
 
 
 def _resolve_category_uuids(db: Session, suggestions: list[dict]) -> dict:
-    """Map predefined category UUIDs (string) -> CategoryDB.id (int) for every
+    """Map predefined category UUIDs (string) -> CategoryDB.db_id (int) for every
     UUID referenced by the batch's suggestions."""
     uuids = set()
     for s in suggestions:
@@ -77,11 +77,11 @@ def _resolve_category_uuids(db: Session, suggestions: list[dict]) -> dict:
     if not uuids:
         return {}
     rows = (
-        db.query(CategoryDB.uuid, CategoryDB.id)
+        db.query(CategoryDB.uuid, CategoryDB.db_id)
         .filter(CategoryDB.uuid.in_([UUID(u) for u in uuids]))
         .all()
     )
-    return {str(r.uuid): r.id for r in rows}
+    return {str(r.uuid): r.db_id for r in rows}
 
 
 def _apply_cleanup_to_created(db, user_id, created_rows, parsed_txns, results: list[CleanedResult],
@@ -151,7 +151,7 @@ def _apply_cleanup_to_created(db, user_id, created_rows, parsed_txns, results: l
         for row in needs_review_rows:
             db.add(TransactionTagDB(
                 transaction_id=row.db_id,
-                tag_id=needs_review_tag.tag_id,
+                tag_id=needs_review_tag.db_id,
             ))
         needs_review_count = len(needs_review_rows)
 

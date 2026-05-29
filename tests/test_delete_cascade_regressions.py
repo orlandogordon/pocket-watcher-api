@@ -47,7 +47,7 @@ class DeleteCascadeBase(unittest.TestCase):
         self.Session = sessionmaker(bind=self.engine)
         self.session = self.Session()
 
-        self.user = UserDB(id=uuid4(), email="t@x", username="t", password_hash="x")
+        self.user = UserDB(uuid=uuid4(), email="t@x", username="t", password_hash="x")
         self.session.add(self.user)
         self.session.flush()
 
@@ -72,7 +72,7 @@ class DeleteCascadeBase(unittest.TestCase):
 
     def _make_transaction(self, amount=100, txn_type=TransactionType.PURCHASE) -> TransactionDB:
         t = TransactionDB(
-            id=uuid4(), user_id=self.user.db_id, account_id=self.account.id,
+            uuid=uuid4(), user_id=self.user.db_id, account_id=self.account.db_id,
             transaction_hash=str(uuid4()), source_type=SourceType.MANUAL,
             transaction_date=date(2026, 1, 1), amount=Decimal(str(amount)),
             transaction_type=txn_type, description="test",
@@ -83,7 +83,7 @@ class DeleteCascadeBase(unittest.TestCase):
 
     def _make_investment_transaction(self) -> InvestmentTransactionDB:
         t = InvestmentTransactionDB(
-            id=uuid4(), user_id=self.user.db_id, account_id=self.account.id,
+            uuid=uuid4(), user_id=self.user.db_id, account_id=self.account.db_id,
             transaction_hash=str(uuid4()),
             transaction_type=InvestmentTransactionType.BUY,
             total_amount=Decimal("100"), transaction_date=date(2026, 1, 1),
@@ -100,7 +100,7 @@ class TestRegularTransactionDelete(DeleteCascadeBase):
     def test_delete_with_split_allocations(self):
         t = self._make_transaction()
         split = TransactionSplitAllocationDB(
-            id=uuid4(), transaction_id=t.db_id, category_id=self.category.id,
+            uuid=uuid4(), transaction_id=t.db_id, category_id=self.category.db_id,
             amount=Decimal("100"),
         )
         self.session.add(split)
@@ -113,7 +113,7 @@ class TestRegularTransactionDelete(DeleteCascadeBase):
     def test_delete_with_amortization_schedule(self):
         t = self._make_transaction()
         sched = TransactionAmortizationScheduleDB(
-            id=uuid4(), transaction_id=t.db_id,
+            uuid=uuid4(), transaction_id=t.db_id,
             month_date=date(2026, 1, 1), amount=Decimal("100"),
         )
         self.session.add(sched)
@@ -125,10 +125,10 @@ class TestRegularTransactionDelete(DeleteCascadeBase):
 
     def test_delete_with_tag_m2m(self):
         t = self._make_transaction()
-        tag = TagDB(id=uuid4(), user_id=self.user.db_id, tag_name="recurring")
+        tag = TagDB(uuid=uuid4(), user_id=self.user.db_id, tag_name="recurring")
         self.session.add(tag)
         self.session.flush()
-        link = TransactionTagDB(transaction_id=t.db_id, tag_id=tag.tag_id)
+        link = TransactionTagDB(transaction_id=t.db_id, tag_id=tag.db_id)
         self.session.add(link)
         self.session.commit()
 
@@ -142,7 +142,7 @@ class TestRegularTransactionDelete(DeleteCascadeBase):
         t1 = self._make_transaction(amount=100, txn_type=TransactionType.TRANSFER_OUT)
         t2 = self._make_transaction(amount=100, txn_type=TransactionType.TRANSFER_IN)
         rel = TransactionRelationshipDB(
-            id=uuid4(), relationship_type=RelationshipType.OFFSETS,
+            uuid=uuid4(), relationship_type=RelationshipType.OFFSETS,
             from_transaction_id=t1.db_id, to_transaction_id=t2.db_id,
         )
         self.session.add(rel)
@@ -158,13 +158,13 @@ class TestRegularTransactionDelete(DeleteCascadeBase):
         """Audit row survives; transaction_id FK gets nulled."""
         t = self._make_transaction()
         job = UploadJobDB(
-            uuid=uuid4(), user_id=self.user.db_id, account_id=self.account.id,
+            uuid=uuid4(), user_id=self.user.db_id, account_id=self.account.db_id,
             institution="test", status="COMPLETED",
         )
         self.session.add(job)
         self.session.flush()
         pi = ParsedImportDB(
-            upload_job_id=job.id, transaction_id=t.id,
+            upload_job_id=job.db_id, transaction_id=t.uuid,
             raw_parsed_data={"foo": "bar"},
         )
         self.session.add(pi)
@@ -180,19 +180,19 @@ class TestRegularTransactionDelete(DeleteCascadeBase):
     def test_delete_with_skipped_transaction_sets_null(self):
         t = self._make_transaction()
         job = UploadJobDB(
-            uuid=uuid4(), user_id=self.user.db_id, account_id=self.account.id,
+            uuid=uuid4(), user_id=self.user.db_id, account_id=self.account.db_id,
             institution="test", status="COMPLETED",
         )
         self.session.add(job)
         self.session.flush()
         sk = SkippedTransactionDB(
-            upload_job_id=job.id,
+            upload_job_id=job.db_id,
             transaction_type="REGULAR",
             parsed_date=date(2026, 1, 1),
             parsed_amount=Decimal("100"),
             parsed_description="dup",
             parsed_transaction_type="PURCHASE",
-            existing_transaction_id=t.id,
+            existing_transaction_id=t.uuid,
         )
         self.session.add(sk)
         self.session.commit()
@@ -220,9 +220,9 @@ class TestInvestmentTransactionDelete(DeleteCascadeBase):
         self.session.flush()
 
         rel = TransactionRelationshipDB(
-            id=uuid4(), relationship_type=RelationshipType.OFFSETS,
+            uuid=uuid4(), relationship_type=RelationshipType.OFFSETS,
             from_transaction_id=regular.db_id,
-            to_investment_transaction_id=inv.investment_transaction_id,
+            to_investment_transaction_id=inv.db_id,
         )
         self.session.add(rel)
         self.session.commit()
@@ -241,7 +241,7 @@ class TestInvestmentTransactionDelete(DeleteCascadeBase):
         dismissal = DismissedTransferPairDB(
             user_id=self.user.db_id,
             from_transaction_id=regular.db_id,
-            to_investment_transaction_id=inv.investment_transaction_id,
+            to_investment_transaction_id=inv.db_id,
             created_at=datetime.utcnow(),
         )
         self.session.add(dismissal)

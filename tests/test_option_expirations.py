@@ -25,7 +25,7 @@ from src.services.option_expirations import (
 
 
 def _seed_investment_account(session):
-    user = UserDB(id=uuid4(), email="t@x.com", username="t", password_hash="x")
+    user = UserDB(uuid=uuid4(), email="t@x.com", username="t", password_hash="x")
     session.add(user)
     session.flush()
     account = AccountDB(
@@ -42,7 +42,7 @@ def _buy_option(session, user, account, *, api_symbol, txn_date, qty="1",
                 price="4.85"):
     underlying = api_symbol.split("2")[0]
     txn = InvestmentTransactionDB(
-        id=uuid4(), user_id=user.db_id, account_id=account.id,
+        uuid=uuid4(), user_id=user.db_id, account_id=account.db_id,
         transaction_hash=str(uuid4()),
         transaction_type=InvestmentTransactionType.BUY,
         symbol=underlying, api_symbol=api_symbol,
@@ -59,7 +59,7 @@ def _sell_option(session, user, account, *, api_symbol, txn_date, qty="1",
                  price="3.00"):
     underlying = api_symbol.split("2")[0]
     txn = InvestmentTransactionDB(
-        id=uuid4(), user_id=user.db_id, account_id=account.id,
+        uuid=uuid4(), user_id=user.db_id, account_id=account.db_id,
         transaction_hash=str(uuid4()),
         transaction_type=InvestmentTransactionType.SELL,
         symbol=underlying, api_symbol=api_symbol,

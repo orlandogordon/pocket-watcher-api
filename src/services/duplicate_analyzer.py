@@ -33,7 +33,7 @@ def _hash_regular_transaction(
 def _serialize_existing_transaction(txn: TransactionDB) -> Dict:
     """Serialize an existing DB transaction for the preview response."""
     return {
-        "id": str(txn.id),
+        "id": str(txn.uuid),
         "transaction_date": str(txn.transaction_date),
         "amount": str(txn.amount),
         "description": txn.description,
@@ -46,7 +46,7 @@ def _serialize_existing_transaction(txn: TransactionDB) -> Dict:
 def _serialize_existing_investment_transaction(txn: InvestmentTransactionDB) -> Dict:
     """Serialize an existing DB investment transaction for the preview response."""
     return {
-        "id": str(txn.id),
+        "id": str(txn.uuid),
         "transaction_date": str(txn.transaction_date),
         "transaction_type": txn.transaction_type.value,
         "symbol": txn.symbol,
@@ -146,7 +146,7 @@ def analyze_regular_transactions(
             if is_db_duplicate:
                 existing_txn = existing_hashes[base_hash]
                 duplicate_info["existing_transaction"] = _serialize_existing_transaction(existing_txn)
-                duplicate_info["existing_transaction_id"] = str(existing_txn.id)
+                duplicate_info["existing_transaction_id"] = str(existing_txn.uuid)
             if is_within_statement_duplicate:
                 first = within_statement[base_hash]
                 duplicate_info["first_occurrence_temp_id"] = first["temp_id"]
@@ -276,7 +276,7 @@ def analyze_investment_transactions(
             if is_db_duplicate:
                 existing_txn = existing_hashes[base_hash]
                 duplicate_info["existing_transaction"] = _serialize_existing_investment_transaction(existing_txn)
-                duplicate_info["existing_transaction_id"] = str(existing_txn.id)
+                duplicate_info["existing_transaction_id"] = str(existing_txn.uuid)
             if is_within_statement_duplicate:
                 first = within_statement[base_hash]
                 duplicate_info["first_occurrence_temp_id"] = first["temp_id"]

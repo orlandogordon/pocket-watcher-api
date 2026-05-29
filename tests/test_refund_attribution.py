@@ -35,7 +35,7 @@ def account(db, user):
 
 def _rel(db, from_txn, to_txn, rtype, amount):
     rel = TransactionRelationshipDB(
-        id=uuid4(),
+        uuid=uuid4(),
         from_transaction_id=from_txn.db_id,
         to_transaction_id=to_txn.db_id,
         relationship_type=rtype,
@@ -117,7 +117,7 @@ def test_validate_excludes_relationship_being_updated(db, user, account):
     refund = make_transaction(db, user, account, amount=Decimal("80.00"))
     rel = _rel(db, refund, original, RelationshipType.REFUNDS, "80.00")
     # Updating that same rel to 90 must not double-count its old 80.
-    validate_refund_allocation(db, original.db_id, Decimal("90.00"), exclude_relationship_id=rel.relationship_id)
+    validate_refund_allocation(db, original.db_id, Decimal("90.00"), exclude_relationship_id=rel.db_id)
 
 
 def test_validate_missing_original_is_silent(db):

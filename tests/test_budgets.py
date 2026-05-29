@@ -18,7 +18,7 @@ pytestmark = pytest.mark.integration
 
 def _parent_and_sub(db):
     parent = make_category(db, name="Food")
-    sub = make_category(db, name="Groceries", parent_category_id=parent.id)
+    sub = make_category(db, name="Groceries", parent_category_id=parent.db_id)
     return parent, sub
 
 

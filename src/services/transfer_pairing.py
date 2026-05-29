@@ -135,13 +135,13 @@ def _load_unpaired_investment(
         InvestmentTransactionDB.user_id == user_id,
         InvestmentTransactionDB.transaction_type == txn_type,
         InvestmentTransactionDB.account_id.is_not(None),
-        ~InvestmentTransactionDB.investment_transaction_id.in_(rel_subq),
+        ~InvestmentTransactionDB.db_id.in_(rel_subq),
     ).all()
 
     return [
         TxnSide(
             is_investment=True,
-            txn_id=r.investment_transaction_id,
+            txn_id=r.db_id,
             user_id=r.user_id,
             account_id=r.account_id,
             transaction_date=r.transaction_date,
@@ -212,7 +212,7 @@ def find_pair_suggestions(db: Session, user_id: int) -> list[PairCandidate]:
         + _load_unpaired_investment(db, user_id, InvestmentTransactionType.TRANSFER_IN)
     )
     dismissed = _load_dismissed_pairs(db, user_id)
-    accounts_by_id = {a.id: a for a in db.query(AccountDB).filter(AccountDB.user_id == user_id).all()}
+    accounts_by_id = {a.db_id: a for a in db.query(AccountDB).filter(AccountDB.user_id == user_id).all()}
 
     candidates: list[PairCandidate] = []
     for out_side in out_sides:
@@ -290,7 +290,7 @@ def create_offsets_relationship(
     Caller commits.
     """
     rel = TransactionRelationshipDB(
-        id=uuid4(),
+        uuid=uuid4(),
         relationship_type=RelationshipType.OFFSETS,
         from_transaction_id=None if out_side.is_investment else out_side.txn_id,
         from_investment_transaction_id=out_side.txn_id if out_side.is_investment else None,

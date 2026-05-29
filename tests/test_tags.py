@@ -106,14 +106,14 @@ def test_delete_tag_204(client):
 def test_update_system_tag_403(client, db, test_user):
     ensure_system_tags(test_user.db_id, db)
     sys_tag = get_system_tag(test_user.db_id, db, "Needs Review")
-    resp = client.put(f"/tags/{sys_tag.id}", json={"tag_name": "Renamed"})
+    resp = client.put(f"/tags/{sys_tag.uuid}", json={"tag_name": "Renamed"})
     assert resp.status_code == 403
 
 
 def test_delete_system_tag_403(client, db, test_user):
     ensure_system_tags(test_user.db_id, db)
     sys_tag = get_system_tag(test_user.db_id, db, "Needs Review")
-    assert client.delete(f"/tags/{sys_tag.id}").status_code == 403
+    assert client.delete(f"/tags/{sys_tag.uuid}").status_code == 403
 
 
 # ===== TAG <-> TRANSACTION ASSOCIATION =====
@@ -123,7 +123,7 @@ def test_add_and_list_tag_on_transaction(client, db, test_user):
     txn = make_transaction(db, test_user, acct, description="Tagged txn")
     tag = _make_tag(client, name="Reimbursable")
 
-    add = client.post("/tags/transactions/", params={"transaction_uuid": str(txn.id), "tag_uuid": tag["id"]})
+    add = client.post("/tags/transactions/", params={"transaction_uuid": str(txn.uuid), "tag_uuid": tag["id"]})
     assert add.status_code == 201
 
     txns = client.get(f"/tags/{tag['id']}/transactions").json()
@@ -134,7 +134,7 @@ def test_add_tag_duplicate_400(client, db, test_user):
     acct = make_account(db, test_user)
     txn = make_transaction(db, test_user, acct)
     tag = _make_tag(client, name="Once")
-    params = {"transaction_uuid": str(txn.id), "tag_uuid": tag["id"]}
+    params = {"transaction_uuid": str(txn.uuid), "tag_uuid": tag["id"]}
     assert client.post("/tags/transactions/", params=params).status_code == 201
     assert client.post("/tags/transactions/", params=params).status_code == 400
 
@@ -143,9 +143,9 @@ def test_remove_tag_from_transaction_204(client, db, test_user):
     acct = make_account(db, test_user)
     txn = make_transaction(db, test_user, acct)
     tag = _make_tag(client, name="Temp")
-    client.post("/tags/transactions/", params={"transaction_uuid": str(txn.id), "tag_uuid": tag["id"]})
+    client.post("/tags/transactions/", params={"transaction_uuid": str(txn.uuid), "tag_uuid": tag["id"]})
 
-    resp = client.delete(f"/tags/transactions/{txn.id}/tags/{tag['id']}")
+    resp = client.delete(f"/tags/transactions/{txn.uuid}/tags/{tag['id']}")
     assert resp.status_code == 204
 
 
@@ -153,7 +153,7 @@ def test_remove_missing_association_404(client, db, test_user):
     acct = make_account(db, test_user)
     txn = make_transaction(db, test_user, acct)
     tag = _make_tag(client, name="Unlinked")
-    assert client.delete(f"/tags/transactions/{txn.id}/tags/{tag['id']}").status_code == 404
+    assert client.delete(f"/tags/transactions/{txn.uuid}/tags/{tag['id']}").status_code == 404
 
 
 def test_bulk_tag_transactions(client, db, test_user):
@@ -164,7 +164,7 @@ def test_bulk_tag_transactions(client, db, test_user):
 
     resp = client.post(
         "/tags/transactions/bulk-tag",
-        json={"transaction_uuids": [str(t1.id), str(t2.id)], "tag_uuid": tag["id"]},
+        json={"transaction_uuids": [str(t1.uuid), str(t2.uuid)], "tag_uuid": tag["id"]},
     )
     assert resp.status_code == 201
     assert resp.json()["tagged_count"] == 2
@@ -175,7 +175,7 @@ def test_bulk_tag_unknown_tag_404(client, db, test_user):
     t1 = make_transaction(db, test_user, acct)
     resp = client.post(
         "/tags/transactions/bulk-tag",
-        json={"transaction_uuids": [str(t1.id)], "tag_uuid": str(uuid4())},
+        json={"transaction_uuids": [str(t1.uuid)], "tag_uuid": str(uuid4())},
     )
     assert resp.status_code == 404
 
@@ -186,7 +186,7 @@ def test_tag_stats(client, db, test_user):
     acct = make_account(db, test_user)
     txn = make_transaction(db, test_user, acct, amount=Decimal("40.00"))
     tag = _make_tag(client, name="Counted")
-    client.post("/tags/transactions/", params={"transaction_uuid": str(txn.id), "tag_uuid": tag["id"]})
+    client.post("/tags/transactions/", params={"transaction_uuid": str(txn.uuid), "tag_uuid": tag["id"]})
 
     stats = client.get(f"/tags/{tag['id']}/stats").json()
     assert stats["transaction_count"] == 1
