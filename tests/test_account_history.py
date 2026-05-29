@@ -30,7 +30,7 @@ def test_create_account_snapshot_201(client, db, test_user):
     body = resp.json()
     assert body["account_uuid"] == str(acct.uuid)
     assert Decimal(str(body["balance"])) == Decimal("1000.00")
-    assert body["snapshot_uuid"]
+    assert body["id"]
 
 
 def test_create_snapshot_unknown_account_404(client):
@@ -87,7 +87,7 @@ def test_update_snapshot_200(client, db, test_user):
     acct = _cash_account(db, test_user)
     snap = client.post(f"/account-history/snapshots/account/{acct.uuid}", params={"snapshot_date": "2026-01-15"}).json()
     resp = client.put(
-        f"/account-history/accounts/{acct.uuid}/snapshots/{snap['snapshot_uuid']}",
+        f"/account-history/accounts/{acct.uuid}/snapshots/{snap['id']}",
         json={"balance": "1234.00"},
     )
     assert resp.status_code == 200
@@ -106,7 +106,7 @@ def test_update_snapshot_unknown_404(client, db, test_user):
 def test_update_snapshot_no_fields_400(client, db, test_user):
     acct = _cash_account(db, test_user)
     snap = client.post(f"/account-history/snapshots/account/{acct.uuid}", params={"snapshot_date": "2026-01-15"}).json()
-    resp = client.put(f"/account-history/accounts/{acct.uuid}/snapshots/{snap['snapshot_uuid']}", json={})
+    resp = client.put(f"/account-history/accounts/{acct.uuid}/snapshots/{snap['id']}", json={})
     assert resp.status_code == 400
 
 
@@ -115,7 +115,7 @@ def test_dismiss_snapshot_reviews(client, db, test_user):
     snap = client.post(f"/account-history/snapshots/account/{acct.uuid}", params={"snapshot_date": "2026-01-15"}).json()
     resp = client.post(
         f"/account-history/accounts/{acct.uuid}/snapshots/dismiss-review",
-        json={"snapshot_uuids": [snap["snapshot_uuid"]], "reason": "looks fine"},
+        json={"snapshot_uuids": [snap["id"]], "reason": "looks fine"},
     )
     assert resp.status_code == 200
     assert "dismissed_count" in resp.json()

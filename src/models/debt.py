@@ -104,7 +104,7 @@ class DebtPaymentUpdate(BaseModel):
     description: Optional[str] = Field(None, max_length=500)
 
 class DebtPaymentResponse(BaseModel):
-    uuid: UUID
+    id: UUID = Field(validation_alias="uuid")
     loan_account_uuid: UUID
     payment_source_account_uuid: Optional[UUID] = None
     transaction_uuid: Optional[UUID] = None

@@ -24,7 +24,7 @@ class DismissReviewRequest(BaseModel):
 
 class AccountSnapshotResponse(BaseModel):
     """Response model for a single account value snapshot"""
-    snapshot_uuid: UUID
+    id: UUID
     account_uuid: UUID
     value_date: date
     balance: Decimal
@@ -50,7 +50,7 @@ class AccountSnapshotResponse(BaseModel):
             if hasattr(data, 'account') and data.account:
                 data.__dict__['account_uuid'] = data.account.uuid
             if hasattr(data, 'uuid') and data.uuid:
-                data.__dict__['snapshot_uuid'] = data.uuid
+                data.__dict__['id'] = data.uuid
         return data
 
 

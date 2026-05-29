@@ -107,7 +107,7 @@ class AccountUpdate(BaseModel):
 
 class AccountResponse(BaseModel):
     """Account data returned to client"""
-    uuid: UUID
+    id: UUID = Field(validation_alias="uuid")
     account_name: str
     account_type: AccountTypeEnum
     institution_name: str
@@ -133,7 +133,7 @@ class AccountResponse(BaseModel):
 
 class AccountSummary(BaseModel):
     """Lightweight account summary for dropdowns/lists"""
-    uuid: UUID
+    id: UUID = Field(validation_alias="uuid")
     account_name: str
     account_type: AccountTypeEnum
     institution_name: str

@@ -3,8 +3,7 @@
 Covers repayment plans (full CRUD — the PUT/DELETE that earlier API-gap notes
 flagged as missing now exist), plan↔account links, monthly schedules, and debt
 payments. Schedules require a LOAN account; payments require LOAN or
-CREDIT_CARD. Plan responses expose their UUID under "id"; payment responses
-under "uuid" (renamed from id for API consistency).
+CREDIT_CARD. Plan and payment responses both expose their UUID under "id".
 """
 from decimal import Decimal
 from uuid import uuid4
@@ -163,7 +162,7 @@ def test_create_payment_201(client, db, test_user):
     resp = client.post("/debt/payments/", json=_payment_body(loan.uuid))
     assert resp.status_code == 201
     body = resp.json()
-    assert body["uuid"]
+    assert body["id"]
     assert Decimal(str(body["payment_amount"])) == Decimal("250.00")
 
 
@@ -184,14 +183,14 @@ def test_list_get_update_delete_payment(client, db, test_user):
     listed = client.get(f"/debt/accounts/{loan.uuid}/payments/").json()
     assert len(listed) == 1
 
-    assert client.get(f"/debt/payments/{created['uuid']}/").status_code == 200
+    assert client.get(f"/debt/payments/{created['id']}/").status_code == 200
 
-    upd = client.put(f"/debt/payments/{created['uuid']}/", json={"payment_amount": "275.00"})
+    upd = client.put(f"/debt/payments/{created['id']}/", json={"payment_amount": "275.00"})
     assert upd.status_code == 200
     assert Decimal(str(upd.json()["payment_amount"])) == Decimal("275.00")
 
-    assert client.delete(f"/debt/payments/{created['uuid']}/").status_code == 204
-    assert client.get(f"/debt/payments/{created['uuid']}/").status_code == 404
+    assert client.delete(f"/debt/payments/{created['id']}/").status_code == 204
+    assert client.get(f"/debt/payments/{created['id']}/").status_code == 404
 
 
 def test_payment_get_unknown_404(client):

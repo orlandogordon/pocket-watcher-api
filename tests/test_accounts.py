@@ -41,11 +41,11 @@ def test_create_account_201_and_persists(client, db, test_user):
     assert body["account_name"] == "My Checking"
     assert body["account_type"] == "CHECKING"
     assert Decimal(str(body["balance"])) == Decimal("100.00")
-    assert body["uuid"]
+    assert body["id"]
 
     # Round-trips through the list endpoint (same session via get_db override).
     listed = client.get("/accounts/").json()
-    assert [a["uuid"] for a in listed] == [body["uuid"]]
+    assert [a["id"] for a in listed] == [body["id"]]
 
 
 def test_create_rounds_balance_to_two_places(client):
@@ -262,7 +262,7 @@ def test_summary_lists_accounts(client, db, test_user):
     body = client.get("/accounts/summary").json()
     assert len(body) == 1
     assert body[0]["account_name"] == "Summarized"
-    assert "uuid" in body[0] and "balance" in body[0]
+    assert "id" in body[0] and "balance" in body[0]
 
 
 def test_stats_unauthenticated_401(unauth_client):
