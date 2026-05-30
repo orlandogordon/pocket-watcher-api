@@ -221,6 +221,26 @@ The API provides comprehensive endpoints for all financial management features:
 3. **Security Focus**: Validate user ownership on all operations
 4. **Clear Communication**: Ask for clarification rather than making assumptions
 
+## Auth Error Contract (#58)
+
+Consistent, intentional status codes for authorization/identity errors — relied
+on by the frontend, don't "fix" them into uniformity:
+
+- **Cross-user access → 404** (don't-leak-existence) everywhere a resource is
+  owned by a user: accounts, transactions, investments, budgets, debts,
+  financial_plans, tags, account-history, uploads. Asking for someone else's
+  resource is indistinguishable from "not found".
+- **Users routes → 403** (not 404) for a non-self / non-admin caller, via
+  `require_self_or_admin`. The lookup resolves the user first, so an *unknown*
+  user UUID is **404** but an *existing other* user is **403**. `change-password`
+  is **403** for anyone but self (admins included).
+- **System-tag edits → 403**: modifying/deleting a tag with `is_system=True`
+  returns 403 (the tag exists and is visible, but is read-only).
+- **Malformed UUID → 422** on every path/query UUID (FastAPI-native validation).
+  Sole exception: the multipart Form `account_uuid` on `POST /uploads/files` and
+  `POST /uploads/statement/preview` is **400** (keeps an empty-string="no
+  account" guard).
+
 ## Testing
 
 `pytest`-based suite that runs the app in-process via `TestClient` — **no
