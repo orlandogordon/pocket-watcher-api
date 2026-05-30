@@ -874,6 +874,7 @@ class SnapshotBackfillJobDB(Base):
 
     # Primary Key
     db_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(unique=True, nullable=False)  # public id (#58)
 
     # Foreign Keys
     user_id: Mapped[int] = mapped_column(ForeignKey("users.db_id"))

@@ -69,23 +69,8 @@ def read_current_user(current_user: UserDB = Depends(get_current_user)):
     """
     return current_user
 
-@router.get("/{user_id}", response_model=user_models.UserResponse)
+@router.get("/{user_uuid}", response_model=user_models.UserResponse)
 def read_user(
-    user_id: int,
-    db: Session = Depends(get_db),
-    current_user: UserDB = Depends(get_current_user),
-):
-    """
-    Retrieve a single user by their integer ID. Self or admin only.
-    """
-    require_self_or_admin(user_id, current_user)
-    db_user = crud_user.read_db_user(db, user_id=user_id)
-    if db_user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    return db_user
-
-@router.get("/uuid/{user_uuid}", response_model=user_models.UserResponse)
-def read_user_by_uuid(
     user_uuid: UUID,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
@@ -99,9 +84,9 @@ def read_user_by_uuid(
     require_self_or_admin(db_user.db_id, current_user)
     return db_user
 
-@router.put("/{user_id}", response_model=user_models.UserResponse)
+@router.put("/{user_uuid}", response_model=user_models.UserResponse)
 def update_user(
-    user_id: int,
+    user_uuid: UUID,
     user: user_models.UserUpdate,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
@@ -109,39 +94,41 @@ def update_user(
     """
     Update a user's profile. Self or admin only.
     """
-    require_self_or_admin(user_id, current_user)
+    db_user = crud_user.read_db_user(db, user_uuid=user_uuid)
+    if db_user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    require_self_or_admin(db_user.db_id, current_user)
     try:
-        updated_user = crud_user.update_db_user(db=db, user_id=user_id, user_updates=user)
+        updated_user = crud_user.update_db_user(db=db, user_id=db_user.db_id, user_updates=user)
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     return updated_user
 
-@router.delete("/{user_id}", response_model=user_models.UserResponse)
+@router.delete("/{user_uuid}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_user(
-    user_id: int,
+    user_uuid: UUID,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
 ):
     """
     Delete a user. Self or admin only.
     """
-    require_self_or_admin(user_id, current_user)
-    db_user = crud_user.read_db_user(db, user_id=user_id)
+    db_user = crud_user.read_db_user(db, user_uuid=user_uuid)
     if db_user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    require_self_or_admin(db_user.db_id, current_user)
 
     try:
-        crud_user.delete_db_user(db=db, user_id=user_id)
+        crud_user.delete_db_user(db=db, user_id=db_user.db_id)
     except ValueError as e:
         # This might happen if there are constraints preventing deletion.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
-    return db_user
 
-@router.post("/{user_id}/change-password", status_code=status.HTTP_200_OK)
+@router.post("/{user_uuid}/change-password", status_code=status.HTTP_200_OK)
 def change_password(
-    user_id: int,
+    user_uuid: UUID,
     password_change: user_models.PasswordChange,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(get_current_user),
@@ -150,13 +137,16 @@ def change_password(
     Change a user's password. Self only — admins cannot change another user's
     password through this route (a separate reset flow would be needed).
     """
-    if current_user.db_id != user_id:
+    db_user = crud_user.read_db_user(db, user_uuid=user_uuid)
+    if db_user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if current_user.db_id != db_user.db_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only change your own password",
         )
     try:
-        crud_user.change_user_password(db=db, user_id=user_id, password_change=password_change)
+        crud_user.change_user_password(db=db, user_id=db_user.db_id, password_change=password_change)
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except ValueError as e:

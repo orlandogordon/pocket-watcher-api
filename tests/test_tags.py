@@ -73,8 +73,8 @@ def test_get_unknown_404(client):
     assert client.get(f"/tags/{uuid4()}").status_code == 404
 
 
-def test_get_malformed_uuid_400(client):
-    assert client.get("/tags/not-a-uuid").status_code == 400
+def test_get_malformed_uuid_422(client):
+    assert client.get("/tags/not-a-uuid").status_code == 422
 
 
 def test_search_tags(client):

@@ -52,11 +52,11 @@ def test_list_plans(client):
     assert {"P1", "P2"} <= names
 
 
-def test_get_plan_200_404_400(client):
+def test_get_plan_200_404_422(client):
     plan = _make_plan(client)
     assert client.get(f"/financial_plans/{plan['id']}").status_code == 200
     assert client.get(f"/financial_plans/{uuid4()}").status_code == 404
-    assert client.get("/financial_plans/not-a-uuid").status_code == 400
+    assert client.get("/financial_plans/not-a-uuid").status_code == 422
 
 
 def test_get_plan_cross_user_404(client, db):

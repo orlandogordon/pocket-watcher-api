@@ -101,7 +101,7 @@ class AccountValueHistoryResponse(BaseModel):
 
 class SnapshotBackfillJobResponse(BaseModel):
     """Response model for snapshot backfill jobs"""
-    id: int = Field(validation_alias="db_id")
+    id: UUID = Field(validation_alias="uuid")
     account_uuid: UUID
     start_date: date
     end_date: date

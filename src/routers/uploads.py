@@ -257,16 +257,12 @@ def list_bulk_imports(
 
 @router.get("/bulk/{batch_uuid}")
 def get_bulk_import(
-    batch_uuid: str,
+    batch_uuid: UUID,
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    try:
-        parsed = UUID(batch_uuid)
-    except (ValueError, AttributeError):
-        raise HTTPException(status_code=400, detail="Invalid batch_uuid format")
     batch = db.query(BulkImportBatchDB).filter(
-        BulkImportBatchDB.uuid == parsed,
+        BulkImportBatchDB.uuid == batch_uuid,
         BulkImportBatchDB.user_id == user_id,
     ).first()
     if not batch:
@@ -276,16 +272,12 @@ def get_bulk_import(
 
 @router.delete("/bulk/{batch_uuid}")
 def cancel_bulk_import(
-    batch_uuid: str,
+    batch_uuid: UUID,
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    try:
-        parsed = UUID(batch_uuid)
-    except (ValueError, AttributeError):
-        raise HTTPException(status_code=400, detail="Invalid batch_uuid format")
     batch = db.query(BulkImportBatchDB).filter(
-        BulkImportBatchDB.uuid == parsed,
+        BulkImportBatchDB.uuid == batch_uuid,
         BulkImportBatchDB.user_id == user_id,
     ).first()
     if not batch:
@@ -317,13 +309,9 @@ def _document_summary(job: UploadJobDB) -> Dict:
     }
 
 
-def _owned_document(db: Session, document_uuid: str, user_id: int) -> UploadJobDB:
-    try:
-        parsed = UUID(document_uuid)
-    except (ValueError, AttributeError):
-        raise HTTPException(status_code=400, detail="Invalid document_uuid format")
+def _owned_document(db: Session, document_uuid: UUID, user_id: int) -> UploadJobDB:
     job = db.query(UploadJobDB).filter(
-        UploadJobDB.uuid == parsed,
+        UploadJobDB.uuid == document_uuid,
         UploadJobDB.user_id == user_id,
         UploadJobDB.storage_key.isnot(None),
     ).first()
@@ -334,7 +322,7 @@ def _owned_document(db: Session, document_uuid: str, user_id: int) -> UploadJobD
 
 @router.get("/documents")
 def list_documents(
-    account_uuid: Optional[str] = Query(None),
+    account_uuid: Optional[UUID] = Query(None),
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -345,11 +333,7 @@ def list_documents(
         UploadJobDB.storage_key.isnot(None),
     )
     if account_uuid:
-        try:
-            parsed = UUID(account_uuid)
-        except (ValueError, AttributeError):
-            raise HTTPException(status_code=400, detail="Invalid account_uuid format")
-        account = read_db_account_by_uuid(db, parsed, user_id)
+        account = read_db_account_by_uuid(db, account_uuid, user_id)
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
         q = q.filter(UploadJobDB.account_id == account.db_id)
@@ -359,7 +343,7 @@ def list_documents(
 
 @router.get("/documents/{document_uuid}")
 def get_document(
-    document_uuid: str,
+    document_uuid: UUID,
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -368,7 +352,7 @@ def get_document(
 
 @router.get("/documents/{document_uuid}/content")
 def get_document_content(
-    document_uuid: str,
+    document_uuid: UUID,
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -387,7 +371,7 @@ def get_document_content(
 
 @router.delete("/documents/{document_uuid}", status_code=204)
 def delete_document(
-    document_uuid: str,
+    document_uuid: UUID,
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -450,9 +434,9 @@ def list_upload_jobs(
     }
 
 
-@router.get("/jobs/{job_id}")
+@router.get("/jobs/{job_uuid}")
 def get_upload_job_status(
-    job_id: int,
+    job_uuid: UUID,
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db)
 ):
@@ -466,7 +450,7 @@ def get_upload_job_status(
     - Timestamps
     """
     job = db.query(UploadJobDB).filter(
-        UploadJobDB.db_id == job_id,
+        UploadJobDB.uuid == job_uuid,
         UploadJobDB.user_id == user_id
     ).first()
 
@@ -474,7 +458,7 @@ def get_upload_job_status(
         raise HTTPException(status_code=404, detail="Upload job not found")
 
     return {
-        "id": job.db_id,
+        "id": str(job.uuid),
         "status": job.status,
         "institution": job.institution,
         "account_id": job.account_id,
@@ -491,9 +475,9 @@ def get_upload_job_status(
     }
 
 
-@router.get("/jobs/{job_id}/skipped")
+@router.get("/jobs/{job_uuid}/skipped")
 def get_skipped_transactions(
-    job_id: int,
+    job_uuid: UUID,
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     user_id: int = Depends(get_current_user_id),
@@ -507,7 +491,7 @@ def get_skipped_transactions(
     """
     # Verify job ownership
     job = db.query(UploadJobDB).filter(
-        UploadJobDB.db_id == job_id,
+        UploadJobDB.uuid == job_uuid,
         UploadJobDB.user_id == user_id
     ).first()
 
@@ -516,7 +500,7 @@ def get_skipped_transactions(
 
     # Get skipped transactions
     skipped = db.query(SkippedTransactionDB).filter(
-        SkippedTransactionDB.upload_job_id == job_id
+        SkippedTransactionDB.upload_job_id == job.db_id
     ).offset(skip).limit(limit).all()
 
     # Build results with existing transaction details
@@ -550,7 +534,7 @@ def get_skipped_transactions(
         })
 
     return {
-        "upload_job_id": job_id,
+        "upload_job_id": str(job.uuid),
         "total_skipped": job.transactions_skipped + job.investment_transactions_skipped,
         "items": results,
         "skip": skip,
@@ -1589,7 +1573,7 @@ async def confirm_statement_import(
         "investment_transactions_created": len(created_inv),
         "duplicates_imported": duplicates_imported,
         "skipped_unmapped_types": skipped_unmapped,
-        "upload_job_id": upload_job.db_id,
+        "upload_job_id": str(upload_job.uuid),
         "processing_time_ms": elapsed_ms,
         "suggestion_accepted": suggestion_accept_count,
         "suggestion_overridden": suggestion_override_count,

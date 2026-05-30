@@ -613,6 +613,7 @@ def bulk_create_investment_transactions_from_parsed_data(
 
                 # Create backfill job
                 job = SnapshotBackfillJobDB(
+                    uuid=uuid4(),
                     user_id=user_id,
                     account_id=account_id,
                     start_date=earliest_date,

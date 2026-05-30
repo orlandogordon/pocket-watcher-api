@@ -7,6 +7,8 @@ which exercises the whole session-management half of the router over HTTP
 (list, get, reject/restore item, extend, cancel) plus the DB-backed job
 endpoints — all without a real file or external calls.
 """
+from uuid import uuid4
+
 import pytest
 
 from src.services.preview_session import create_preview_session
@@ -40,11 +42,11 @@ def test_list_jobs_empty(client):
 
 
 def test_get_job_unknown_404(client):
-    assert client.get("/uploads/jobs/99999").status_code == 404
+    assert client.get(f"/uploads/jobs/{uuid4()}").status_code == 404
 
 
 def test_get_skipped_unknown_job_404(client):
-    assert client.get("/uploads/jobs/99999/skipped").status_code == 404
+    assert client.get(f"/uploads/jobs/{uuid4()}/skipped").status_code == 404
 
 
 def test_jobs_unauthenticated_401(unauth_client):

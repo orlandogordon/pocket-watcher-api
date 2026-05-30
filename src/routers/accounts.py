@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 from datetime import date
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from src.crud import crud_account
 from src.models import account as account_models
@@ -15,7 +15,6 @@ from src.db.core import (
 )
 from src.services.job_runner import get_job_runner
 from src.auth.dependencies import get_current_user_id
-from src.routers._deps import parse_uuid
 
 router = APIRouter(
     prefix="/accounts",
@@ -74,22 +73,21 @@ def get_account_statistics(
 
 @router.get("/{account_uuid}", response_model=account_models.AccountResponse)
 def read_account(
-    account_uuid: str,
+    account_uuid: UUID,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
     """
     Retrieve a specific account by its UUID.
     """
-    uuid_obj = parse_uuid(account_uuid)
-    db_account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
+    db_account = crud_account.read_db_account_by_uuid(db=db, account_uuid=account_uuid, user_id=user_id)
     if db_account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     return db_account
 
 @router.put("/{account_uuid}", response_model=account_models.AccountResponse)
 def update_account(
-    account_uuid: str,
+    account_uuid: UUID,
     account: account_models.AccountUpdate,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
@@ -97,10 +95,9 @@ def update_account(
     """
     Update an account.
     """
-    uuid_obj = parse_uuid(account_uuid)
     try:
         return crud_account.update_db_account_by_uuid(
-            db=db, account_uuid=uuid_obj, user_id=user_id, account_updates=account
+            db=db, account_uuid=account_uuid, user_id=user_id, account_updates=account
         )
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -109,7 +106,7 @@ def update_account(
 
 @router.delete("/{account_uuid}")
 def delete_account(
-    account_uuid: str,
+    account_uuid: UUID,
     force: bool = Query(False),
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
@@ -117,17 +114,17 @@ def delete_account(
     """
     Delete an account.
 
-    Without ?force=true, returns 409 if the account has associated data.
-    With ?force=true, cascade-deletes all associated records and returns deletion counts.
+    Without ?force=true, returns 409 if the account has associated data, else
+    204 No Content. With ?force=true, cascade-deletes all associated records and
+    returns 200 with the deletion counts (the cascade receipt).
     """
-    uuid_obj = parse_uuid(account_uuid)
-    db_account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
+    db_account = crud_account.read_db_account_by_uuid(db=db, account_uuid=account_uuid, user_id=user_id)
     if db_account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
     try:
         deleted = crud_account.delete_db_account_by_uuid(
-            db=db, account_uuid=uuid_obj, user_id=user_id, force=force
+            db=db, account_uuid=account_uuid, user_id=user_id, force=force
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
@@ -135,14 +132,14 @@ def delete_account(
     if force:
         return {"deleted": deleted}
 
-    return db_account
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ===== SNAPSHOT BACKFILL ENDPOINTS =====
 
 @router.get("/{account_uuid}/snapshot-jobs", response_model=List[SnapshotBackfillJobResponse])
 def list_backfill_jobs(
-    account_uuid: str,
+    account_uuid: UUID,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
@@ -153,8 +150,7 @@ def list_backfill_jobs(
 
     Returns jobs ordered by created_at DESC (newest first).
     """
-    uuid_obj = parse_uuid(account_uuid)
-    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
+    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=account_uuid, user_id=user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
@@ -165,23 +161,22 @@ def list_backfill_jobs(
     return jobs
 
 
-@router.get("/{account_uuid}/snapshot-jobs/{job_id}", response_model=SnapshotBackfillJobResponse)
+@router.get("/{account_uuid}/snapshot-jobs/{job_uuid}", response_model=SnapshotBackfillJobResponse)
 def get_backfill_job(
-    account_uuid: str,
-    job_id: int,
+    account_uuid: UUID,
+    job_uuid: UUID,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
     """
     Get detailed status of a specific backfill job.
     """
-    uuid_obj = parse_uuid(account_uuid)
-    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
+    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=account_uuid, user_id=user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
     job = db.query(SnapshotBackfillJobDB).filter(
-        SnapshotBackfillJobDB.db_id == job_id,
+        SnapshotBackfillJobDB.uuid == job_uuid,
         SnapshotBackfillJobDB.account_id == account.db_id
     ).first()
 
@@ -193,7 +188,7 @@ def get_backfill_job(
 
 @router.post("/{account_uuid}/snapshots/recalculate")
 def manually_recalculate_snapshots(
-    account_uuid: str,
+    account_uuid: UUID,
     start_date: date,
     end_date: Optional[date] = None,
     db: Session = Depends(get_db),
@@ -207,8 +202,7 @@ def manually_recalculate_snapshots(
         - Backfill after manual transaction edits
         - Re-fetch prices if historical data was incorrect
     """
-    uuid_obj = parse_uuid(account_uuid)
-    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
+    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=account_uuid, user_id=user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
@@ -224,11 +218,12 @@ def manually_recalculate_snapshots(
     if existing_job:
         raise HTTPException(
             status_code=409,
-            detail=f"Backfill job {existing_job.db_id} already running for this account"
+            detail=f"Backfill job {existing_job.uuid} already running for this account"
         )
 
     # Create job
     job = SnapshotBackfillJobDB(
+        uuid=uuid4(),
         user_id=user_id,
         account_id=account.db_id,
         start_date=start_date,
@@ -245,7 +240,7 @@ def manually_recalculate_snapshots(
 
     return {
         "message": "Snapshot recalculation started",
-        "job_id": job.db_id,
+        "job_uuid": str(job.uuid),
         "account_uuid": str(account.uuid),
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
@@ -255,15 +250,14 @@ def manually_recalculate_snapshots(
 
 @router.get("/{account_uuid}/snapshots/needs-review", response_model=List[AccountSnapshotResponse])
 def get_snapshots_needing_review(
-    account_uuid: str,
+    account_uuid: UUID,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
     """
     Get all snapshots that need review (missing price data, etc.)
     """
-    uuid_obj = parse_uuid(account_uuid)
-    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=uuid_obj, user_id=user_id)
+    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=account_uuid, user_id=user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 

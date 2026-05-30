@@ -78,11 +78,11 @@ def test_list_templates(client):
     assert {"T1", "T2"} <= names
 
 
-def test_get_template_200_404_400(client):
+def test_get_template_200_404_422(client):
     created = client.post("/budgets/templates/", json={"template_name": "Gettable"}).json()
     assert client.get(f"/budgets/templates/{created['id']}").status_code == 200
     assert client.get(f"/budgets/templates/{uuid4()}").status_code == 404
-    assert client.get("/budgets/templates/not-a-uuid").status_code == 400
+    assert client.get("/budgets/templates/not-a-uuid").status_code == 422
 
 
 def test_update_template(client):

@@ -14,7 +14,6 @@ from src.models.investment import (
     InvestmentAccountSummary
 )
 from src.auth.dependencies import get_current_user_id
-from src.routers._deps import parse_uuid
 
 router = APIRouter(
     prefix="/investments",
@@ -35,9 +34,8 @@ def refresh_prices(db: Session = Depends(get_db), user_id: int = Depends(get_cur
 # --- Account Summary ---
 
 @router.get("/accounts/{account_uuid}/summary", response_model=InvestmentAccountSummary)
-def read_account_summary(account_uuid: str, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
-    parsed_uuid = parse_uuid(account_uuid)
-    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=parsed_uuid, user_id=user_id)
+def read_account_summary(account_uuid: UUID, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
+    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=account_uuid, user_id=user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     state = account_snapshot.get_account_state_on_date(db, account.db_id, date.today())
@@ -51,9 +49,8 @@ def read_account_summary(account_uuid: str, db: Session = Depends(get_db), user_
 # --- Investment Holdings (read-only, derived from transactions) ---
 
 @router.get("/accounts/{account_uuid}/holdings/", response_model=List[InvestmentHoldingResponse])
-def read_holdings_for_account(account_uuid: str, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
-    parsed_uuid = parse_uuid(account_uuid)
-    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=parsed_uuid, user_id=user_id)
+def read_holdings_for_account(account_uuid: UUID, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
+    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=account_uuid, user_id=user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     try:
@@ -62,26 +59,23 @@ def read_holdings_for_account(account_uuid: str, db: Session = Depends(get_db), 
         raise HTTPException(status_code=404, detail="Account not found") from e
 
 @router.get("/holdings/{holding_uuid}", response_model=InvestmentHoldingResponse)
-def read_holding(holding_uuid: str, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
-    parsed_uuid = parse_uuid(holding_uuid)
-    db_holding = crud_investment.read_db_investment_holding_by_uuid(db=db, holding_uuid=parsed_uuid, user_id=user_id)
+def read_holding(holding_uuid: UUID, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
+    db_holding = crud_investment.read_db_investment_holding_by_uuid(db=db, holding_uuid=holding_uuid, user_id=user_id)
     if db_holding is None:
         raise HTTPException(status_code=404, detail="Holding not found")
     return db_holding
 
 @router.put("/holdings/{holding_uuid}", response_model=InvestmentHoldingResponse)
-def update_holding(holding_uuid: str, updates: InvestmentHoldingUpdate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
-    parsed_uuid = parse_uuid(holding_uuid)
+def update_holding(holding_uuid: UUID, updates: InvestmentHoldingUpdate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
     try:
-        return crud_investment.update_db_investment_holding_by_uuid(db=db, holding_uuid=parsed_uuid, user_id=user_id, updates=updates)
+        return crud_investment.update_db_investment_holding_by_uuid(db=db, holding_uuid=holding_uuid, user_id=user_id, updates=updates)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 @router.post("/accounts/{account_uuid}/holdings/rebuild", response_model=List[InvestmentHoldingResponse])
-def rebuild_holdings(account_uuid: str, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
+def rebuild_holdings(account_uuid: UUID, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
     """Manual rebuild of holdings from transactions. For admin/debugging."""
-    parsed_uuid = parse_uuid(account_uuid)
-    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=parsed_uuid, user_id=user_id)
+    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=account_uuid, user_id=user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     try:
@@ -113,37 +107,33 @@ def create_bulk_transactions(bulk_data: InvestmentTransactionBulkCreate, db: Ses
         raise HTTPException(status_code=404, detail=str(e))
 
 @router.get("/accounts/{account_uuid}/transactions/", response_model=List[InvestmentTransactionResponse])
-def read_transactions_for_account(account_uuid: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
-    parsed_uuid = parse_uuid(account_uuid)
-    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=parsed_uuid, user_id=user_id)
+def read_transactions_for_account(account_uuid: UUID, skip: int = 0, limit: int = 100, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
+    account = crud_account.read_db_account_by_uuid(db=db, account_uuid=account_uuid, user_id=user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     return crud_investment.read_db_investment_transactions(db=db, user_id=user_id, account_id=account.db_id, skip=skip, limit=limit)
 
 @router.get("/transactions/{transaction_uuid}", response_model=InvestmentTransactionResponse)
-def read_transaction(transaction_uuid: str, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
-    parsed_uuid = parse_uuid(transaction_uuid)
-    db_transaction = crud_investment.read_db_investment_transaction_by_uuid(db=db, transaction_uuid=parsed_uuid, user_id=user_id)
+def read_transaction(transaction_uuid: UUID, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
+    db_transaction = crud_investment.read_db_investment_transaction_by_uuid(db=db, transaction_uuid=transaction_uuid, user_id=user_id)
     if db_transaction is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
     return db_transaction
 
 @router.put("/transactions/{transaction_uuid}", response_model=InvestmentTransactionResponse)
-def update_transaction(transaction_uuid: str, transaction: InvestmentTransactionUpdate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
-    parsed_uuid = parse_uuid(transaction_uuid)
+def update_transaction(transaction_uuid: UUID, transaction: InvestmentTransactionUpdate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
     try:
-        return crud_investment.update_db_investment_transaction_by_uuid(db=db, transaction_uuid=parsed_uuid, user_id=user_id, transaction_updates=transaction)
+        return crud_investment.update_db_investment_transaction_by_uuid(db=db, transaction_uuid=transaction_uuid, user_id=user_id, transaction_updates=transaction)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail="Transaction not found") from e
 
 @router.delete("/transactions/{transaction_uuid}", status_code=204)
-def delete_transaction(transaction_uuid: str, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
-    parsed_uuid = parse_uuid(transaction_uuid)
-    db_transaction = crud_investment.read_db_investment_transaction_by_uuid(db, transaction_uuid=parsed_uuid, user_id=user_id)
+def delete_transaction(transaction_uuid: UUID, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
+    db_transaction = crud_investment.read_db_investment_transaction_by_uuid(db, transaction_uuid=transaction_uuid, user_id=user_id)
     if db_transaction is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
     try:
-        crud_investment.delete_db_investment_transaction_by_uuid(db, transaction_uuid=parsed_uuid, user_id=user_id)
+        crud_investment.delete_db_investment_transaction_by_uuid(db, transaction_uuid=transaction_uuid, user_id=user_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return None

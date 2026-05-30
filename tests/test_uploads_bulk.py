@@ -191,8 +191,8 @@ def test_document_cross_user_content_404(client, db, cc_account):
     assert resp.status_code == 404
 
 
-def test_get_document_bad_uuid_400(client):
-    assert client.get("/uploads/documents/not-a-uuid").status_code == 400
+def test_get_document_bad_uuid_422(client):
+    assert client.get("/uploads/documents/not-a-uuid").status_code == 422
 
 
 def test_delete_document_cascades_transactions(client, db, cc_account, fake_llm):

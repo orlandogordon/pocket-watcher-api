@@ -9,6 +9,7 @@ interrupted-job recovery on startup.
 """
 from datetime import date, datetime
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine
@@ -42,7 +43,7 @@ def job_env(monkeypatch):
 def _seed_job(Session, uid, aid, status="PENDING"):
     s = Session()
     job = SnapshotBackfillJobDB(
-        user_id=uid, account_id=aid, start_date=date(2026, 1, 1), end_date=date(2026, 1, 31), status=status
+        uuid=uuid4(), user_id=uid, account_id=aid, start_date=date(2026, 1, 1), end_date=date(2026, 1, 31), status=status
     )
     s.add(job)
     s.commit()

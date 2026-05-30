@@ -37,8 +37,8 @@ def test_create_snapshot_unknown_account_404(client):
     assert client.post(f"/account-history/snapshots/account/{uuid4()}").status_code == 404
 
 
-def test_create_snapshot_malformed_uuid_400(client):
-    assert client.post("/account-history/snapshots/account/not-a-uuid").status_code == 400
+def test_create_snapshot_malformed_uuid_422(client):
+    assert client.post("/account-history/snapshots/account/not-a-uuid").status_code == 422
 
 
 def test_create_all_snapshots(client, db, test_user):
@@ -77,8 +77,8 @@ def test_account_value_history_unknown_404(client):
     assert client.get(f"/account-history/accounts/{uuid4()}").status_code == 404
 
 
-def test_account_value_history_malformed_400(client):
-    assert client.get("/account-history/accounts/not-a-uuid").status_code == 400
+def test_account_value_history_malformed_422(client):
+    assert client.get("/account-history/accounts/not-a-uuid").status_code == 422
 
 
 # ===== SNAPSHOT EDIT / DISMISS =====

@@ -141,10 +141,9 @@ def test_get_unknown_uuid_404(client):
     assert client.get(f"/accounts/{uuid4()}").status_code == 404
 
 
-def test_get_malformed_uuid_400(client):
+def test_get_malformed_uuid_422(client):
     resp = client.get("/accounts/not-a-uuid")
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "Invalid UUID format"
+    assert resp.status_code == 422
 
 
 def test_get_cross_user_404(client, db):
@@ -186,8 +185,8 @@ def test_update_duplicate_name_400(client, db, test_user):
     assert "already exists" in resp.json()["detail"]
 
 
-def test_update_malformed_uuid_400(client):
-    assert client.put("/accounts/nope", json={"account_name": "X"}).status_code == 400
+def test_update_malformed_uuid_422(client):
+    assert client.put("/accounts/nope", json={"account_name": "X"}).status_code == 422
 
 
 def test_update_cross_user_404(client, db):
@@ -198,9 +197,9 @@ def test_update_cross_user_404(client, db):
 
 # ===== DELETE =====
 
-def test_delete_clean_account_200(client, db, test_user):
+def test_delete_clean_account_204(client, db, test_user):
     acct = make_account(db, test_user, account_name="Disposable")
-    assert client.delete(f"/accounts/{acct.uuid}").status_code == 200
+    assert client.delete(f"/accounts/{acct.uuid}").status_code == 204
     # Gone afterwards.
     assert client.get(f"/accounts/{acct.uuid}").status_code == 404
 
@@ -226,8 +225,8 @@ def test_delete_unknown_uuid_404(client):
     assert client.delete(f"/accounts/{uuid4()}").status_code == 404
 
 
-def test_delete_malformed_uuid_400(client):
-    assert client.delete("/accounts/bad").status_code == 400
+def test_delete_malformed_uuid_422(client):
+    assert client.delete("/accounts/bad").status_code == 422
 
 
 def test_delete_cross_user_404(client, db):

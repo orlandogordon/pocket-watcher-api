@@ -134,6 +134,7 @@ def trigger_backfill_if_needed(
         return
 
     job = SnapshotBackfillJobDB(
+        uuid=uuid4(),
         user_id=user_id,
         account_id=account_id,
         start_date=earliest_date,

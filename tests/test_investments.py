@@ -58,12 +58,12 @@ def test_create_missing_total_amount_422(client, db, test_user):
     assert client.post("/investments/transactions/", json=payload).status_code == 422
 
 
-def test_read_transaction_200_404_400(client, db, test_user):
+def test_read_transaction_200_404_422(client, db, test_user):
     acct = _inv_account(db, test_user)
     created = client.post("/investments/transactions/", json=_buy(acct.uuid)).json()
     assert client.get(f"/investments/transactions/{created['id']}").status_code == 200
     assert client.get(f"/investments/transactions/{uuid4()}").status_code == 404
-    assert client.get("/investments/transactions/not-a-uuid").status_code == 400
+    assert client.get("/investments/transactions/not-a-uuid").status_code == 422
 
 
 def test_update_transaction_200(client, db, test_user):

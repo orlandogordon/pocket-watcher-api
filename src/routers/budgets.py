@@ -7,7 +7,6 @@ from src.crud import crud_budget
 from src.models import budget as budget_models
 from src.db.core import get_db, NotFoundError
 from src.auth.dependencies import get_current_user_id
-from src.routers._deps import parse_uuid
 
 router = APIRouter(
     prefix="/budgets",
@@ -57,13 +56,12 @@ def list_templates(
 
 @router.get("/templates/{template_uuid}", response_model=budget_models.TemplateResponse)
 def get_template(
-    template_uuid: str,
+    template_uuid: UUID,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ):
     """Get a specific budget template by UUID."""
-    parsed = parse_uuid(template_uuid)
-    template = crud_budget.read_template(db, parsed, user_id)
+    template = crud_budget.read_template(db, template_uuid, user_id)
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
     return template
@@ -71,15 +69,14 @@ def get_template(
 
 @router.put("/templates/{template_uuid}", response_model=budget_models.TemplateResponse)
 def update_template(
-    template_uuid: str,
+    template_uuid: UUID,
     data: budget_models.TemplateUpdate,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ):
     """Update a budget template's name or default status."""
-    parsed = parse_uuid(template_uuid)
     try:
-        return crud_budget.update_template(db, parsed, user_id, data)
+        return crud_budget.update_template(db, template_uuid, user_id, data)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
@@ -88,14 +85,13 @@ def update_template(
 
 @router.delete("/templates/{template_uuid}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_template(
-    template_uuid: str,
+    template_uuid: UUID,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ):
     """Delete a budget template. Months using it will be unassigned."""
-    parsed = parse_uuid(template_uuid)
     try:
-        crud_budget.delete_template(db, parsed, user_id)
+        crud_budget.delete_template(db, template_uuid, user_id)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -106,13 +102,12 @@ def delete_template(
              response_model=budget_models.TemplateCategoryResponse,
              status_code=status.HTTP_201_CREATED)
 def add_template_category(
-    template_uuid: str,
+    template_uuid: UUID,
     data: budget_models.TemplateCategoryCreate,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ):
     """Add a category allocation to a template."""
-    parse_uuid(template_uuid)
     from src.crud import crud_category
 
     db_cat = crud_category.read_db_category_by_uuid(db, data.category_uuid)
@@ -126,10 +121,9 @@ def add_template_category(
             raise HTTPException(status_code=404, detail="Subcategory not found")
         sub_id = db_sub.db_id
 
-    parsed = parse_uuid(template_uuid)
     try:
         return crud_budget.add_template_category(
-            db, parsed, user_id, data,
+            db, template_uuid, user_id, data,
             category_id=db_cat.db_id, subcategory_id=sub_id,
         )
     except (NotFoundError, ValueError) as e:
@@ -139,15 +133,14 @@ def add_template_category(
 @router.put("/templates/categories/{allocation_uuid}",
             response_model=budget_models.TemplateCategoryResponse)
 def update_template_category(
-    allocation_uuid: str,
+    allocation_uuid: UUID,
     data: budget_models.TemplateCategoryUpdate,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ):
     """Update a template category allocation amount."""
-    parsed = parse_uuid(allocation_uuid)
     try:
-        return crud_budget.update_template_category(db, parsed, user_id, data)
+        return crud_budget.update_template_category(db, allocation_uuid, user_id, data)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
@@ -156,14 +149,13 @@ def update_template_category(
 
 @router.delete("/templates/categories/{allocation_uuid}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_template_category(
-    allocation_uuid: str,
+    allocation_uuid: UUID,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ):
     """Delete a category allocation from a template."""
-    parsed = parse_uuid(allocation_uuid)
     try:
-        crud_budget.delete_template_category(db, parsed, user_id)
+        crud_budget.delete_template_category(db, allocation_uuid, user_id)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

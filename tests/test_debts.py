@@ -47,11 +47,11 @@ def test_list_plans(client):
     assert {"P1", "P2"} <= names
 
 
-def test_get_plan_200_404_400(client):
+def test_get_plan_200_404_422(client):
     plan = _make_plan(client, name="Gettable")
     assert client.get(f"/debt/plans/{plan['id']}").status_code == 200
     assert client.get(f"/debt/plans/{uuid4()}").status_code == 404
-    assert client.get("/debt/plans/not-a-uuid").status_code == 400
+    assert client.get("/debt/plans/not-a-uuid").status_code == 422
 
 
 def test_update_plan_200(client):
@@ -183,18 +183,18 @@ def test_list_get_update_delete_payment(client, db, test_user):
     listed = client.get(f"/debt/accounts/{loan.uuid}/payments/").json()
     assert len(listed) == 1
 
-    assert client.get(f"/debt/payments/{created['id']}/").status_code == 200
+    assert client.get(f"/debt/payments/{created['id']}").status_code == 200
 
-    upd = client.put(f"/debt/payments/{created['id']}/", json={"payment_amount": "275.00"})
+    upd = client.put(f"/debt/payments/{created['id']}", json={"payment_amount": "275.00"})
     assert upd.status_code == 200
     assert Decimal(str(upd.json()["payment_amount"])) == Decimal("275.00")
 
-    assert client.delete(f"/debt/payments/{created['id']}/").status_code == 204
-    assert client.get(f"/debt/payments/{created['id']}/").status_code == 404
+    assert client.delete(f"/debt/payments/{created['id']}").status_code == 204
+    assert client.get(f"/debt/payments/{created['id']}").status_code == 404
 
 
 def test_payment_get_unknown_404(client):
-    assert client.get(f"/debt/payments/{uuid4()}/").status_code == 404
+    assert client.get(f"/debt/payments/{uuid4()}").status_code == 404
 
 
 def test_bulk_upload_payments(client, db, test_user):

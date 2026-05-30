@@ -36,16 +36,12 @@ def read_categories(
 
 @router.get("/{category_uuid}", response_model=category_models.CategoryResponse)
 def read_category(
-    category_uuid: str,
+    category_uuid: UUID,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ):
     """Retrieve a specific category by its UUID."""
-    try:
-        parsed_uuid = UUID(category_uuid)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid UUID format")
-    db_category = crud_category.read_db_category_by_uuid(db=db, category_uuid=parsed_uuid)
+    db_category = crud_category.read_db_category_by_uuid(db=db, category_uuid=category_uuid)
     if db_category is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
     return db_category

@@ -8,7 +8,6 @@ from src.models import tag as tag_models
 from src.models import transaction as transaction_models
 from src.db.core import get_db, NotFoundError
 from src.auth.dependencies import get_current_user_id
-from src.routers._deps import parse_uuid
 
 router = APIRouter(
     prefix="/tags",
@@ -64,22 +63,21 @@ def get_all_tag_stats(
 
 @router.get("/{tag_uuid}", response_model=tag_models.TagResponse)
 def read_tag(
-    tag_uuid: str,
+    tag_uuid: UUID,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
     """
     Retrieve a specific tag by its UUID.
     """
-    parsed_uuid = parse_uuid(tag_uuid)
-    db_tag = crud_tag.read_db_tag_by_uuid(db=db, tag_uuid=parsed_uuid, user_id=user_id)
+    db_tag = crud_tag.read_db_tag_by_uuid(db=db, tag_uuid=tag_uuid, user_id=user_id)
     if db_tag is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
     return db_tag
 
 @router.put("/{tag_uuid}", response_model=tag_models.TagResponse)
 def update_tag(
-    tag_uuid: str,
+    tag_uuid: UUID,
     tag: tag_models.TagUpdate,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
@@ -87,14 +85,13 @@ def update_tag(
     """
     Update a tag's name or color. System tags cannot be modified.
     """
-    parsed_uuid = parse_uuid(tag_uuid)
-    db_tag = crud_tag.read_db_tag_by_uuid(db, parsed_uuid, user_id)
+    db_tag = crud_tag.read_db_tag_by_uuid(db, tag_uuid, user_id)
     if not db_tag:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
     if db_tag.is_system:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System tags cannot be modified")
     try:
-        return crud_tag.update_db_tag_by_uuid(db=db, tag_uuid=parsed_uuid, user_id=user_id, tag_updates=tag)
+        return crud_tag.update_db_tag_by_uuid(db=db, tag_uuid=tag_uuid, user_id=user_id, tag_updates=tag)
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except ValueError as e:
@@ -102,15 +99,14 @@ def update_tag(
 
 @router.delete("/{tag_uuid}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_tag(
-    tag_uuid: str,
+    tag_uuid: UUID,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
     """
     Delete a tag. This will also remove all associations between this tag and any transactions.
     """
-    parsed_uuid = parse_uuid(tag_uuid)
-    db_tag = crud_tag.read_db_tag_by_uuid(db, tag_uuid=parsed_uuid, user_id=user_id)
+    db_tag = crud_tag.read_db_tag_by_uuid(db, tag_uuid=tag_uuid, user_id=user_id)
     if db_tag is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
     if db_tag.is_system:
@@ -123,22 +119,21 @@ def delete_tag(
 
 @router.get("/{tag_uuid}/stats", response_model=tag_models.TagStats)
 def get_tag_stats(
-    tag_uuid: str,
+    tag_uuid: UUID,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
     """
     Get statistics for a single tag.
     """
-    parsed_uuid = parse_uuid(tag_uuid)
     try:
-        return crud_tag.get_tag_stats_by_uuid(db=db, tag_uuid=parsed_uuid, user_id=user_id)
+        return crud_tag.get_tag_stats_by_uuid(db=db, tag_uuid=tag_uuid, user_id=user_id)
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 @router.get("/{tag_uuid}/transactions", response_model=List[transaction_models.TransactionResponse])
 def get_transactions_for_tag(
-    tag_uuid: str,
+    tag_uuid: UUID,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
@@ -147,50 +142,45 @@ def get_transactions_for_tag(
     """
     Get all transactions associated with a specific tag.
     """
-    parsed_uuid = parse_uuid(tag_uuid)
     try:
-        return crud_tag.get_transactions_for_tag_by_uuid(db=db, tag_uuid=parsed_uuid, user_id=user_id, skip=skip, limit=limit)
+        return crud_tag.get_transactions_for_tag_by_uuid(db=db, tag_uuid=tag_uuid, user_id=user_id, skip=skip, limit=limit)
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 @router.post("/transactions/", response_model=tag_models.TransactionTagResponse, status_code=status.HTTP_201_CREATED)
 def add_tag_to_transaction(
-    transaction_uuid: str,
-    tag_uuid: str,
+    transaction_uuid: UUID,
+    tag_uuid: UUID,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
     """
     Add a tag to a single transaction using UUIDs.
     """
-    parsed_transaction_uuid = parse_uuid(transaction_uuid)
-    parsed_tag_uuid = parse_uuid(tag_uuid)
     try:
         return crud_tag.add_tag_to_transaction_by_uuids(
             db=db, user_id=user_id,
-            transaction_uuid=parsed_transaction_uuid,
-            tag_uuid=parsed_tag_uuid
+            transaction_uuid=transaction_uuid,
+            tag_uuid=tag_uuid
         )
     except (NotFoundError, ValueError) as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 @router.delete("/transactions/{transaction_uuid}/tags/{tag_uuid}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_tag_from_transaction(
-    transaction_uuid: str,
-    tag_uuid: str,
+    transaction_uuid: UUID,
+    tag_uuid: UUID,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
     """
     Remove a tag from a single transaction using UUIDs.
     """
-    parsed_transaction_uuid = parse_uuid(transaction_uuid)
-    parsed_tag_uuid = parse_uuid(tag_uuid)
     try:
         if not crud_tag.remove_tag_from_transaction_by_uuids(
             db=db, user_id=user_id,
-            transaction_uuid=parsed_transaction_uuid,
-            tag_uuid=parsed_tag_uuid
+            transaction_uuid=transaction_uuid,
+            tag_uuid=tag_uuid
         ):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag/Transaction association not found.")
     except (NotFoundError, ValueError) as e:

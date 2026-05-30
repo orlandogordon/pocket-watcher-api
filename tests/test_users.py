@@ -3,7 +3,9 @@
 Auth shape here is the full-row dependency: routes inject `get_current_user`
 (a UserDB) and authorize via `require_self_or_admin` / `get_current_admin_user_id`.
 `client` is authed as the non-admin `test_user`; `admin_client` as an admin.
-User paths take the INTEGER user_id; UserResponse exposes the UUID under "id".
+User paths take the user UUID; UserResponse exposes the UUID under "id". A
+lookup resolves the user first, so an unknown UUID is 404 and an existing other
+user (to a non-admin) is 403.
 Passwords are bcrypt-hashed, so login/change-password tests seed a real hash.
 """
 import pytest
@@ -68,39 +70,37 @@ def test_list_users_as_non_admin_403(client):
 # ===== SELF-OR-ADMIN READ / UPDATE / DELETE =====
 
 def test_read_self_200(client, test_user):
-    resp = client.get(f"/users/{test_user.db_id}")
+    resp = client.get(f"/users/{test_user.uuid}")
     assert resp.status_code == 200
     assert resp.json()["email"] == "tester@example.com"
-
-
-def test_read_other_user_as_non_admin_403(client, test_user):
-    assert client.get(f"/users/{test_user.db_id + 999}").status_code == 403
-
-
-def test_read_unknown_user_as_admin_404(admin_client):
-    assert admin_client.get("/users/999999").status_code == 404
-
-
-def test_read_user_by_uuid_self(client, test_user):
-    resp = client.get(f"/users/uuid/{test_user.uuid}")
-    assert resp.status_code == 200
     assert resp.json()["id"] == str(test_user.uuid)
 
 
+def test_read_other_user_as_non_admin_403(client, db, test_user):
+    other = make_user(db, email="other@example.com", username="other")
+    assert client.get(f"/users/{other.uuid}").status_code == 403
+
+
+def test_read_unknown_user_as_admin_404(admin_client):
+    from uuid import uuid4
+    assert admin_client.get(f"/users/{uuid4()}").status_code == 404
+
+
 def test_update_self_200(client, test_user):
-    resp = client.put(f"/users/{test_user.db_id}", json={"first_name": "Renamed"})
+    resp = client.put(f"/users/{test_user.uuid}", json={"first_name": "Renamed"})
     assert resp.status_code == 200
     assert resp.json()["first_name"] == "Renamed"
 
 
-def test_update_other_user_403(client, test_user):
-    assert client.put(f"/users/{test_user.db_id + 999}", json={"first_name": "X"}).status_code == 403
+def test_update_other_user_403(client, db, test_user):
+    other = make_user(db, email="other2@example.com", username="other2")
+    assert client.put(f"/users/{other.uuid}", json={"first_name": "X"}).status_code == 403
 
 
-def test_delete_user_as_admin_200(admin_client, db):
+def test_delete_user_as_admin_204(admin_client, db):
     victim = make_user(db, email="victim@example.com", username="victim")
-    resp = admin_client.delete(f"/users/{victim.db_id}")
-    assert resp.status_code == 200
+    resp = admin_client.delete(f"/users/{victim.uuid}")
+    assert resp.status_code == 204
 
 
 # ===== LOGIN =====
@@ -125,7 +125,7 @@ def test_login_wrong_password_401(client, db):
 def test_change_password_success(client, db, test_user):
     test_user.password_hash = hash_password("OldPass123")
     db.flush()
-    resp = client.post(f"/users/{test_user.db_id}/change-password", json={
+    resp = client.post(f"/users/{test_user.uuid}/change-password", json={
         "current_password": "OldPass123", "new_password": "NewPass123", "confirm_new_password": "NewPass123",
     })
     assert resp.status_code == 200
@@ -134,14 +134,15 @@ def test_change_password_success(client, db, test_user):
 def test_change_password_wrong_current_400(client, db, test_user):
     test_user.password_hash = hash_password("OldPass123")
     db.flush()
-    resp = client.post(f"/users/{test_user.db_id}/change-password", json={
+    resp = client.post(f"/users/{test_user.uuid}/change-password", json={
         "current_password": "NotMyPassword1", "new_password": "NewPass123", "confirm_new_password": "NewPass123",
     })
     assert resp.status_code == 400
 
 
-def test_change_password_other_user_403(client, test_user):
-    resp = client.post(f"/users/{test_user.db_id + 999}/change-password", json={
+def test_change_password_other_user_403(client, db, test_user):
+    other = make_user(db, email="other3@example.com", username="other3")
+    resp = client.post(f"/users/{other.uuid}/change-password", json={
         "current_password": "OldPass123", "new_password": "NewPass123", "confirm_new_password": "NewPass123",
     })
     assert resp.status_code == 403
