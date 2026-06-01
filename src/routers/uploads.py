@@ -214,6 +214,7 @@ def _batch_progress(db: Session, batch: BulkImportBatchDB) -> Dict:
         "transactions_skipped": j.transactions_skipped,
         "investment_transactions_created": j.investment_transactions_created,
         "investment_transactions_skipped": j.investment_transactions_skipped,
+        "llm_degraded": j.llm_degraded,
         "error_message": j.error_message,
     } for j in children]
     current = next((j.file_path for j in children if j.status == "PROCESSING"), None)
@@ -226,6 +227,9 @@ def _batch_progress(db: Session, batch: BulkImportBatchDB) -> Dict:
         "created": sum(j.transactions_created + j.investment_transactions_created for j in children),
         "skipped": sum(j.transactions_skipped + j.investment_transactions_skipped for j in children),
         "needs_review": sum(j.needs_review for j in children),
+        # Batch-level AI signal: true if any file imported un-enriched (#60).
+        # Canonical `llm_degraded`, uniform with the single-file/document responses.
+        "llm_degraded": any(j.llm_degraded for j in children),
         "per_file": per_file,
         "created_at": batch.created_at,
         "completed_at": batch.completed_at,
@@ -298,6 +302,7 @@ def _document_summary(job: UploadJobDB) -> Dict:
         "filename": job.file_path,
         "institution": job.institution,
         "status": job.status,
+        "llm_degraded": job.llm_degraded,
         "account_uuid": str(job.account.uuid) if job.account else None,
         "transactions_created": job.transactions_created,
         "transactions_skipped": job.transactions_skipped,
@@ -468,6 +473,7 @@ def get_upload_job_status(
         "transactions_skipped": job.transactions_skipped,
         "investment_transactions_created": job.investment_transactions_created,
         "investment_transactions_skipped": job.investment_transactions_skipped,
+        "llm_degraded": job.llm_degraded,
         "error_message": job.error_message,
         "created_at": job.created_at,
         "started_at": job.started_at,
@@ -616,6 +622,13 @@ def _recompute_summary(session: dict) -> None:
         "ready_to_import": ready,
         "can_confirm": True,
     }
+
+
+def _llm_degraded_flag(llm_summary: Optional[dict]) -> bool:
+    """Canonical top-level AI-offline flag. Mirrors ``llm_summary.degraded`` so
+    the frontend reads the same ``llm_degraded`` field across the single-file
+    preview/confirm, bulk status, document, and job responses (#60)."""
+    return bool((llm_summary or {}).get("degraded"))
 
 
 @router.post("/statement/preview", status_code=201)
@@ -793,6 +806,7 @@ async def create_statement_preview(
         "rejected": {"transactions": rejected_txns, "investment_transactions": rejected_inv},
         "ready_to_import": {"transactions": ready_txns, "investment_transactions": ready_inv},
         "llm_summary": llm_summary,
+        "llm_degraded": _llm_degraded_flag(llm_summary),
     }
 
 
@@ -898,6 +912,7 @@ async def get_preview(
         "rejected": session["rejected"],
         "ready_to_import": session["ready_to_import"],
         "llm_summary": session.get("llm_summary"),
+        "llm_degraded": _llm_degraded_flag(session.get("llm_summary")),
     }
 
 
@@ -947,6 +962,7 @@ async def reject_item(
         "rejected": session["rejected"],
         "ready_to_import": session["ready_to_import"],
         "llm_summary": session.get("llm_summary"),
+        "llm_degraded": _llm_degraded_flag(session.get("llm_summary")),
     }
 
 
@@ -996,6 +1012,7 @@ async def restore_item(
         "rejected": session["rejected"],
         "ready_to_import": session["ready_to_import"],
         "llm_summary": session.get("llm_summary"),
+        "llm_degraded": _llm_degraded_flag(session.get("llm_summary")),
     }
 
 
@@ -1048,6 +1065,7 @@ async def bulk_reject_item(
         "rejected": session["rejected"],
         "ready_to_import": session["ready_to_import"],
         "llm_summary": session.get("llm_summary"),
+        "llm_degraded": _llm_degraded_flag(session.get("llm_summary")),
         "processed": processed,
         "not_found": not_found,
     }
@@ -1102,6 +1120,7 @@ async def bulk_restore_item(
         "rejected": session["rejected"],
         "ready_to_import": session["ready_to_import"],
         "llm_summary": session.get("llm_summary"),
+        "llm_degraded": _llm_degraded_flag(session.get("llm_summary")),
         "processed": processed,
         "not_found": not_found,
     }
@@ -1267,6 +1286,8 @@ async def confirm_statement_import(
         account_id=account_id,
         skip_duplicates=False,
         status="COMPLETED",
+        # AI-offline signal for the document, mirroring the bulk path (#60).
+        llm_degraded=bool((session.get("llm_summary") or {}).get("degraded")),
         # Archived original file (#59) — makes this import a viewable document.
         storage_key=session.get("storage_key"),
         file_size=session.get("file_size"),
@@ -1577,6 +1598,7 @@ async def confirm_statement_import(
         "processing_time_ms": elapsed_ms,
         "suggestion_accepted": suggestion_accept_count,
         "suggestion_overridden": suggestion_override_count,
+        "llm_degraded": _llm_degraded_flag(session.get("llm_summary")),
     }
 
 

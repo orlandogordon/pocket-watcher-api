@@ -86,6 +86,8 @@ def test_preview_parses_all_rows(client, fake_llm, cc_account):
         "ready_to_import": 4,
         "can_confirm": True,
     }
+    # LLM reachable (fake_llm) → canonical top-level flag is False (#60).
+    assert body["llm_degraded"] is False
     ready = body["ready_to_import"]["transactions"]
     assert {item["parsed_data"]["description"] for item in ready} == {
         *PURCHASE_DESCS, CREDIT_DESC,
@@ -259,6 +261,8 @@ def test_llm_unavailable_degrades_gracefully(client, fake_llm, cc_account):
     body = resp.json()
     assert body["summary"]["ready_to_import"] == 4
     assert body["llm_summary"]["degraded"] is True
+    # Canonical top-level flag, uniform with the bulk/document responses (#60).
+    assert body["llm_degraded"] is True
 
 
 def test_confirm_persists_viewable_document(client, fake_llm, cc_account, db):

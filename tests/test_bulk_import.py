@@ -98,3 +98,35 @@ def test_process_file_unknown_institution_returns_error(db, test_user, fake_llm)
     assert not result.ok
     assert "parser" in result.error.lower()
     assert db.query(TransactionDB).filter(TransactionDB.account_id == account.db_id).count() == 0
+
+
+def test_process_file_marks_degraded_when_llm_unavailable(db, test_user, monkeypatch):
+    """When the LLM backend is unreachable, rows still import (un-enriched) but
+    the per-file result is flagged degraded (#60)."""
+    from src.services import description_cleanup
+    from src.services.llm_client import LLMUnavailableError
+
+    class _DownLLM:
+        model_name = "down"
+
+        def process_transaction_batch(self, parsed):
+            raise LLMUnavailableError("offline")
+
+        def health_check(self):
+            return (False, None)
+
+    monkeypatch.setattr(description_cleanup, "get_llm_client", lambda: _DownLLM())
+
+    account = _amex_account(db, test_user)
+    result = bulk_import.process_file(
+        db,
+        file_bytes=_CSV_BYTES,
+        filename="amex_sample.csv",
+        institution="amex",
+        account_id=account.db_id,
+        user_id=test_user.db_id,
+    )
+
+    assert result.ok
+    assert result.transactions_created == 4
+    assert result.degraded is True

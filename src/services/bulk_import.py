@@ -42,6 +42,10 @@ class FileImportResult:
     investments_skipped: int = 0
     suggestions_applied: int = 0
     needs_review: int = 0
+    # True when at least one row fell through LLM enrichment (backend
+    # unreachable) — surfaced per-file so the bulk UI can flag un-enriched
+    # imports (#60), mirroring the single-file llm_summary.degraded signal.
+    degraded: bool = False
     error: Optional[str] = None
 
     @property
@@ -213,7 +217,7 @@ def process_file(
             if upload_job_id is not None:
                 for row in created:
                     row.upload_job_id = upload_job_id
-            applied, _fallthroughs, needs_review = _apply_cleanup_to_created(
+            applied, fallthroughs, needs_review = _apply_cleanup_to_created(
                 db, user_id, created, parsed_data.transactions, results,
                 uuid_to_id, has_category_columns=True,
             )
@@ -222,6 +226,7 @@ def process_file(
             result.transactions_skipped = len(skipped)
             result.suggestions_applied += applied
             result.needs_review += needs_review
+            result.degraded = result.degraded or fallthroughs > 0
 
         if parsed_data.investment_transactions:
             inv_items = [
@@ -245,11 +250,12 @@ def process_file(
                     row.upload_job_id = upload_job_id
             # Investment rows: no category columns, no tag join — walk only for
             # the fallthrough accounting side effects.
-            _apply_cleanup_to_created(
+            _, inv_fallthroughs, _ = _apply_cleanup_to_created(
                 db, user_id, created_inv, parsed_data.investment_transactions, inv_results,
                 category_uuid_to_id={}, has_category_columns=False,
             )
             db.commit()
+            result.degraded = result.degraded or inv_fallthroughs > 0
             result.investments_created = len(created_inv)
             result.investments_skipped = len(skipped_inv)
 

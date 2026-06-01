@@ -981,6 +981,12 @@ class UploadJobDB(Base):
     investment_transactions_created: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     investment_transactions_skipped: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     needs_review: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # rows auto-tagged Needs Review
+    # LLM enrichment signal (#60): True when this file imported with the LLM
+    # backend unreachable, so its rows landed un-enriched (no merchant/category
+    # suggestions). Distinct from needs_review (a count) — this is the boolean
+    # AI-offline flag the bulk/onboarding UI shows, mirroring the single-file
+    # llm_summary.degraded signal.
+    llm_degraded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

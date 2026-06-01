@@ -125,6 +125,9 @@ def test_bulk_import_happy_path(client, db, cc_account, fake_llm):
     # fake_llm returns null categories, so all 4 rows are auto-flagged Needs Review.
     assert prog["needs_review"] == 4
     assert prog["per_file"][0]["status"] == "COMPLETED"
+    # LLM was reachable (fake_llm), so nothing degraded (#60).
+    assert prog["llm_degraded"] is False
+    assert prog["per_file"][0]["llm_degraded"] is False
 
 
 def test_bulk_import_unknown_document_404(client, cc_account):
