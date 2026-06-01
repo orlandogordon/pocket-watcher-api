@@ -99,3 +99,54 @@ def test_transport_error_raises_unavailable():
     c = _client(raise_exc=RuntimeError("connection refused"))
     with pytest.raises(LLMUnavailableError):
         c.process_transaction_batch([{"description": "x"}])
+
+
+# ---- health_check (#60) ----
+
+class _FakeModel:
+    def __init__(self, id):
+        self.id = id
+
+
+class _FakeModelsPage:
+    def __init__(self, ids):
+        self.data = [_FakeModel(i) for i in ids]
+
+
+class _FakeModelsNamespace:
+    def __init__(self, ids=None, exc=None):
+        self._ids = ids or []
+        self._exc = exc
+
+    def list(self):
+        if self._exc is not None:
+            raise self._exc
+        return _FakeModelsPage(self._ids)
+
+
+class _FakeHealthClient:
+    """Stands in for the OpenAI client: with_options() returns self, and
+    models.list() is the probe target health_check() hits."""
+    def __init__(self, models):
+        self.models = models
+
+    def with_options(self, **kwargs):
+        return self
+
+
+def _health_client(ids=None, exc=None):
+    c = LlamaCppClient(endpoint="http://test/v1", model="cfg-model")
+    c._client = _FakeHealthClient(_FakeModelsNamespace(ids=ids, exc=exc))
+    return c
+
+
+def test_health_check_online_reports_served_model():
+    assert _health_client(ids=["served-model"]).health_check() == (True, "served-model")
+
+
+def test_health_check_online_empty_list_falls_back_to_config_model():
+    assert _health_client(ids=[]).health_check() == (True, "cfg-model")
+
+
+def test_health_check_offline_on_exception_never_raises():
+    assert _health_client(exc=RuntimeError("connection refused")).health_check() == (False, None)

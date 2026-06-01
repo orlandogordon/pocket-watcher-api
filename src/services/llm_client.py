@@ -51,6 +51,10 @@ _MERCHANT_CONFIDENCE_FLOOR = 0.85
 # confidence. 0.8 is a starting value; tune via inspection runs.
 _CATEGORY_CONFIDENCE_FLOOR = 0.8
 
+# Reachability-probe timeout for ``health_check()``. Short on purpose: "offline"
+# is a fine answer, and the probe must never contend with an in-flight import.
+_HEALTH_TIMEOUT_S = 2.0
+
 
 class LLMUnavailableError(Exception):
     """Raised when the LLM backend cannot be reached or fails all retries.
@@ -386,6 +390,12 @@ class LLMClient(ABC):
         on any unrecoverable failure (connection, timeout, malformed JSON,
         count mismatch)."""
 
+    @abstractmethod
+    def health_check(self) -> tuple[bool, Optional[str]]:
+        """Cheap reachability probe. Returns ``(online, model_id)``. Never
+        raises — an unreachable backend is a normal ``(False, None)`` answer,
+        not an error. Must not run a real completion."""
+
 
 class LlamaCppClient(LLMClient):
     """OpenAI-compatible client targeting a local llama-server instance."""
@@ -499,6 +509,18 @@ class LlamaCppClient(LLMClient):
 
         return out
 
+    def health_check(self) -> tuple[bool, Optional[str]]:
+        # Hit GET /v1/models with a short timeout — cheap, no completion. Any
+        # failure (refused, timeout, bad response) means offline.
+        try:
+            page = self._client.with_options(timeout=_HEALTH_TIMEOUT_S).models.list()
+            data = getattr(page, "data", None) or []
+            model_id = data[0].id if data else self._model
+            return True, model_id
+        except Exception as e:
+            logger.info("LLM health probe offline (%s: %s)", type(e).__name__, e)
+            return False, None
+
 
 class AnthropicClient(LLMClient):
     """Stub for production Anthropic backend — #30 implements this for real.
@@ -522,6 +544,10 @@ class AnthropicClient(LLMClient):
         raise NotImplementedError(
             "AnthropicClient is not implemented yet. Set LLM_BACKEND=llama_cpp."
         )
+
+    def health_check(self) -> tuple[bool, Optional[str]]:
+        # Not implemented — the self-hosted deployment runs llama_cpp only.
+        return False, None
 
 
 _client_singleton: Optional[LLMClient] = None
