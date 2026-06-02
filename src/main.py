@@ -7,6 +7,7 @@ from starlette.middleware.cors import CORSMiddleware
 # is missing or too short. Do not remove — this is the startup validation.
 from .auth import config as _auth_config  # noqa: F401
 from .auth.middleware import AuthMiddleware
+from .middleware.request_logging import RequestLoggingMiddleware
 
 from .logging_config import setup_logging, get_logger
 from .routers.auth import router as auth_router
@@ -37,6 +38,10 @@ logger = get_logger(__name__)
 #     yield
 
 app = FastAPI()  # FastAPI(lifespan=lifespan)
+# Added first so it ends up innermost (closest to routes). Being inner lets its
+# completion log inherit the user_id that the outer AuthMiddleware sets, since
+# BaseHTTPMiddleware contextvars only propagate downward.
+app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(AuthMiddleware)
 
 # CORS — must be added after AuthMiddleware so it runs first in the stack.
