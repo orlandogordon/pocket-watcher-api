@@ -1119,6 +1119,39 @@ def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
         cursor.close()
 
 
+import time
+from src.logging_config import get_logger
+
+_query_logger = get_logger("db.query")
+
+# Queries slower than this (ms) are logged at WARNING for slow-query detection.
+# Full SQL-statement logging stays gated behind SQL_ECHO / sqlalchemy.engine.
+SLOW_QUERY_MS = float(os.getenv("SLOW_QUERY_MS", "500"))
+
+
+@event.listens_for(Engine, "before_cursor_execute")
+def _record_query_start(conn, cursor, statement, parameters, context, executemany):
+    conn.info.setdefault("_query_start", []).append(time.perf_counter())
+
+
+@event.listens_for(Engine, "after_cursor_execute")
+def _log_slow_query(conn, cursor, statement, parameters, context, executemany):
+    """Log queries exceeding SLOW_QUERY_MS. Parameters are intentionally
+    omitted — they can carry PII / secrets (password hashes, emails)."""
+    started = conn.info.get("_query_start")
+    if not started:
+        return
+    duration_ms = (time.perf_counter() - started.pop()) * 1000
+    if duration_ms >= SLOW_QUERY_MS:
+        _query_logger.warning(
+            "db.slow_query",
+            extra={
+                "duration_ms": round(duration_ms, 2),
+                "statement": " ".join(statement.split()),
+            },
+        )
+
+
 engine = create_engine(DATABASE_URL, echo=os.getenv("SQL_ECHO", "false").lower() == "true")
 session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
