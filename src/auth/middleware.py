@@ -21,6 +21,7 @@ from src.db.core import session_local, UserDB
 # Paths that are reachable without a valid token.
 PUBLIC_PATHS: set[str] = {
     "/",
+    "/health",
     "/auth/login",
     "/openapi.json",
     "/docs",

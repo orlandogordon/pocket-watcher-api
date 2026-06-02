@@ -13,11 +13,58 @@ from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import text
+from starlette.responses import JSONResponse
 
 from src.auth.dependencies import get_current_user_id
+from src.db.core import session_local
+from src.logging_config import get_logger
 from src.services.llm_client import get_llm_client
+from src.services.redis_client import get_redis_client
 
 router = APIRouter(prefix="/health", tags=["health"])
+
+logger = get_logger(__name__)
+
+
+def _check_db() -> bool:
+    """True if a trivial query succeeds against the database."""
+    try:
+        db = session_local()
+        try:
+            db.execute(text("SELECT 1"))
+        finally:
+            db.close()
+        return True
+    except Exception:
+        logger.warning("health.db_unreachable", exc_info=True)
+        return False
+
+
+def _check_redis() -> bool:
+    """True if Redis responds to PING."""
+    try:
+        return bool(get_redis_client().ping())
+    except Exception:
+        logger.warning("health.redis_unreachable", exc_info=True)
+        return False
+
+
+@router.get("")
+def health() -> JSONResponse:
+    """Liveness/readiness probe for monitoring and container orchestration.
+
+    Public (unauthenticated). Returns 200 when both dependencies are
+    reachable, else 503 so readiness probes can gate traffic."""
+    db_ok = _check_db()
+    redis_ok = _check_redis()
+    ok = db_ok and redis_ok
+    body = {
+        "status": "ok" if ok else "degraded",
+        "db": "connected" if db_ok else "disconnected",
+        "redis": "connected" if redis_ok else "disconnected",
+    }
+    return JSONResponse(status_code=200 if ok else 503, content=body)
 
 # A single real probe is reused for this many seconds, so page polling (or
 # refresh-spam) can't each hit the model — and a health check can never contend
