@@ -22,7 +22,6 @@ from src.db.core import session_local, UserDB
 PUBLIC_PATHS: set[str] = {
     "/",
     "/auth/login",
-    "/users/login",
     "/openapi.json",
     "/docs",
     "/docs/oauth2-redirect",

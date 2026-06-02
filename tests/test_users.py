@@ -37,6 +37,14 @@ def test_me_returns_current_user(client, test_user):
     assert resp.json()["id"]  # UUID
 
 
+def test_me_is_admin_false_for_normal_user(client):
+    assert client.get("/users/me").json()["is_admin"] is False
+
+
+def test_me_is_admin_true_for_admin(admin_client):
+    assert admin_client.get("/users/me").json()["is_admin"] is True
+
+
 def test_me_unauthenticated_401(unauth_client):
     assert unauth_client.get("/users/me").status_code == 401
 
@@ -47,6 +55,7 @@ def test_create_user_as_admin_201(admin_client):
     resp = admin_client.post("/users/", json=_user_create_payload())
     assert resp.status_code == 201
     assert resp.json()["email"] == "newuser@example.com"
+    assert resp.json()["is_admin"] is False  # provisioned users are never admin
 
 
 def test_create_user_as_non_admin_403(client):
@@ -101,23 +110,6 @@ def test_delete_user_as_admin_204(admin_client, db):
     victim = make_user(db, email="victim@example.com", username="victim")
     resp = admin_client.delete(f"/users/{victim.uuid}")
     assert resp.status_code == 204
-
-
-# ===== LOGIN =====
-
-def test_login_success(client, db):
-    make_user(db, email="login@example.com", username="loginuser",
-              password_hash=hash_password("Secret123"))
-    resp = client.post("/users/login", json={"email": "login@example.com", "password": "Secret123"})
-    assert resp.status_code == 200
-    assert resp.json()["token_type"] == "bearer"
-
-
-def test_login_wrong_password_401(client, db):
-    make_user(db, email="login2@example.com", username="loginuser2",
-              password_hash=hash_password("Secret123"))
-    resp = client.post("/users/login", json={"email": "login2@example.com", "password": "WrongPass"})
-    assert resp.status_code == 401
 
 
 # ===== CHANGE PASSWORD (self only) =====

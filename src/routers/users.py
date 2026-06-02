@@ -32,22 +32,6 @@ def create_user(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     return db_user
 
-@router.post("/login")
-def login_for_access_token(user_login: user_models.UserLogin, db: Session = Depends(get_db)):
-    """
-    Authenticate user and return a token.
-    (Note: Token implementation is a placeholder).
-    """
-    user = crud_user.authenticate_user(db, email=user_login.email, password=user_login.password)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    # In a real application, you would create and return a JWT token here.
-    return {"access_token": user.username, "token_type": "bearer"}
-
 @router.get("/", response_model=List[user_models.UserResponse])
 def read_users(
     skip: int = 0,

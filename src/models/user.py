@@ -91,6 +91,7 @@ class UserResponse(BaseModel):
     last_login_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+    is_admin: bool
 
     class Config:
         from_attributes = True
