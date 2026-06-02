@@ -7,11 +7,14 @@ from typing import List, Optional, Dict
 from uuid import UUID, uuid4
 
 from src.db.core import FinancialPlanDB, FinancialPlanMonthDB, FinancialPlanExpenseDB, NotFoundError
+from src.logging_config import get_logger
 from src.models.financial_plan import (
     FinancialPlanCreate, FinancialPlanUpdate,
     FinancialPlanMonthCreate, FinancialPlanMonthUpdate,
     FinancialPlanExpenseCreate, FinancialPlanExpenseUpdate
 )
+
+logger = get_logger(__name__)
 
 
 def _sync_plan_dates(db: Session, plan_id: int):
@@ -38,6 +41,7 @@ def create_financial_plan(db: Session, user_id: int, plan: FinancialPlanCreate) 
     db.add(db_plan)
     db.commit()
     db.refresh(db_plan)
+    logger.info("financial_plan.created", extra={"resource_id": db_plan.db_id})
     return db_plan
 
 def get_financial_plan(db: Session, user_id: int, plan_id: int) -> Optional[FinancialPlanDB]:
@@ -52,11 +56,14 @@ def update_financial_plan(db: Session, db_plan: FinancialPlanDB, plan_in: Financ
         setattr(db_plan, key, value)
     db.commit()
     db.refresh(db_plan)
+    logger.info("financial_plan.updated", extra={"resource_id": db_plan.db_id})
     return db_plan
 
 def delete_financial_plan(db: Session, db_plan: FinancialPlanDB):
+    plan_id = db_plan.db_id
     db.delete(db_plan)
     db.commit()
+    logger.info("financial_plan.deleted", extra={"resource_id": plan_id})
 
 # Financial Plan Month CRUD
 
@@ -77,6 +84,7 @@ def create_financial_plan_month(db: Session, plan_id: int, month_data: Financial
     # Refresh to get the expenses
     db.refresh(db_month)
     _sync_plan_dates(db, plan_id)
+    logger.info("financial_plan_month.created", extra={"resource_id": db_month.db_id, "plan_id": plan_id})
     return db_month
 
 def get_financial_plan_month(db: Session, month_id: int) -> Optional[FinancialPlanMonthDB]:
@@ -91,13 +99,16 @@ def update_financial_plan_month(db: Session, db_month: FinancialPlanMonthDB, mon
         setattr(db_month, key, value)
     db.commit()
     db.refresh(db_month)
+    logger.info("financial_plan_month.updated", extra={"resource_id": db_month.db_id})
     return db_month
 
 def delete_financial_plan_month(db: Session, db_month: FinancialPlanMonthDB):
     plan_id = db_month.plan_id
+    month_id = db_month.db_id
     db.delete(db_month)
     db.commit()
     _sync_plan_dates(db, plan_id)
+    logger.info("financial_plan_month.deleted", extra={"resource_id": month_id, "plan_id": plan_id})
 
 def bulk_create_financial_plan_months(
     db: Session,

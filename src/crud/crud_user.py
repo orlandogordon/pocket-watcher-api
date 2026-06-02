@@ -7,8 +7,11 @@ import bcrypt
 
 # Import your database models and Pydantic models
 from src.db.core import UserDB, NotFoundError
+from src.logging_config import get_logger
 from src.models.user import UserCreate, UserUpdate, PasswordChange
 from src.services.system_tags import ensure_system_tags
+
+logger = get_logger(__name__)
 
 
 # ===== PASSWORD HASHING UTILITIES =====
@@ -58,9 +61,11 @@ def create_db_user(db: Session, user_data: UserCreate) -> UserDB:
         db.commit()
         db.refresh(db_user)
         ensure_system_tags(user_id=db_user.db_id, db=db)
+        logger.info("user.created", extra={"resource_id": db_user.db_id})
         return db_user
     except IntegrityError as e:
         db.rollback()
+        logger.error("user.create_failed", extra={"reason": "integrity_error"})
         raise ValueError("User creation failed due to database constraint")
 
 
@@ -124,9 +129,11 @@ def update_db_user(db: Session, user_id: int, user_updates: UserUpdate) -> UserD
     try:
         db.commit()
         db.refresh(db_user)
+        logger.info("user.updated", extra={"resource_id": user_id})
         return db_user
     except IntegrityError:
         db.rollback()
+        logger.error("user.update_failed", extra={"resource_id": user_id, "reason": "integrity_error"})
         raise ValueError("User update failed due to database constraint")
 
 
@@ -141,9 +148,11 @@ def delete_db_user(db: Session, user_id: int) -> bool:
         # Note: This will cascade delete related records based on your foreign key constraints
         db.delete(db_user)
         db.commit()
+        logger.info("user.deleted", extra={"resource_id": user_id})
         return True
     except Exception as e:
         db.rollback()
+        logger.error("user.delete_failed", extra={"resource_id": user_id}, exc_info=True)
         raise ValueError(f"Failed to delete user: {str(e)}")
 
 
@@ -184,9 +193,11 @@ def change_user_password(db: Session, user_id: int, password_change: PasswordCha
     try:
         db.commit()
         db.refresh(db_user)
+        logger.info("user.password_changed", extra={"resource_id": user_id})
         return db_user
     except Exception as e:
         db.rollback()
+        logger.error("user.password_change_failed", extra={"resource_id": user_id}, exc_info=True)
         raise ValueError(f"Failed to change password: {str(e)}")
 
 

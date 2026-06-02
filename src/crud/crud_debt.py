@@ -16,6 +16,7 @@ from src.db.core import (
     DebtStrategy,
     NotFoundError
 )
+from src.logging_config import get_logger
 from src.models.debt import (
     DebtRepaymentPlanCreate,
     DebtPlanAccountLinkCreate,
@@ -25,6 +26,8 @@ from src.models.debt import (
     DebtPaymentBulkCreate,
     DebtRepaymentPlanUpdate
 )
+
+logger = get_logger(__name__)
 
 # ===== DATABASE OPERATIONS - PLANS =====
 
@@ -38,6 +41,7 @@ def create_debt_repayment_plan(db: Session, user_id: int, plan_data: DebtRepayme
     db.add(db_plan)
     db.commit()
     db.refresh(db_plan)
+    logger.info("debt_plan.created", extra={"resource_id": db_plan.db_id})
     return db_plan
 
 def read_debt_repayment_plan(db: Session, plan_id: int, user_id: int) -> Optional[DebtRepaymentPlanDB]:
@@ -66,6 +70,7 @@ def add_account_to_plan(db: Session, user_id: int, link_data: DebtPlanAccountLin
     db.add(db_link)
     db.commit()
     db.refresh(db_link)
+    logger.info("debt_plan.account_linked", extra={"resource_id": plan_id, "account_id": account_id})
     return db_link
 
 def read_accounts_for_plan(db: Session, plan_id: int, user_id: int) -> List[AccountDB]:
@@ -93,6 +98,7 @@ def remove_account_from_plan(db: Session, user_id: int, plan_id: int, account_id
 
     db.delete(link)
     db.commit()
+    logger.info("debt_plan.account_unlinked", extra={"resource_id": plan_id, "account_id": account_id})
     return True
 
 # ===== DATABASE OPERATIONS - SCHEDULES =====
@@ -122,6 +128,7 @@ def bulk_create_or_update_schedule(db: Session, user_id: int, schedule_data: Deb
     
     db.bulk_save_objects(new_schedules)
     db.commit()
+    logger.info("debt_schedule.bulk_upserted", extra={"account_id": account_id, "count": len(new_schedules)})
     return len(new_schedules)
 
 def read_schedule_for_account(db: Session, user_id: int, account_id: int) -> List[DebtRepaymentScheduleDB]:
@@ -292,6 +299,7 @@ def create_debt_payment(db: Session, user_id: int, payment_data: DebtPaymentCrea
 
     db.commit()
     db.refresh(db_payment)
+    logger.info("debt_payment.created", extra={"resource_id": db_payment.db_id, "loan_account_id": loan_account_id})
     return db_payment
 
 def bulk_create_debt_payments(db: Session, user_id: int, bulk_data: DebtPaymentBulkCreate, *, resolved_ids: List[Dict]) -> List[DebtPaymentDB]:
@@ -410,6 +418,7 @@ def update_debt_payment(db: Session, payment_id: int, user_id: int, payment_data
 
     db.commit()
     db.refresh(db_payment)
+    logger.info("debt_payment.updated", extra={"resource_id": payment_id})
     return db_payment
 
 def delete_debt_payment(db: Session, payment_id: int, user_id: int) -> bool:
@@ -431,6 +440,7 @@ def delete_debt_payment(db: Session, payment_id: int, user_id: int) -> bool:
 
     db.delete(db_payment)
     db.commit()
+    logger.info("debt_payment.deleted", extra={"resource_id": payment_id})
     return True
 
 
@@ -456,6 +466,7 @@ def update_debt_repayment_plan_by_uuid(db: Session, plan_uuid: UUID, user_id: in
 
     db.commit()
     db.refresh(db_plan)
+    logger.info("debt_plan.updated", extra={"resource_id": db_plan.db_id})
     return db_plan
 
 def delete_debt_repayment_plan_by_uuid(db: Session, plan_uuid: UUID, user_id: int) -> bool:
@@ -463,8 +474,10 @@ def delete_debt_repayment_plan_by_uuid(db: Session, plan_uuid: UUID, user_id: in
     if not db_plan:
         return False
 
+    plan_id = db_plan.db_id
     db.delete(db_plan)
     db.commit()
+    logger.info("debt_plan.deleted", extra={"resource_id": plan_id})
     return True
 
 

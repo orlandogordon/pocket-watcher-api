@@ -7,7 +7,10 @@ from uuid import UUID, uuid4
 
 # Import your database models
 from src.db.core import TagDB, UserDB, TransactionTagDB, TransactionDB, NotFoundError
+from src.logging_config import get_logger
 from src.models.tag import TagCreate, TagUpdate, TagStats
+
+logger = get_logger(__name__)
 
 
 # ===== DATABASE OPERATIONS =====
@@ -41,9 +44,11 @@ def create_db_tag(db: Session, user_id: int, tag_data: TagCreate) -> TagDB:
         db.add(db_tag)
         db.commit()
         db.refresh(db_tag)
+        logger.info("tag.created", extra={"resource_id": db_tag.db_id})
         return db_tag
     except IntegrityError:
         db.rollback()
+        logger.error("tag.create_failed", extra={"reason": "integrity_error"})
         raise ValueError("Tag creation failed due to database constraint")
 
 
@@ -103,9 +108,11 @@ def update_db_tag(db: Session, tag_id: int, user_id: int, tag_updates: TagUpdate
     try:
         db.commit()
         db.refresh(db_tag)
+        logger.info("tag.updated", extra={"resource_id": tag_id})
         return db_tag
     except IntegrityError:
         db.rollback()
+        logger.error("tag.update_failed", extra={"resource_id": tag_id, "reason": "integrity_error"})
         raise ValueError("Tag update failed due to database constraint")
 
 
@@ -127,9 +134,11 @@ def delete_db_tag(db: Session, tag_id: int, user_id: int) -> bool:
         # Then delete the tag
         db.delete(db_tag)
         db.commit()
+        logger.info("tag.deleted", extra={"resource_id": tag_id})
         return True
     except Exception as e:
         db.rollback()
+        logger.error("tag.delete_failed", extra={"resource_id": tag_id}, exc_info=True)
         raise ValueError(f"Failed to delete tag: {str(e)}")
 
 
