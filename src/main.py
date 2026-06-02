@@ -1,7 +1,15 @@
+import logging
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 
 # Import auth config early so the app fails loudly at startup if JWT_SECRET
 # is missing or too short. Do not remove — this is the startup validation.
@@ -53,6 +61,55 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Log handled HTTP errors with their detail, then return the canonical
+    FastAPI response. 4xx at WARNING, 5xx at ERROR."""
+    level = logging.ERROR if exc.status_code >= 500 else logging.WARNING
+    logger.log(
+        level,
+        "http_exception",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": exc.status_code,
+            "detail": exc.detail,
+        },
+    )
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Log the offending input (the 'what caused it') then return the
+    canonical 422 response."""
+    logger.warning(
+        "validation_error",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "errors": exc.errors(),
+        },
+    )
+    return await request_validation_exception_handler(request, exc)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    """Last-resort handler: log the full traceback with request context and
+    return a generic 500 so internals never leak to the client."""
+    logger.error(
+        "unhandled_exception",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "request_id": getattr(request.state, "request_id", None),
+        },
+        exc_info=exc,
+    )
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 
 @app.on_event("startup")

@@ -38,6 +38,9 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
         set_request_id(request_id)
+        # Also stash on request.state so the catch-all 500 handler (which runs
+        # above this middleware, outside the contextvar's reach) can recover it.
+        request.state.request_id = request_id
 
         content_length = request.headers.get("content-length")
         logger.info(
@@ -55,8 +58,9 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
         except Exception:
             duration_ms = round((time.perf_counter() - start) * 1000, 2)
-            # The exception will be turned into a 500 by the registered
-            # handler; log it here with the request context attached.
+            # Timing + request_id for the failed request. The full traceback is
+            # logged once by the catch-all 500 handler (which also covers
+            # exceptions raised above this middleware), so it's omitted here.
             logger.error(
                 "request.failed",
                 extra={
@@ -64,7 +68,6 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                     "path": request.url.path,
                     "duration_ms": duration_ms,
                 },
-                exc_info=True,
             )
             raise
 

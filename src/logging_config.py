@@ -21,8 +21,13 @@ class ContextFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.request_id = get_request_id()
-        record.user_id = _current_user_id.get()
+        # Respect a value the caller passed via ``extra`` (e.g. the 500 handler
+        # bridging request_id from request.state, since it runs above the
+        # request-context middleware where the contextvar isn't set).
+        if getattr(record, "request_id", None) is None:
+            record.request_id = get_request_id()
+        if getattr(record, "user_id", None) is None:
+            record.user_id = _current_user_id.get()
         return True
 
 
@@ -36,6 +41,7 @@ def _build_formatter() -> JsonFormatter:
             "name": "logger",
         },
         datefmt="%Y-%m-%dT%H:%M:%S%z",
+        json_default=str,  # stringify anything not natively JSON-serializable
     )
 
 
