@@ -268,57 +268,39 @@ server, Postgres, or Redis needed** (in-memory SQLite + `fakeredis`). Run:
   `python -m src.jobs.option_expiration_sweep`,
   `python -m src.jobs.sweep_preview_orphans`).
 
-## Next Steps / To-Do
+## Logging & Observability (C3)
 
-### Logging Implementation
+Structured logging is implemented — build on it, don't reinvent it:
 
-Replace all print statements with proper logging infrastructure:
+- **JSON everywhere.** `src/logging_config.py` configures `python-json-logger`
+  on every handler (`timestamp`, `level`, `logger`, `message`, exc info). Get a
+  logger with `from src.logging_config import get_logger; logger =
+  get_logger(__name__)`. Levels via `APP_LOG_LEVEL` / `THIRD_PARTY_LOG_LEVEL`;
+  optional rotating file via `LOG_FILE`.
+- **Request correlation.** A `ContextFilter` stamps `request_id` and `user_id`
+  on every record from contextvars (`src/request_context.py`,
+  `src/auth/context.py`) — so route and CRUD logs carry them with no plumbing.
+  The filter won't clobber a value already set via `extra`.
+- **Access log.** `src/middleware/request_logging.py` (registered innermost in
+  `main.py`) generates/propagates `request_id` (honors inbound `X-Request-ID`,
+  echoes it on the response), logs `request.start` and `request.complete`
+  (status_code + duration_ms; 4xx WARNING / 5xx ERROR). Request bodies are not
+  read/logged (avoids consuming upload streams + leaking secrets).
+- **Slow queries.** Engine event listeners in `src/db/core.py` log statements
+  over `SLOW_QUERY_MS` (default 500) at WARNING with duration_ms; params
+  omitted. Full SQL stays gated behind `SQL_ECHO`.
+- **Error handlers** (`main.py`): `HTTPException` (4xx WARNING / 5xx ERROR),
+  `RequestValidationError` (WARNING + offending input), and a catch-all
+  `Exception` (ERROR + full traceback, generic 500 JSON). The catch-all runs
+  above the logging middleware, so `request_id` is bridged via `request.state`.
+- **CRUD mutations** log at INFO with the resource id (create/update/delete);
+  reads stay quiet. Failures with existing try/except log at ERROR.
+- **Health:** `GET /health` (public) → `{status, db, redis}`, 200 / 503;
+  `GET /health/llm` (authed) is the LLM reachability probe.
 
-1. **Configure Logging System**
-   - Set up Python's logging module with appropriate handlers
-   - Create separate loggers for different modules
-   - Implement log rotation and retention policies
+### Remaining / deferred
 
-2. **Environment-Based Configuration**
-   ```python
-   # Environment variables for log levels
-   APP_LOG_LEVEL = os.getenv("APP_LOG_LEVEL", "INFO")  # Application logs
-   THIRD_PARTY_LOG_LEVEL = os.getenv("THIRD_PARTY_LOG_LEVEL", "WARNING")  # SQLAlchemy, pdfplumber, etc.
-   ```
-
-3. **Logger Setup**
-   ```python
-   import logging
-   
-   # Application logger
-   app_logger = logging.getLogger("loanchy")
-   app_logger.setLevel(APP_LOG_LEVEL)
-   
-   # Third-party loggers
-   logging.getLogger("sqlalchemy").setLevel(THIRD_PARTY_LOG_LEVEL)
-   logging.getLogger("pdfplumber").setLevel(THIRD_PARTY_LOG_LEVEL)
-   ```
-
-4. **Replace Print Statements**
-   - Parser debug output → `logger.debug()`
-   - Error messages → `logger.error()` with exception info
-   - Info messages → `logger.info()`
-   - Transaction processing details → `logger.debug()`
-
-5. **Structured Logging**
-   - Add correlation IDs for request tracking
-   - Include user context in log messages
-   - Log performance metrics for slow queries
-
-6. **Audit Logging**
-   - Consider database table for audit logs (financial compliance)
-   - Track critical operations (account modifications, bulk imports)
-   - Maintain user action history
-
-### Additional Improvements
-
-- Implement comprehensive error handling middleware
-- Add request/response validation logging
-- Create health check endpoints with logging
-- Set up monitoring and alerting based on log patterns
-- Document logging standards and best practices
+- **Audit logging** — a DB table for critical operations (financial
+  compliance) is still future work, distinct from app logs.
+- **Log aggregation + monitoring/alerting** (Loki+Grafana on the home server)
+  is **close-out C5**, not C3.

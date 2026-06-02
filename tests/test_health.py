@@ -58,3 +58,28 @@ def test_llm_health_cached_within_ttl_probes_once(client, monkeypatch):
 def test_llm_health_requires_auth(unauth_client):
     resp = unauth_client.get("/health/llm")
     assert resp.status_code == 401
+
+
+def test_health_ok_when_both_up(client, monkeypatch):
+    monkeypatch.setattr(health_mod, "_check_db", lambda: True)
+    monkeypatch.setattr(health_mod, "_check_redis", lambda: True)
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok", "db": "connected", "redis": "connected"}
+
+
+def test_health_degraded_returns_503_when_redis_down(client, monkeypatch):
+    monkeypatch.setattr(health_mod, "_check_db", lambda: True)
+    monkeypatch.setattr(health_mod, "_check_redis", lambda: False)
+    resp = client.get("/health")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["status"] == "degraded"
+    assert body["redis"] == "disconnected"
+
+
+def test_health_is_public(unauth_client, monkeypatch):
+    monkeypatch.setattr(health_mod, "_check_db", lambda: True)
+    monkeypatch.setattr(health_mod, "_check_redis", lambda: True)
+    resp = unauth_client.get("/health")
+    assert resp.status_code == 200
