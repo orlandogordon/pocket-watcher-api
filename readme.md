@@ -19,6 +19,56 @@
 - Run Claude Code: npx @anthropic-ai/claude-code
 
 
+## Local Development Setup
+
+Local dev defaults to **SQLite** (`sqlite:///test.db`), so the app runs with no
+external services. **PostgreSQL** is the production target and can be run locally
+via Docker for parity. The Alembic history is a single squashed baseline + a
+category-seed migration; fresh databases start from these.
+
+### Quick start (SQLite)
+
+```powershell
+python -m alembic upgrade head          # create schema + seed categories
+$env:ADMIN_EMAIL="dev@pocketwatcher.local"; $env:ADMIN_PASSWORD="Password123!"
+python -m src.jobs.bootstrap_admin      # mint the first admin (idempotent)
+uvicorn src.main:app --reload
+```
+
+### Running against Postgres (Docker)
+
+`docker-compose.yml` provides `postgres:17` + `redis:7` with persistent volumes
+and `restart: unless-stopped` (they survive reboots; data lives in named volumes,
+not the containers).
+
+```powershell
+# 1. Start Postgres + Redis
+docker compose up -d
+
+# 2. Point the app at the container (or uncomment DATABASE_URL in .env)
+$env:DATABASE_URL = "postgresql+psycopg2://pocketwatcher:pocketwatcher@localhost:5432/pocketwatcher"
+
+# 3. Create schema + seed categories
+python -m alembic upgrade head
+
+# 4. Mint the first admin (idempotent — safe to re-run)
+$env:ADMIN_EMAIL="dev@pocketwatcher.local"; $env:ADMIN_PASSWORD="Password123!"; python -m src.jobs.bootstrap_admin
+
+# 5. Run the app
+uvicorn src.main:app --reload
+```
+
+Notes:
+- **First admin:** registration is admin-gated and `is_admin` has no API path, so
+  `src.jobs.bootstrap_admin` (driven by `ADMIN_EMAIL` / `ADMIN_PASSWORD`, optional
+  `ADMIN_USERNAME`) is the only way to create one. Re-running with an existing
+  email is a no-op.
+- **GUI access:** connect any Postgres client (pgAdmin, DBeaver, psql) to
+  `localhost:5432`, db/user/pass `pocketwatcher`. The container must be running.
+- **Stop vs wipe:** `docker compose down` stops the stack but keeps the data;
+  `docker compose down -v` deletes the volumes (empties the DB).
+
+
 ## Testing
 
 The test suite is `pytest`-based and runs the app in-process via `TestClient` —

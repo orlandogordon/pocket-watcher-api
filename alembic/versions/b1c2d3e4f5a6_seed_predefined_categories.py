@@ -1,11 +1,12 @@
-"""seed predefined categories (todo #29)
+"""seed predefined categories
 
-Revision ID: c1a2b3d4e5f6
-Revises: 3a4fbf053151
-Create Date: 2026-04-24
+Revision ID: b1c2d3e4f5a6
+Revises: 819291009bbf
+Create Date: 2026-06-03
 
-Idempotent upsert of the locked category tree from src.constants.categories.
-Categories are no longer user-editable; scripts/seed.py no longer creates them.
+Idempotent upsert of the locked category tree from src.constants.categories,
+re-pointed onto the squashed baseline (#C1). Keyed on UUID so re-running never
+creates duplicates. Categories are not user-editable.
 """
 from typing import Sequence, Union
 
@@ -15,23 +16,18 @@ import sqlalchemy as sa
 from src.constants.categories import PREDEFINED_CATEGORIES
 
 
-revision: str = 'c1a2b3d4e5f6'
-down_revision: Union[str, Sequence[str], None] = '3a4fbf053151'
+revision: str = 'b1c2d3e4f5a6'
+down_revision: Union[str, Sequence[str], None] = '819291009bbf'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Upsert the predefined category tree.
-
-    Keyed on UUID so re-running the migration never creates duplicates. If a row
-    with the same UUID already exists, its name + parent are refreshed to match
-    the current definition in code.
-    """
+    """Upsert the predefined category tree, keyed on UUID."""
     bind = op.get_bind()
     categories_tbl = sa.table(
         "categories",
-        sa.column("id", sa.Integer),
+        sa.column("db_id", sa.Integer),
         sa.column("uuid", sa.Uuid),
         sa.column("name", sa.String),
         sa.column("parent_category_id", sa.Integer),
@@ -40,7 +36,7 @@ def upgrade() -> None:
     # Pass 1: parents
     for parent_name, parent_uuid, _subs in PREDEFINED_CATEGORIES:
         row = bind.execute(
-            sa.select(categories_tbl.c.id).where(categories_tbl.c.uuid == parent_uuid)
+            sa.select(categories_tbl.c.db_id).where(categories_tbl.c.uuid == parent_uuid)
         ).first()
         if row is None:
             bind.execute(categories_tbl.insert().values(
@@ -56,13 +52,13 @@ def upgrade() -> None:
     # Pass 2: subcategories (need parents' integer ids)
     for parent_name, parent_uuid, subs in PREDEFINED_CATEGORIES:
         parent_row = bind.execute(
-            sa.select(categories_tbl.c.id).where(categories_tbl.c.uuid == parent_uuid)
+            sa.select(categories_tbl.c.db_id).where(categories_tbl.c.uuid == parent_uuid)
         ).first()
         parent_id = parent_row[0]
 
         for sub_name, sub_uuid in subs:
             row = bind.execute(
-                sa.select(categories_tbl.c.id).where(categories_tbl.c.uuid == sub_uuid)
+                sa.select(categories_tbl.c.db_id).where(categories_tbl.c.uuid == sub_uuid)
             ).first()
             if row is None:
                 bind.execute(categories_tbl.insert().values(

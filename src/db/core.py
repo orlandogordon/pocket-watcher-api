@@ -520,13 +520,13 @@ class TransactionRelationshipDB(Base):
         Index("idx_rel_to_investment_transaction", "to_investment_transaction_id"),
         Index("idx_rel_type", "relationship_type"),
         CheckConstraint(
-            "((from_transaction_id IS NOT NULL) + "
-            "(from_investment_transaction_id IS NOT NULL)) = 1",
+            "(CASE WHEN from_transaction_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN from_investment_transaction_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
             name="ck_rel_from_exactly_one",
         ),
         CheckConstraint(
-            "((to_transaction_id IS NOT NULL) + "
-            "(to_investment_transaction_id IS NOT NULL)) = 1",
+            "(CASE WHEN to_transaction_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN to_investment_transaction_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
             name="ck_rel_to_exactly_one",
         ),
     )
@@ -569,13 +569,13 @@ class DismissedTransferPairDB(Base):
             "to_investment_transaction_id",
         ),
         CheckConstraint(
-            "((from_transaction_id IS NOT NULL) + "
-            "(from_investment_transaction_id IS NOT NULL)) = 1",
+            "(CASE WHEN from_transaction_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN from_investment_transaction_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
             name="ck_dismissed_from_exactly_one",
         ),
         CheckConstraint(
-            "((to_transaction_id IS NOT NULL) + "
-            "(to_investment_transaction_id IS NOT NULL)) = 1",
+            "(CASE WHEN to_transaction_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN to_investment_transaction_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
             name="ck_dismissed_to_exactly_one",
         ),
     )
