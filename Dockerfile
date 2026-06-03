@@ -2,14 +2,14 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# Build deps: gcc + libpq-dev to compile psycopg2 (we pin the source build, not
-# psycopg2-binary). Removed after install to keep the image small.
+# Build/runtime deps:
+#  - gcc + libc6-dev: compile psycopg2 (source build, not psycopg2-binary).
+#    libc6-dev is required explicitly — with --no-install-recommends, gcc does
+#    NOT pull in the standard C headers (assert.h etc.) on its own.
+#  - libpq-dev: psycopg2 build (pg_config) + libpq at runtime.
+#  - curl: the container HEALTHCHECK below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# curl for the container HEALTHCHECK below.
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+        gcc libc6-dev libpq-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
