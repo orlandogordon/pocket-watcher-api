@@ -1,0 +1,43 @@
+# Keep the build context (and image) lean — mirror .gitignore's noise.
+.git/
+.github/
+venv/
+.venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*.so
+
+# Local data, dev databases, secrets
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+.env.*
+!.env.prod.example
+
+# Test / coverage / caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.mypy_cache/
+.ruff_cache/
+
+# Local-only corpora and tooling
+tests/parsers/fixtures/local/
+scripts/
+llm_inspect/
+input/
+output/
+processed/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+.claude/

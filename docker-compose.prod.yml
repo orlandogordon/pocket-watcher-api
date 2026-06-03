@@ -1,0 +1,83 @@
+# Production stack for the home server (C5). Run from the repo checkout at
+# /opt/pocket-watcher/app:
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Requires a sibling .env with the secrets in .env.prod.example. Postgres/Redis
+# data live on the OS drive (/opt/pocket-watcher/data); uploaded statements live
+# on the 1 TB drive (/mnt/storage). Neither DB port is published — only the API
+# (8000) and Grafana (3000) are reachable, and the host is VPN-only anyway.
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env            # JWT_SECRET, OAUTH_ENCRYPTION_KEY, LLM_*, CORS_ORIGINS, ...
+    environment:
+      # Infra wiring — these override anything in .env (compose precedence).
+      DATABASE_URL: postgresql+psycopg2://pocketwatcher:${POSTGRES_PASSWORD}@postgres:5432/pocketwatcher
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      UPLOAD_DIR: /data/uploads
+    volumes:
+      - /mnt/storage/pocket-watcher/uploads:/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pocketwatcher
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: pocketwatcher
+    volumes:
+      - /opt/pocket-watcher/data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pocketwatcher -d pocketwatcher"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - /opt/pocket-watcher/data/redis:/data
+
+  # ---- Log aggregation (C3 descope): JSON stdout -> Loki -> Grafana ----
+  loki:
+    image: grafana/loki:3.0.0
+    restart: unless-stopped
+    command: -config.file=/etc/loki/local-config.yaml   # default config baked into image
+    volumes:
+      - /opt/pocket-watcher/data/loki:/loki
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+    volumes:
+      - /opt/pocket-watcher/data/grafana:/var/lib/grafana
+    depends_on:
+      - loki

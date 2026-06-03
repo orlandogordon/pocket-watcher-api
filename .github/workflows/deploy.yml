@@ -1,0 +1,44 @@
+name: Test & Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      # Test deps live in requirements.txt (pytest/pytest-cov/fakeredis/Faker).
+      # The suite runs in-process (in-memory SQLite + fakeredis) and sets its own
+      # JWT_SECRET in conftest, so no services or secrets are needed here.
+      - run: pip install -r requirements.txt
+      - run: python -m pytest --cov=src -q
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: self-hosted
+    steps:
+      # The repo is already cloned at /opt/pocket-watcher/app on the server (with
+      # its own .env + bind-mounted data), so we pull-in-place rather than
+      # checking out into the runner workspace.
+      - name: Pull latest
+        working-directory: /opt/pocket-watcher/app
+        run: git pull origin main
+      - name: Build & restart
+        working-directory: /opt/pocket-watcher/app
+        run: docker compose -f docker-compose.prod.yml up -d --build
+      - name: Verify health
+        run: |
+          for i in $(seq 1 15); do
+            curl -fsS http://localhost:8000/health && exit 0
+            sleep 4
+          done
+          echo "health check failed"; exit 1
