@@ -10,8 +10,12 @@ scrape_configs:
       - host: unix:///var/run/docker.sock
         refresh_interval: 5s
     relabel_configs:
+      # Docker SD prefixes names with '/', e.g. '/app-api-1' — strip it so LogQL
+      # reads cleanly: {container="app-api-1"}.
       - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
         target_label: container
+        replacement: '${1}'
     pipeline_stages:
       # Our services log JSON (python-json-logger) to stdout; parse it into
       # labels/fields so Grafana can filter on level/logger and trace by request_id.
