@@ -3,10 +3,11 @@
 #
 #   docker compose -f docker-compose.prod.yml up -d --build
 #
-# Requires a sibling .env with the secrets in .env.prod.example. Postgres/Redis
-# data live on the OS drive (/opt/pocket-watcher/data); uploaded statements live
-# on the 1 TB drive (/mnt/storage). Neither DB port is published — only the API
-# (8000) and Grafana (3000) are reachable, and the host is VPN-only anyway.
+# Requires a sibling .env with the secrets in .env.prod.example. Stateful
+# services use Docker named volumes (on the OS drive under /var/lib/docker, and
+# free of host bind-mount UID headaches); only uploaded statements bind to the
+# 1 TB drive (/mnt/storage). Neither DB port is published — only the API (8000)
+# and Grafana (3000) are reachable, and the host is VPN-only anyway.
 services:
   api:
     build: .
@@ -37,7 +38,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: pocketwatcher
     volumes:
-      - /opt/pocket-watcher/data/postgres:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pocketwatcher -d pocketwatcher"]
       interval: 5s
@@ -49,7 +50,7 @@ services:
     restart: unless-stopped
     command: redis-server --appendonly yes
     volumes:
-      - /opt/pocket-watcher/data/redis:/data
+      - redisdata:/data
 
   # ---- Log aggregation (C3 descope): JSON stdout -> Loki -> Grafana ----
   loki:
@@ -57,7 +58,7 @@ services:
     restart: unless-stopped
     command: -config.file=/etc/loki/local-config.yaml   # default config baked into image
     volumes:
-      - /opt/pocket-watcher/data/loki:/loki
+      - lokidata:/loki
 
   promtail:
     image: grafana/promtail:3.0.0
@@ -78,6 +79,12 @@ services:
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
     volumes:
-      - /opt/pocket-watcher/data/grafana:/var/lib/grafana
+      - grafanadata:/var/lib/grafana
     depends_on:
       - loki
+
+volumes:
+  pgdata:
+  redisdata:
+  lokidata:
+  grafanadata:
