@@ -267,6 +267,23 @@ on by the frontend, don't "fix" them into uniformity:
   - Use portable abstractions: `sa.Uuid` (not native UUID), generic `JSON`,
     SQLAlchemy `.ilike()`, explicit `String(n)` / `DECIMAL(p,s)`.
 
+## Deployment & CI/CD (C5)
+
+- **Production** runs the `docker-compose.prod.yml` stack (api + `postgres:17` +
+  `redis:7` + loki/promtail/grafana) on a self-hosted home server, VPN-only. It's
+  distinct from the dev `docker-compose.yml` (postgres+redis only).
+- **Auto-deploy** via `.github/workflows/deploy.yml`: on push to `main`, a `test`
+  job runs the suite on a GitHub-hosted runner; on pass, a `deploy` job runs on a
+  **self-hosted runner** on the server — `git pull` + `docker compose -f
+  docker-compose.prod.yml up -d --build` (rebuilds only `api`; data
+  services/volumes untouched), then curls `GET /health` to verify. So merging to
+  `main` auto-deploys.
+- The `api` image (`Dockerfile`) runs `alembic upgrade head` (incl. the category
+  seed) on start, then uvicorn. First admin is minted out-of-band via
+  `python -m src.jobs.bootstrap_admin` (admin creation has no API path).
+- Detailed server topology, secrets, and ops runbook live in **private notes**,
+  not this repo.
+
 ## Testing
 
 `pytest`-based suite that runs the app in-process via `TestClient` — **no

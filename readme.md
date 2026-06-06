@@ -1,23 +1,40 @@
-## Other products to consider
-- plain text accountng
-- bean count
-- hledger
-- docuclipper
-- streamlit
-- time shift data
+# Pocket Watcher API
 
-## TODO
-- Breakout the image handling into a separate function
-- Update the image handling logic to use output folder instead of png
-- Consider class based approach to combine all parsers
-- Implement more regex
+A personal-finance management backend built with **FastAPI**. It tracks
+transactions across multiple accounts, imports and parses bank/brokerage
+statements, and supports budgets, investment holdings, debt-repayment plans, and
+financial planning.
 
-## API Curl requests testing
+> This README is the quick-start and orientation guide. The authoritative
+> technical detail (schema, parser internals, auth contract, observability,
+> migration policy) lives in [`CLAUDE.md`](CLAUDE.md).
 
-- uvicorn src.main:app --reload
+## Features
 
-- Run Claude Code: npx @anthropic-ai/claude-code
+- **Accounts** — checking, savings, credit, loan, and investment accounts with
+  balance tracking and net-worth statistics.
+- **Transactions** — CRUD plus bulk import, SHA-256 deduplication, hierarchical
+  categories, custom tags, and relationship linking (refunds, splits, offsets).
+- **Statement import** — PDF/CSV parsing for several institutions (TD Bank, Amex,
+  Amazon Synchrony, Schwab, TD Ameritrade, Ameriprise) via a two-step
+  preview/confirm flow with optional LLM description cleanup and
+  category/merchant suggestions.
+- **Budgets** — reusable budget templates with month instances and a
+  subcategory envelope model.
+- **Investments** — holdings, investment transactions, and portfolio valuation.
+- **Debt** — repayment plans (Avalanche / Snowball / Custom), payment tracking,
+  and schedules.
+- **Financial plans** — long-term goal projections.
 
+## Tech Stack
+
+- **Framework**: FastAPI (Python 3.13)
+- **ORM / migrations**: SQLAlchemy 2.0 + Alembic
+- **Database**: SQLite (local dev) / PostgreSQL (production, via `DATABASE_URL`)
+- **Validation**: Pydantic
+- **Cache / sessions**: Redis (upload preview sessions)
+- **PDF parsing**: pdfplumber
+- **Server**: uvicorn
 
 ## Local Development Setup
 
@@ -26,14 +43,23 @@ external services. **PostgreSQL** is the production target and can be run locall
 via Docker for parity. The Alembic history is a single squashed baseline + a
 category-seed migration; fresh databases start from these.
 
+Install dependencies into a virtualenv first:
+
+```powershell
+python -m venv venv
+./venv/Scripts/python.exe -m pip install -r requirements.txt
+```
+
 ### Quick start (SQLite)
 
 ```powershell
 python -m alembic upgrade head          # create schema + seed categories
-$env:ADMIN_EMAIL="dev@pocketwatcher.local"; $env:ADMIN_PASSWORD="Password123!"
+$env:ADMIN_EMAIL="you@example.com"; $env:ADMIN_PASSWORD="<a-strong-password>"
 python -m src.jobs.bootstrap_admin      # mint the first admin (idempotent)
 uvicorn src.main:app --reload
 ```
+
+The interactive API docs are then served at `http://127.0.0.1:8000/docs`.
 
 ### Running against Postgres (Docker)
 
@@ -52,22 +78,55 @@ $env:DATABASE_URL = "postgresql+psycopg2://pocketwatcher:pocketwatcher@localhost
 python -m alembic upgrade head
 
 # 4. Mint the first admin (idempotent — safe to re-run)
-$env:ADMIN_EMAIL="dev@pocketwatcher.local"; $env:ADMIN_PASSWORD="Password123!"; python -m src.jobs.bootstrap_admin
+$env:ADMIN_EMAIL="you@example.com"; $env:ADMIN_PASSWORD="<a-strong-password>"; python -m src.jobs.bootstrap_admin
 
 # 5. Run the app
 uvicorn src.main:app --reload
 ```
 
 Notes:
-- **First admin:** registration is admin-gated and `is_admin` has no API path, so
-  `src.jobs.bootstrap_admin` (driven by `ADMIN_EMAIL` / `ADMIN_PASSWORD`, optional
-  `ADMIN_USERNAME`) is the only way to create one. Re-running with an existing
-  email is a no-op.
 - **GUI access:** connect any Postgres client (pgAdmin, DBeaver, psql) to
   `localhost:5432`, db/user/pass `pocketwatcher`. The container must be running.
 - **Stop vs wipe:** `docker compose down` stops the stack but keeps the data;
   `docker compose down -v` deletes the volumes (empties the DB).
 
+## Creating Users
+
+There is **no public registration**. User creation is admin-gated end to end:
+
+1. **First admin** — minted out-of-band by `python -m src.jobs.bootstrap_admin`,
+   driven by `ADMIN_EMAIL` / `ADMIN_PASSWORD` (optional `ADMIN_USERNAME`). This is
+   the *only* way to grant admin, and `is_admin` has no API path. Re-running with
+   an existing email is a no-op.
+2. **Authenticate** — `POST /auth/login` with email + password returns a JWT;
+   send it as `Authorization: Bearer <token>` on subsequent requests.
+3. **Additional users** — an authenticated admin creates them via
+   `POST /users/` (also admin-only).
+
+## Loading Data
+
+- **Statement import (primary path)** — upload a PDF/CSV via the two-step flow:
+  `POST /uploads/statement/preview` returns parsed, deduplicated, optionally
+  LLM-cleaned transactions held in a Redis session; `POST /uploads/.../confirm`
+  commits the ones you keep. Bulk/multi-file import and persistent per-account
+  document storage are also available under `/uploads/`.
+- **Manual entry** — create accounts, transactions, budgets, etc. directly
+  through their REST endpoints (browse them all at `/docs`).
+
+## Scheduled Jobs
+
+These run **alongside** the API server (cron/systemd in production) — they are
+not started by the web process. Each is a standalone module under `src/jobs/`:
+
+| Job | Command | Cadence | Purpose |
+|-----|---------|---------|---------|
+| End-of-day snapshot | `python -m src.jobs.eod_snapshot [--date YYYY-MM-DD] [--user-id ID] [--skip-weekends]` | Daily after market close | Fetch latest prices, write daily account snapshots, update net-worth history. |
+| Option-expiration sweep | `python -m src.jobs.option_expiration_sweep --dry-run` / `--apply` | Daily / as needed | Close out option contracts past their OCC expiration that still show open positions (synthesizes `$0` EXPIRATION rows for OTM; flags ITM for manual review). |
+| Preview-orphan sweep | `python -m src.jobs.sweep_preview_orphans --dry-run` / `--apply` | Daily | Reclaim uploaded preview files left on disk by previews that were never confirmed or cancelled (only deletes unreferenced files older than the 12h session TTL + margin). |
+
+`src.jobs.bootstrap_admin` (above) also lives here but is a one-off provisioning
+step, not a scheduled job. Always `--dry-run` the sweeps before `--apply`, and
+back up the production DB (see deployment) before applying in production.
 
 ## Testing
 
@@ -98,53 +157,46 @@ Run everything with coverage:
   committed — only synthetic CSVs. Real statements stay in the gitignored
   `local/` corpus.
 
-## Bulk Upload Script instruction
-  Before you run it, you need to:
+## Deployment & CI/CD
 
-   1. Edit `scripts/bulk_upload.py` and update the ACCOUNT_MAPPING dictionary with the correct
-      account_id for each folder. I've put in placeholder values.
-   2. Start your FastAPI server in a separate terminal with the command: uvicorn src.main:app 
-      --reload
-   3. Run the script with: python scripts/bulk_upload.py
+Pushing to `main` auto-deploys via `.github/workflows/deploy.yml`: a `test` job
+runs the suite on a GitHub-hosted runner, and on pass a `deploy` job runs on a
+self-hosted runner — `git pull` + `docker compose -f docker-compose.prod.yml up
+-d --build` (rebuilds the `api` image only; data services and volumes are left
+untouched), then verifies `GET /health`. The `api` image runs `alembic upgrade
+head` on start, then uvicorn.
 
-  The script will then go through your input folder and upload the files.
+The production stack (`docker-compose.prod.yml`) adds Loki/Promtail/Grafana log
+aggregation on top of Postgres + Redis. The detailed server topology, secrets,
+and ops runbook are kept in private notes, not this repo. See the
+"Deployment & CI/CD" section of [`CLAUDE.md`](CLAUDE.md) for more.
 
-  A note on authentication: The script currently doesn't send any authentication headers. If
-  your /uploads/ endpoint is protected, you'll need to add an Authorization header in the
-  HEADERS dictionary within the script.
+## Architecture
 
+The codebase follows a layered FastAPI structure:
 
+```
+src/
+├── main.py        # app entry point, middleware, error handlers
+├── routers/       # API route definitions per resource
+├── crud/          # database operations
+├── models/        # Pydantic request/response models
+├── db/core.py     # SQLAlchemy models + engine config
+├── parser/        # per-institution statement parsers
+├── services/      # business logic (importer, storage, preview sessions, …)
+└── jobs/          # standalone scheduled / provisioning jobs
+```
 
-## TODO
-- Add user id validation wherever it is mapped as a foreign key
-- Fix user table to use db_id - id pattern
-- Refine model validation, optional attributes in pydantic models
-- Create update and delete logic
-- Streamlined testing setup? (pre written bash script maybe?)
-- Add model factory to UserCreate pydantic model id field (see transactionCreate)
+Conventions worth knowing up front: internal integer PKs are `db_id` and external
+identifiers are `uuid` (exposed as `id` in responses); monetary values are always
+`Decimal`; logging is structured JSON with per-request `request_id` correlation.
+See [`CLAUDE.md`](CLAUDE.md) for the schema, parser workflows, auth error
+contract, migration policy, and observability details.
 
-- The add categories endpoint is not including the parent category id when given
-- Financial plans takes in a target amount but doesn't store it in the db. instead it is storing a monthyl income value that i don't find to be as useful
-- Financial plan entires bulk upload endpoint does not work
-- The endpoint for assigning a tag to a transaction takes in the db id rather than the public (uuid)
-- The bulk transaction-tag assignment endpoint is broken
-- Transaction Relationship update and deletion endpoints seem to be missing
-- The debt payment creation endpoint is not populating principal/interest amount data and remaining balance data. The endpoint also is not checking to make sure the account_id provided is a loan account (and maybe a credit_card) and returning an error if it is not. 
-- Investment Transactions endpoint is not updating the account value based on the transaction processed. 
-- Investment transaction parsing is not implemented. 
+## Implementation Standards
 
-
-## Architectural Notes
-
-- The application follows a standard Next.js App Router structure.
-- Reusable UI components are located in `src/components`.
-- Firebase configuration and utility functions are in `src/lib/firebase.ts`.
-- Global styles and Tailwind CSS configuration are in `src/app/globals.css` and `tailwind.config.ts` respectively.
-- The application is a Progressive Web App (PWA), with configuration in `public/manifest.json`.
-- Firebase Firestore rules are available in `firebaserules.txt` file.
-
-## Implementation standard.
-
-- DO NOT over engineer things. Start with the simplest implementation.
-- Always keep the performance and security as a first priority.
-- Ask for any clarification rather just guessing things if you are not clear about anything.
+- **Simplicity first** — start with the simplest implementation; don't
+  over-engineer.
+- **Performance & security first** — validate user ownership on every operation;
+  use appropriate indexes and efficient queries.
+- **Ask, don't guess** — clarify ambiguous requirements rather than assuming.
