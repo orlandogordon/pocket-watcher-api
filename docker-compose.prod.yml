@@ -68,6 +68,9 @@ services:
       - ./promtail-config.yml:/etc/promtail/config.yml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock
+      # Cron jobs run via `docker compose exec`, so their stdout never reaches
+      # the api container's docker log — tail their logfiles directly (#63).
+      - /mnt/storage/pocket-watcher/backups:/var/log/pw-jobs:ro
     depends_on:
       - loki
 

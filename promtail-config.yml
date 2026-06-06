@@ -28,3 +28,24 @@ scrape_configs:
       - labels:
           level:
           logger:
+
+  # Scheduled jobs run via `docker compose exec` and write JSON to a logfile
+  # (cron redirect) rather than to a container's stdout, so the docker SD above
+  # can't see them — tail the file directly (#63). Labeled container=<job> so
+  # Grafana's container-scoped views include them.
+  - job_name: pw-cron-jobs
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: pw-cron-jobs
+          container: eod_snapshot
+          __path__: /var/log/pw-jobs/eod_snapshot.log
+    pipeline_stages:
+      - json:
+          expressions:
+            level: level
+            logger: logger
+            request_id: request_id
+      - labels:
+          level:
+          logger:
