@@ -177,7 +177,9 @@ def start_bulk_import(
     if missing:
         raise HTTPException(status_code=404, detail=f"Documents not found: {', '.join(missing)}")
 
-    already = [str(j.uuid) for j in jobs if j.batch_id is not None]
+    # A FAILED job carries a batch_id but imported nothing — it must stay
+    # retryable. Only a job that didn't fail counts as "already imported" (#65).
+    already = [str(j.uuid) for j in jobs if j.batch_id is not None and j.status != "FAILED"]
     if already:
         raise HTTPException(status_code=400, detail=f"Documents already imported: {', '.join(already)}")
 
@@ -288,6 +290,13 @@ def cancel_bulk_import(
         raise HTTPException(status_code=404, detail="Bulk import not found")
     if batch.status in ("PENDING", "IN_PROGRESS"):
         batch.status = "CANCELLED"
+        # Cancel the not-yet-processed files too, so they don't linger as
+        # "PENDING" forever in the upload history (#4). Already-finished files
+        # keep their COMPLETED/FAILED status.
+        db.query(UploadJobDB).filter(
+            UploadJobDB.batch_id == batch.db_id,
+            UploadJobDB.status.in_(["PENDING", "PROCESSING"]),
+        ).update({"status": "CANCELLED"}, synchronize_session=False)
         db.commit()
     return {"batch_uuid": str(batch.uuid), "status": batch.status}
 

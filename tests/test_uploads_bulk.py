@@ -144,6 +144,23 @@ def test_bulk_import_rejects_already_imported(client, db, cc_account, fake_llm):
     assert second.status_code == 400
 
 
+def test_bulk_import_allows_retry_of_failed_document(client, db, cc_account, fake_llm):
+    doc_uuid = _upload(client, cc_account.uuid).json()["document_uuid"]
+    assert _start_batch(client, [doc_uuid]).status_code == 202
+
+    # Simulate the file failing during processing: status FAILED, but batch_id
+    # stays set (the rollback doesn't clear it). It must remain retryable (#65) —
+    # a failed file imported nothing, so it's not "already imported".
+    job = db.query(UploadJobDB).filter(UploadJobDB.uuid == UUID(doc_uuid)).first()
+    job.status = "FAILED"
+    db.commit()
+
+    retry = _start_batch(client, [doc_uuid])
+    assert retry.status_code == 202
+    db.refresh(job)
+    assert job.status == "PENDING"  # requeued into the new batch
+
+
 def test_bulk_import_requires_auth(unauth_client, cc_account):
     resp = _start_batch(unauth_client, [uuid4()])
     assert resp.status_code == 401
@@ -156,6 +173,10 @@ def test_cancel_bulk_import(client, db, cc_account, fake_llm):
     resp = client.delete(f"/uploads/bulk/{batch_uuid}")
     assert resp.status_code == 200
     assert resp.json()["status"] == "CANCELLED"
+
+    # Un-processed files are cancelled too, not left stuck "PENDING" (#4).
+    job = db.query(UploadJobDB).filter(UploadJobDB.uuid == UUID(doc_uuid)).first()
+    assert job.status == "CANCELLED"
 
 
 # ----- Document browsing / viewing -----

@@ -12,6 +12,7 @@ from decimal import Decimal
 import pytest
 
 from src.crud.crud_investment import rebuild_holdings_from_transactions
+from src.services.account_snapshot import get_account_state_on_date, parse_split_ratio
 from src.db.core import AccountType, InvestmentTransactionType
 from tests.factories import make_account, make_investment_txn, make_user
 
@@ -133,3 +134,45 @@ def test_same_day_buy_processed_before_sell(db, user, account):
 
     qqq = _holdings_by_symbol(db, account)["QQQ"]
     assert qqq.quantity == Decimal("6")
+
+
+def test_zero_quantity_buy_does_not_divide_by_zero(db, user, account):
+    # TD Ameritrade money-market / cash-sweep rows arrive as BUY with quantity 0.
+    # Replaying them must not raise DivisionByZero in the cost-basis math (#65).
+    _buy(
+        db, user, account, symbol="MMDA",
+        quantity=Decimal("0"), price_per_share=Decimal("0"),
+        total_amount=Decimal("500"), transaction_date=date(2026, 1, 1),
+    )
+
+    # Holdings rebuild already guards; the regression is the account-state path
+    # (_update_investment_account_balance -> get_account_state_on_date).
+    rebuild_holdings_from_transactions(db, account.db_id)
+    state = get_account_state_on_date(db, account.db_id, date(2026, 1, 2))
+
+    assert "MMDA" not in state["holdings"]  # zero-qty buy is not an active holding
+    assert state["cash_balance"] == Decimal("-500")  # cash outflow still recorded
+
+
+def test_null_quantity_sell_does_not_crash_account_state(db, user, account):
+    # A SELL row can arrive with a null quantity (parser couldn't read the column).
+    # The replay must coalesce None to 0, not crash (#65, get_account_state_on_date
+    # SELL branch — `quantity -= None`).
+    _buy(db, user, account, symbol="AAPL", quantity=Decimal("10"),
+         price_per_share=Decimal("100"), total_amount=Decimal("1000"),
+         transaction_date=date(2026, 1, 1))
+    make_investment_txn(
+        db, user, account, transaction_type=InvestmentTransactionType.SELL,
+        symbol="AAPL", quantity=None, price_per_share=None,
+        total_amount=Decimal("500"), transaction_date=date(2026, 1, 2),
+    )
+
+    state = get_account_state_on_date(db, account.db_id, date(2026, 1, 3))
+
+    assert state["holdings"]["AAPL"]["quantity"] == Decimal("10")  # -= 0, unchanged
+    assert state["cash_balance"] == Decimal("-500")  # -1000 buy + 500 sale
+
+
+def test_parse_split_ratio_handles_zero_denominator():
+    # A malformed "X:0" split must fall back to the no-op ratio, not raise (#65).
+    assert parse_split_ratio("2:0 Stock Split") == Decimal("1.0")

@@ -172,14 +172,16 @@ def parse_split_ratio(description: str) -> Decimal:
     if match:
         numerator = Decimal(match.group(1))
         denominator = Decimal(match.group(2))
-        return numerator / denominator
+        if denominator != 0:
+            return numerator / denominator
 
     # Try to match "X for Y" pattern
     match = re.search(r'(\d+\.?\d*)\s+for\s+(\d+\.?\d*)', description, re.IGNORECASE)
     if match:
         numerator = Decimal(match.group(1))
         denominator = Decimal(match.group(2))
-        return numerator / denominator
+        if denominator != 0:
+            return numerator / denominator
 
     # Default: 1.0 (no split)
     logger.warning(f"Could not parse split ratio from: {description}")
@@ -273,6 +275,12 @@ def get_account_state_on_date(
         else:
             symbol = txn.symbol
 
+        # Coalesce nullable numeric fields — a parser can leave quantity/price
+        # null (e.g. a SELL row with no quantity column); the replay must not
+        # crash on None (#65). Mirrors rebuild_holdings_from_transactions.
+        qty = txn.quantity or Decimal('0')
+        pps = txn.price_per_share or Decimal('0')
+
         if txn.transaction_type == InvestmentTransactionType.BUY:
             # Update holdings
             if symbol not in holdings:
@@ -285,11 +293,15 @@ def get_account_state_on_date(
             # Weighted average cost basis
             old_qty = holdings[symbol]['quantity']
             old_basis = holdings[symbol]['average_cost_basis']
-            new_qty = old_qty + txn.quantity
+            new_qty = old_qty + qty
 
-            holdings[symbol]['average_cost_basis'] = (
-                (old_qty * old_basis + txn.quantity * txn.price_per_share) / new_qty
-            )
+            # Guard against a zero-quantity BUY (e.g. TD Ameritrade money-market /
+            # cash-sweep rows arrive as BUY with quantity 0) — dividing would raise
+            # DivisionByZero. Mirrors the REINVESTMENT branch and the holdings rebuild.
+            if new_qty > 0:
+                holdings[symbol]['average_cost_basis'] = (
+                    (old_qty * old_basis + qty * pps) / new_qty
+                )
             holdings[symbol]['quantity'] = new_qty
 
             # Decrease cash (total cost of purchase)
@@ -298,7 +310,7 @@ def get_account_state_on_date(
 
         elif txn.transaction_type == InvestmentTransactionType.SELL:
             if symbol in holdings:
-                holdings[symbol]['quantity'] -= txn.quantity
+                holdings[symbol]['quantity'] -= qty
                 # Cost basis stays same (weighted average)
 
             # Increase cash (proceeds from sale)
@@ -335,11 +347,11 @@ def get_account_state_on_date(
             # Weighted average cost basis
             old_qty = holdings[symbol]['quantity']
             old_basis = holdings[symbol]['average_cost_basis']
-            new_qty = old_qty + txn.quantity
+            new_qty = old_qty + qty
 
             if new_qty > 0:
                 holdings[symbol]['average_cost_basis'] = (
-                    (old_qty * old_basis + txn.quantity * txn.price_per_share) / new_qty
+                    (old_qty * old_basis + qty * pps) / new_qty
                 )
             holdings[symbol]['quantity'] = new_qty
 

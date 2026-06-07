@@ -360,6 +360,7 @@ def map_transaction_type_to_enum(transaction_type_str: str) -> Optional[Investme
         "MERGER": InvestmentTransactionType.MERGER,
         "SPINOFF": InvestmentTransactionType.SPINOFF,
         "REINVESTMENT": InvestmentTransactionType.REINVESTMENT,
+        "EXPIRATION": InvestmentTransactionType.EXPIRATION,
 
         # Schwab-specific mappings
         "BUY_TO_OPEN": InvestmentTransactionType.BUY,
@@ -403,6 +404,8 @@ def map_transaction_type_to_enum(transaction_type_str: str) -> Optional[Investme
         return InvestmentTransactionType.DIVIDEND
     if "REINVEST" in normalized:
         return InvestmentTransactionType.REINVESTMENT
+    if "EXPIR" in normalized:
+        return InvestmentTransactionType.EXPIRATION
     if "FEE" in normalized or "COMMISSION" in normalized:
         return InvestmentTransactionType.FEE
     if "WITHDRAWAL" in normalized:
@@ -524,7 +527,10 @@ def bulk_create_investment_transactions_from_parsed_data(
         # Map the transaction type string to the enum FIRST
         transaction_type_enum = map_transaction_type_to_enum(t_data.transaction_type)
         if not transaction_type_enum:
-            logger.error(
+            # Graceful skip, not an error: types with no enum (e.g. TDA "OTHER"
+            # courtesy adjustments) are intentionally unsupported. EXPIRATION is
+            # now mapped (#66); a genuinely new type still surfaces as a WARNING.
+            logger.warning(
                 f"Unmapped investment transaction type '{t_data.transaction_type}' — "
                 f"transaction skipped (date={t_data.transaction_date}, "
                 f"amount={t_data.total_amount}, desc={t_data.description})"
@@ -575,13 +581,18 @@ def bulk_create_investment_transactions_from_parsed_data(
         return [], skipped_duplicates, None
 
     try:
-        db.commit()
+        # Flush (not commit) so the rebuild can see the new rows, but nothing is
+        # persisted until the rebuild + balance update succeed — one atomic
+        # commit. Previously the transactions were committed before the rebuild,
+        # so a rebuild failure left committed transactions with no holdings (#65).
+        db.flush()
         if account_id:
             rebuild_holdings_from_transactions(db, account_id)
             _update_investment_account_balance(db, account_id)
-            db.commit()
+        db.commit()
     except Exception as e:
         db.rollback()
+        logger.error("Bulk investment transaction import failed", exc_info=True)
         raise ValueError(f"Bulk investment transaction import failed: {str(e)}")
 
     # NEW: Trigger backfill if historical transactions

@@ -42,6 +42,16 @@ class TestMapTransactionTypeToEnum(unittest.TestCase):
         self.assertEqual(map_transaction_type_to_enum("INTEREST"), InvestmentTransactionType.INTEREST)
         self.assertEqual(map_transaction_type_to_enum("FEE"), InvestmentTransactionType.FEE)
 
+    def test_expiration_maps_direct_and_partial(self):
+        # #66: option expirations were dropped (returned None) and never closed
+        # out holdings. Both the exact type and partial matches must map now.
+        self.assertEqual(map_transaction_type_to_enum("EXPIRATION"), InvestmentTransactionType.EXPIRATION)
+        self.assertEqual(map_transaction_type_to_enum("Option Expiration"), InvestmentTransactionType.EXPIRATION)
+        self.assertEqual(map_transaction_type_to_enum("EXPIRED"), InvestmentTransactionType.EXPIRATION)
+
+    def test_genuinely_unknown_type_returns_none(self):
+        self.assertIsNone(map_transaction_type_to_enum("OTHER"))
+
 
 if __name__ == "__main__":
     unittest.main()
