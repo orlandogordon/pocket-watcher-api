@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import List, Optional, Union, IO
 
-from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo, SecurityType, classify_security_type
+from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo, SecurityType, classify_security_type, clean_decimal, StatementParseError
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -482,35 +482,38 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 # Format API symbol for yfinance
                 api_symbol = _format_api_symbol(symbol, description, security_type) if symbol else None
 
-                # Parse numeric fields
-                clean_quantity = None
-                if quantity_str and quantity_str != '-':
-                    try:
-                        clean_quantity = Decimal(quantity_str.replace(',', '').replace('$', '').replace('-', ''))
-                    except (InvalidOperation, ValueError):
-                        pass
+                # Parse numeric fields (#71: robust cleaner handles '$ (…)' etc.)
+                clean_quantity = clean_decimal(quantity_str)
+                clean_price = clean_decimal(price_str)
+                clean_amount = clean_decimal(amount_str)
 
-                clean_price = None
-                if price_str and price_str != '-':
-                    try:
-                        clean_price = Decimal(price_str.replace(',', '').replace('$', ''))
-                    except (InvalidOperation, ValueError):
-                        pass
-
-                # Parse amount (handle parentheses for negative)
-                # Expirations have no cash impact, so allow amount=0
-                if not amount_str or amount_str == '-':
+                # #71: a share-trade row must carry quantity, price, AND amount — a
+                # null here is a real BUY/SELL/REINVESTMENT that parsed wrong, so
+                # fail the whole (atomic) statement rather than persist a corrupt
+                # holding. Other rows with no usable amount are benign
+                # non-transaction/boilerplate rows that the table extractor grabs
+                # (e.g. legal disclaimers with a date-like cell) — skip them.
+                if transaction_type in ("BUY", "SELL", "REINVESTMENT"):
+                    missing = [
+                        name for name, val in (
+                            ("quantity", clean_quantity),
+                            ("price", clean_price),
+                            ("amount", clean_amount),
+                        ) if val is None
+                    ]
+                    if missing:
+                        raise StatementParseError(
+                            f"Row {row_idx}: {transaction_type} {symbol or 'N/A'} on "
+                            f"{trade_date_str} missing required field(s): {', '.join(missing)} "
+                            f"(quantity='{quantity_str}', price='{price_str}', amount='{amount_str}')"
+                        )
+                elif clean_amount is None:
                     if transaction_type == "EXPIRATION":
                         clean_amount = Decimal('0')
                     else:
                         skip_reasons["no_amount"] += 1
-                        logger.warning(f"Row {row_idx} skipped - no amount. Date: {trade_date_str}, Desc: {description[:50]}, Amount column: '{amount_str}'")
+                        logger.warning(f"Row {row_idx} skipped - no usable amount. Date: {trade_date_str}, Desc: {description[:50]}, Amount column: '{amount_str}'")
                         continue
-                else:
-                    amount_str = amount_str.replace(',', '').replace('$', '')
-                    if '(' in amount_str:
-                        amount_str = '-' + amount_str.replace('(', '').replace(')', '')
-                    clean_amount = Decimal(amount_str)
 
                 # Extract fees from description and split if present on BUY/SELL
                 fee = _extract_fee_from_description(description)

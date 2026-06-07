@@ -17,15 +17,25 @@ from pathlib import Path
 import pytest
 
 from src.parser import ameriprise, schwab
+from src.parser.models import StatementParseError
 
 pytestmark = pytest.mark.parser
 
 _FIXTURES = Path(__file__).parent / "parsers" / "fixtures"
 
+_SCHWAB_HEADER = (
+    '"Date","Action","Symbol","Description","Quantity","Price","Fees & Comm","Amount"\n'
+)
+
 
 def _parse(parser, name):
     buf = io.BytesIO((_FIXTURES / name).read_bytes())
     return parser.parse(buf, is_csv=True)
+
+
+def _parse_schwab_rows(*rows):
+    csv_text = _SCHWAB_HEADER + "".join(r if r.endswith("\n") else r + "\n" for r in rows)
+    return schwab.parse(io.BytesIO(csv_text.encode()), is_csv=True).investment_transactions
 
 
 def _by_type(txns, txn_type):
@@ -86,6 +96,49 @@ class TestSchwabCsv:
         out = _by_type(txns, "TRANSFER_OUT")
         assert len(out) == 1
         assert out[0].total_amount == Decimal("-500.00")
+
+
+# ===== #71: ROBUST NUMERIC CLEANING + FAIL-LOUD =====
+
+class TestSchwabNumericAndFailLoud:
+    def test_spaced_paren_negative_amount_is_not_dropped(self):
+        # The #71 regression: '$ (960.00)' previously crashed amount parsing and
+        # silently dropped the whole BUY. It must now import as a real -960 row.
+        txns = _parse_schwab_rows(
+            '"06/03/2024","Buy","VOO","VANGUARD S&P 500 ETF","2","$480.00","","$ (960.00)"'
+        )
+        assert len(txns) == 1
+        assert txns[0].transaction_type == "BUY"
+        assert txns[0].total_amount == Decimal("-960.00")
+
+    def test_buy_missing_price_fails_loud(self):
+        with pytest.raises(StatementParseError, match="price"):
+            _parse_schwab_rows(
+                '"06/03/2024","Buy","VOO","VANGUARD S&P 500 ETF","2","","","-$960.00"'
+            )
+
+    def test_buy_missing_quantity_fails_loud(self):
+        with pytest.raises(StatementParseError, match="quantity"):
+            _parse_schwab_rows(
+                '"06/03/2024","Buy","VOO","VANGUARD S&P 500 ETF","","$480.00","","-$960.00"'
+            )
+
+    def test_unparseable_amount_on_cash_row_does_not_fail_statement(self):
+        # A cash row whose amount column holds prose (boilerplate the extractor
+        # grabbed) must NOT fail the whole statement — only malformed *trades* do.
+        txns = _parse_schwab_rows(
+            '"12/30/2024","Credit Interest","","SCHWAB1 INT","","","","$bogus"'
+        )
+        assert len(txns) == 1
+        assert txns[0].total_amount == Decimal("0")
+
+    def test_blank_amount_on_cash_row_defaults_to_zero(self):
+        # A genuinely blank cash amount is a benign placeholder, not a parse error.
+        txns = _parse_schwab_rows(
+            '"12/30/2024","Credit Interest","","SCHWAB1 INT","","","",""'
+        )
+        assert len(txns) == 1
+        assert txns[0].total_amount == Decimal("0")
 
 
 # ===== AMERIPRISE =====

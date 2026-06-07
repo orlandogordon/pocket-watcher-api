@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import List, Optional, Union, IO
 
-from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo, SecurityType, classify_security_type
+from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo, SecurityType, classify_security_type, clean_decimal, StatementParseError
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -483,45 +483,39 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 # Format API symbol for yfinance (stocks and options)
                 api_symbol = _format_api_symbol(symbol, description, security_type) if symbol else None
 
-                # Parse numeric fields
-                clean_quantity = None
-                if quantity_str and quantity_str not in ['-', 'None']:
-                    try:
-                        # Remove parentheses for negative
-                        qty_clean = quantity_str.replace('(', '-').replace(')', '').replace(',', '')
-                        clean_quantity = Decimal(qty_clean)
-                    except (InvalidOperation, ValueError):
-                        pass
+                # Parse numeric fields (#71: robust cleaner handles '$ (…)' etc.)
+                clean_quantity = clean_decimal(quantity_str)
+                clean_price = clean_decimal(price_str)
+                clean_fee = clean_decimal(charges_str) or Decimal('0')
+                clean_amount = clean_decimal(amount_str)
 
-                clean_price = None
-                if price_str and price_str not in ['-', 'None']:
-                    try:
-                        clean_price = Decimal(price_str.replace(',', '').replace('$', ''))
-                    except (InvalidOperation, ValueError):
-                        pass
-
-                # Parse charges/fees
-                clean_fee = Decimal('0')
-                if charges_str and charges_str not in ['-', 'None']:
-                    try:
-                        clean_fee = Decimal(charges_str.replace(',', '').replace('$', ''))
-                    except (InvalidOperation, ValueError):
-                        pass
-
-                # Parse amount (handle parentheses for negative)
-                # Expirations have no cash impact, so allow amount=0
-                if not amount_str or amount_str in ['-', 'None']:
+                # #71: a share-trade row must carry quantity, price, AND amount — a
+                # null here is a real BUY/SELL/REINVESTMENT that parsed wrong, so
+                # fail the whole (atomic) statement rather than persist a corrupt
+                # holding. Other rows with no usable amount are benign
+                # non-transaction/boilerplate rows (e.g. legal disclaimers with a
+                # date-like cell) — skip them.
+                if transaction_type in ("BUY", "SELL", "REINVESTMENT"):
+                    missing = [
+                        name for name, val in (
+                            ("quantity", clean_quantity),
+                            ("price", clean_price),
+                            ("amount", clean_amount),
+                        ) if val is None
+                    ]
+                    if missing:
+                        raise StatementParseError(
+                            f"Row {row_idx}: {transaction_type} {symbol or 'N/A'} missing "
+                            f"required field(s): {', '.join(missing)} "
+                            f"(quantity='{quantity_str}', price='{price_str}', amount='{amount_str}')"
+                        )
+                elif clean_amount is None:
                     if transaction_type == "EXPIRATION":
                         clean_amount = Decimal('0')
                     else:
                         skip_reasons["no_amount"] += 1
-                        logger.warning(f"Row {row_idx} skipped - no amount")
+                        logger.warning(f"Row {row_idx} skipped - no usable amount: '{amount_str}'")
                         continue
-                else:
-                    amount_str = amount_str.replace(',', '').replace('$', '')
-                    if '(' in amount_str:
-                        amount_str = '-' + amount_str.replace('(', '').replace(')', '')
-                    clean_amount = Decimal(amount_str)
 
                 # Split fee into separate transaction if present on BUY/SELL
                 if clean_fee > 0 and transaction_type in ("BUY", "SELL"):
@@ -658,37 +652,32 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             # Extract symbol (underlying ticker only)
             symbol = _extract_symbol(symbol_raw, action) if symbol_raw else None
 
-            # Parse numerical values
-            quantity = None
-            if quantity_str:
-                try:
-                    quantity = Decimal(quantity_str.replace(',', ''))
-                except (ValueError, InvalidOperation):
-                    pass
+            # Parse numerical values (#71: shared cleaner + trade invariant)
+            quantity = clean_decimal(quantity_str)
+            price = clean_decimal(price_str)
+            fee = clean_decimal(fees_str) or Decimal('0')
+            amount = clean_decimal(amount_str)
 
-            price = None
-            if price_str:
-                try:
-                    price = Decimal(price_str.replace('$', '').replace(',', ''))
-                except (ValueError, InvalidOperation):
-                    pass
-
-            # Parse fees
-            fee = Decimal('0')
-            if fees_str:
-                try:
-                    fee = Decimal(fees_str.replace('$', '').replace(',', ''))
-                except (ValueError, InvalidOperation):
-                    pass
-
-            amount = Decimal(0)
-            if amount_str:
-                try:
-                    # Remove $ and commas, handle negative amounts
-                    amount_clean = amount_str.replace('$', '').replace(',', '')
-                    amount = Decimal(amount_clean)
-                except (ValueError, InvalidOperation):
-                    logger.warning(f"Could not parse amount: {amount_str}")
+            # #71: BUY/SELL/REINVESTMENT must carry quantity, price, AND amount —
+            # else fail the statement rather than persist a corrupt holding. Cash
+            # rows with no usable amount default to zero (interest/transfer
+            # placeholders), as before.
+            if transaction_type in ("BUY", "SELL", "REINVESTMENT"):
+                missing = [
+                    name for name, val in (
+                        ("quantity", quantity),
+                        ("price", price),
+                        ("amount", amount),
+                    ) if val is None
+                ]
+                if missing:
+                    raise StatementParseError(
+                        f"Schwab CSV: {transaction_type} {symbol or 'N/A'} missing "
+                        f"required field(s): {', '.join(missing)} "
+                        f"(quantity='{quantity_str}', price='{price_str}', amount='{amount_str}')"
+                    )
+            elif amount is None:
+                amount = Decimal('0')
 
             # Determine security type (for BUY/SELL/EXPIRATION)
             security_type = None
