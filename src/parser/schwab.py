@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import List, Optional, Union, IO
 
-from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo, SecurityType, classify_security_type, clean_decimal, StatementParseError
+from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo, SecurityType, classify_security_type, clean_decimal, StatementParseError, reconcile_equity_qty_price
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -516,6 +516,26 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                         skip_reasons["no_amount"] += 1
                         logger.warning(f"Row {row_idx} skipped - no usable amount: '{amount_str}'")
                         continue
+
+                # #72: recover a quantity/price spilled across the fixed
+                # Quantity|Price column boundary; non-option equity only (option
+                # contracts' 2-decimal display prices won't reconcile with the
+                # x100 amount). Schwab sells carry a negative quantity, which
+                # reconcile_equity_qty_price preserves.
+                if (transaction_type in ("BUY", "SELL", "REINVESTMENT")
+                        and security_type != SecurityType.OPTION
+                        and clean_quantity and clean_price):
+                    new_qty, new_price = reconcile_equity_qty_price(
+                        clean_quantity, clean_price, clean_amount,
+                        context=f"Row {row_idx}: {transaction_type} {symbol or 'N/A'} on {parsed_date}",
+                    )
+                    if (new_qty, new_price) != (clean_quantity, clean_price):
+                        logger.warning(
+                            f"Row {row_idx}: recovered misaligned quantity/price for "
+                            f"{transaction_type} {symbol or 'N/A'} on {parsed_date}: "
+                            f"{clean_quantity}/{clean_price} -> {new_qty}/{new_price}"
+                        )
+                        clean_quantity, clean_price = new_qty, new_price
 
                 # Split fee into separate transaction if present on BUY/SELL
                 if clean_fee > 0 and transaction_type in ("BUY", "SELL"):

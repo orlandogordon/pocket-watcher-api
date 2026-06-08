@@ -74,9 +74,9 @@ class TestTDAmeritradeRecoverSplit(unittest.TestCase):
 
     def _recover(self, qty, price, target):
         from decimal import Decimal
-        from src.parser.tdameritrade import _recover_misaligned_qty_price
+        from src.parser.models import recover_misaligned_qty_price
         tol = max(abs(Decimal(target)) * Decimal("0.01"), Decimal("1"))
-        return _recover_misaligned_qty_price(Decimal(qty), Decimal(price), abs(Decimal(target)), tol)
+        return recover_misaligned_qty_price(Decimal(qty), Decimal(price), abs(Decimal(target)), tol)
 
     def test_recovers_leading_digit_spill(self):
         from decimal import Decimal
@@ -93,6 +93,13 @@ class TestTDAmeritradeRecoverSplit(unittest.TestCase):
         # attempted (caller only invokes this on a mismatch); a single-digit
         # quantity has no digit to move back and yields None.
         self.assertIsNone(self._recover("3", "3283.0201", "9849.06"))
+
+    def test_preserves_negative_quantity_sign(self):
+        from decimal import Decimal
+        # Schwab encodes sells with a negative quantity; the recovered split must
+        # keep the sign (hypothetical -33|283.0201 -> -3|3283.0201).
+        self.assertEqual(self._recover("-33", "283.0201", "9849.06"),
+                         (Decimal("-3"), Decimal("3283.0201")))
 
 
 class TestAmexParserIntegration(unittest.TestCase):

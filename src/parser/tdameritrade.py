@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import List, Optional, Union, IO
 
-from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo, SecurityType, classify_security_type, clean_decimal, StatementParseError
+from src.parser.models import ParsedData, ParsedInvestmentTransaction, ParsedAccountInfo, SecurityType, classify_security_type, clean_decimal, StatementParseError, reconcile_equity_qty_price
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -257,29 +257,6 @@ def _build_fee_description(description: str, parent_type: str, parent_amount: De
         parts.append(f"{match.group(1)} ${match.group(2)}")
     detail = "; ".join(parts) if parts else "Trading fees"
     return f"{detail} ({parent_type} {parent_amount})"
-
-def _recover_misaligned_qty_price(
-    quantity: Decimal, price: Decimal, target: Decimal, tol: Decimal
-) -> Optional[tuple]:
-    """Recover a quantity/price pair split across the wrong column boundary.
-
-    A wide price (e.g. '3,283.0201') can have its leading integer digit fall just
-    left of the fixed Quantity|Price boundary, so '3 | 3283.0201' is extracted as
-    '33 | 283.0201'. The digits are intact, only the split moved. Using the
-    trustworthy amount as ground truth, walk the misplaced leading digit(s) back
-    from the quantity onto the front of the price's integer part and return the
-    first split whose quantity*price reconciles with the amount.
-    """
-    qty_digits = str(abs(int(quantity)))
-    price_int, _, price_frac = format(abs(price), 'f').partition('.')
-    for k in range(1, len(qty_digits)):
-        cand_qty = Decimal(qty_digits[:-k])
-        moved = qty_digits[-k:]
-        cand_price_str = f"{moved}{price_int}.{price_frac}" if price_frac else f"{moved}{price_int}"
-        cand_price = Decimal(cand_price_str)
-        if abs(cand_qty * cand_price - target) <= tol:
-            return cand_qty, cand_price
-    return None
 
 def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses a TD Ameritrade PDF statement using table-based extraction."""
@@ -553,27 +530,17 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 if (transaction_type in ("BUY", "SELL", "REINVESTMENT")
                         and security_type != SecurityType.OPTION
                         and clean_quantity and clean_price):
-                    target = abs(clean_amount)
-                    tol = max(target * Decimal('0.01'), Decimal('1'))
-                    if abs(clean_quantity * clean_price - target) > tol:
-                        recovered = None
-                        if clean_quantity == clean_quantity.to_integral_value():
-                            recovered = _recover_misaligned_qty_price(
-                                clean_quantity, clean_price, target, tol
-                            )
-                        if recovered is None:
-                            raise StatementParseError(
-                                f"Row {row_idx}: {transaction_type} {symbol or 'N/A'} on "
-                                f"{trade_date_str} fails quantity*price check "
-                                f"(quantity={clean_quantity}, price={clean_price}, "
-                                f"amount={clean_amount})"
-                            )
+                    new_qty, new_price = reconcile_equity_qty_price(
+                        clean_quantity, clean_price, clean_amount,
+                        context=f"Row {row_idx}: {transaction_type} {symbol or 'N/A'} on {trade_date_str}",
+                    )
+                    if (new_qty, new_price) != (clean_quantity, clean_price):
                         logger.warning(
                             f"Row {row_idx}: recovered misaligned quantity/price for "
                             f"{transaction_type} {symbol or 'N/A'} on {trade_date_str}: "
-                            f"{clean_quantity}/{clean_price} -> {recovered[0]}/{recovered[1]}"
+                            f"{clean_quantity}/{clean_price} -> {new_qty}/{new_price}"
                         )
-                        clean_quantity, clean_price = recovered
+                        clean_quantity, clean_price = new_qty, new_price
 
                 if fee > 0 and transaction_type in ("BUY", "SELL"):
                     security_amount = clean_amount + fee

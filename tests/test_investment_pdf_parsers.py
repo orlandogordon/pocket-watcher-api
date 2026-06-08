@@ -87,7 +87,9 @@ def test_real_pdfs_stock_qty_price_reconciles(institution):
                 checked += 1
                 target = abs(t.total_amount)
                 tol = max(target * Decimal("0.01"), Decimal("1"))
-                assert abs(t.quantity * t.price_per_share - target) <= tol, (
+                # Compare magnitudes: sells carry a negative quantity (Schwab) or
+                # a negative amount, so reconcile |qty*price| against |amount|.
+                assert abs(abs(t.quantity * t.price_per_share) - target) <= tol, (
                     f"{pdf.name}: {t.transaction_type} {t.symbol} "
                     f"qty*price ({t.quantity}*{t.price_per_share}) != amount ({target})"
                 )

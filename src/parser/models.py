@@ -1,6 +1,6 @@
 import re
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from enum import Enum
@@ -44,6 +44,65 @@ def clean_decimal(raw) -> Optional[Decimal]:
     except InvalidOperation:
         return None
     return -value if negative else value
+
+
+def recover_misaligned_qty_price(
+    quantity: Decimal, price: Decimal, target: Decimal, tol: Decimal
+) -> Optional[Tuple[Decimal, Decimal]]:
+    """Recover a quantity/price pair split across the wrong column boundary (#72).
+
+    The table parsers map each row's Quantity/Price/Amount to fixed pixel columns.
+    A wide price (e.g. '3,283.0201') can have its leading integer digit fall just
+    left of the Quantity|Price boundary, so '3 | 3283.0201' is extracted as
+    '33 | 283.0201'. The digits are intact, only the split moved. Using the
+    trustworthy amount as ground truth, walk the misplaced leading digit(s) back
+    from the quantity onto the front of the price's integer part and return the
+    first split whose |quantity*price| reconciles with the amount. The quantity's
+    sign (negative for sells in some statements, e.g. Schwab) is preserved.
+    """
+    sign = Decimal(-1) if quantity < 0 else Decimal(1)
+    qty_digits = str(abs(int(quantity)))
+    price_int, _, price_frac = format(abs(price), 'f').partition('.')
+    for k in range(1, len(qty_digits)):
+        cand_qty = Decimal(qty_digits[:-k])
+        moved = qty_digits[-k:]
+        cand_price_str = f"{moved}{price_int}.{price_frac}" if price_frac else f"{moved}{price_int}"
+        cand_price = Decimal(cand_price_str)
+        if abs(cand_qty * cand_price - target) <= tol:
+            return sign * cand_qty, cand_price
+    return None
+
+
+def reconcile_equity_qty_price(
+    quantity: Decimal, price: Decimal, amount: Decimal, context: str = ""
+) -> Tuple[Decimal, Decimal]:
+    """Validate a non-option equity trade's quantity*price against its amount,
+    repairing a column-boundary digit-spill when possible (#72).
+
+    The amount column is trustworthy, so |quantity*price| must reconcile with
+    |amount|. When it doesn't, attempt to recover a misaligned split (see
+    recover_misaligned_qty_price); if that fails, raise StatementParseError so the
+    statement fails loudly rather than persisting a corrupt holding.
+
+    The caller restricts this to non-option equity: only stocks reach the 4-digit
+    prices that trigger the spill, and option contracts display a 2-decimal-
+    rounded price that won't reconcile tightly with the x100 contract amount.
+    Returns the (possibly corrected) (quantity, price).
+    """
+    target = abs(amount)
+    tol = max(target * Decimal('0.01'), Decimal('1'))
+    if abs(abs(quantity * price) - target) <= tol:
+        return quantity, price
+    recovered = None
+    if quantity == quantity.to_integral_value():
+        recovered = recover_misaligned_qty_price(quantity, price, target, tol)
+    if recovered is None:
+        raise StatementParseError(
+            f"{context}: quantity*price does not reconcile with amount "
+            f"(quantity={quantity}, price={price}, amount={amount})"
+        )
+    return recovered
+
 
 class SecurityType(str, Enum):
     """Type of security for investment transactions"""
