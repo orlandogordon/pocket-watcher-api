@@ -229,18 +229,10 @@ def process_file(
             result.degraded = result.degraded or fallthroughs > 0
 
         if parsed_data.investment_transactions:
-            inv_items = [
-                {
-                    "description": t.description,
-                    "amount": float(t.total_amount),
-                    "transaction_type": t.transaction_type,
-                    "transaction_date": t.transaction_date.isoformat(),
-                }
-                for t in parsed_data.investment_transactions
-            ]
-            inv_results = process_preview_items(
-                db, inv_items, user_id=user_id, institution=institution,
-            )
+            # #70: investment rows have no merchant/category columns, so the LLM
+            # enrichment pass produces nothing storable — skip it and create the
+            # rows directly. (degraded is meaningless for investment-only files;
+            # mixed files still get it from the regular-transaction path above.)
             created_inv, skipped_inv, _backfill_id = crud_investment.bulk_create_investment_transactions_from_parsed_data(
                 db=db, user_id=user_id, transactions=parsed_data.investment_transactions,
                 account_id=account_id,
@@ -248,14 +240,7 @@ def process_file(
             if upload_job_id is not None:
                 for row in created_inv:
                     row.upload_job_id = upload_job_id
-            # Investment rows: no category columns, no tag join — walk only for
-            # the fallthrough accounting side effects.
-            _, inv_fallthroughs, _ = _apply_cleanup_to_created(
-                db, user_id, created_inv, parsed_data.investment_transactions, inv_results,
-                category_uuid_to_id={}, has_category_columns=False,
-            )
             db.commit()
-            result.degraded = result.degraded or inv_fallthroughs > 0
             result.investments_created = len(created_inv)
             result.investments_skipped = len(skipped_inv)
 

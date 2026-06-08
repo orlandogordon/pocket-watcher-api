@@ -765,12 +765,13 @@ async def create_statement_preview(
         parsed_data.investment_transactions, user_id, resolved_account_id, db
     )
 
-    # Run LLM processing across every preview item (both regular and investment,
-    # both ready and rejected). Raw parser output stays untouched in parsed_data;
-    # the merchant + category suggestion land on sibling fields so confirm can
-    # prefer them. Per #35: description is preserved raw — no cleaned tier.
-    all_items = rejected_txns + ready_txns + rejected_inv + ready_inv
-    llm_summary = _apply_llm_processing(db, user_id, institution, all_items)
+    # Run LLM processing across the regular preview items (both ready and
+    # rejected). Raw parser output stays untouched in parsed_data; the merchant +
+    # category suggestion land on sibling fields so confirm can prefer them. Per
+    # #35: description is preserved raw — no cleaned tier.
+    # #70: investment rows have no merchant/category columns to enrich, so they're
+    # excluded — they carry no llm_suggestion, which confirm already tolerates.
+    llm_summary = _apply_llm_processing(db, user_id, institution, rejected_txns + ready_txns)
 
     total_rejected = len(rejected_txns) + len(rejected_inv)
     total_ready = len(ready_txns) + len(ready_inv)
