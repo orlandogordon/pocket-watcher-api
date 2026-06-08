@@ -4,7 +4,7 @@ from sqlalchemy import case, desc
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
-from uuid import uuid4
+from uuid import UUID, uuid4
 import hashlib
 
 from src.logging_config import get_logger
@@ -439,7 +439,6 @@ def generate_investment_transaction_hash(transaction_data: ParsedInvestmentTrans
         f"{transaction_data.description}"
     )
     if make_unique:
-        from uuid import uuid4
         hash_string += f"|{uuid4()}"
     return hashlib.sha256(hash_string.encode()).hexdigest()
 

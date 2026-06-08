@@ -67,6 +67,34 @@ class TestTDAmeritradeNormalize(unittest.TestCase):
         self.assertEqual(_normalize_transaction_type("Other", "ach out to bank"), "TRANSFER_OUT")
 
 
+class TestTDAmeritradeRecoverSplit(unittest.TestCase):
+    """#72: recover qty/price when a wide price spills a digit across the fixed
+    Quantity|Price column boundary ('3 | 3283.0201' extracted as '33 | 283.0201').
+    """
+
+    def _recover(self, qty, price, target):
+        from decimal import Decimal
+        from src.parser.tdameritrade import _recover_misaligned_qty_price
+        tol = max(abs(Decimal(target)) * Decimal("0.01"), Decimal("1"))
+        return _recover_misaligned_qty_price(Decimal(qty), Decimal(price), abs(Decimal(target)), tol)
+
+    def test_recovers_leading_digit_spill(self):
+        from decimal import Decimal
+        # The real AMZN 2021-10-29 SELL: 33|283.0201 should recover to 3|3283.0201.
+        self.assertEqual(self._recover("33", "283.0201", "9849.06"),
+                         (Decimal("3"), Decimal("3283.0201")))
+
+    def test_returns_none_when_irrecoverable(self):
+        # No split of the digits reconciles with an unrelated amount.
+        self.assertIsNone(self._recover("33", "283.0201", "5000.00"))
+
+    def test_leaves_correct_split_alone(self):
+        # A correctly-split row already reconciles, so no spurious recovery is
+        # attempted (caller only invokes this on a mismatch); a single-digit
+        # quantity has no digit to move back and yields None.
+        self.assertIsNone(self._recover("3", "3283.0201", "9849.06"))
+
+
 class TestAmexParserIntegration(unittest.TestCase):
     def test_pdf_payment_is_transfer_in(self):
         pdf_files = list(INPUT_DIR.glob("amex/*.pdf"))

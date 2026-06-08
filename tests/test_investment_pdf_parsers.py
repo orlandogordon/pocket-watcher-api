@@ -74,6 +74,27 @@ def test_real_pdfs_parse_with_valid_structure(institution):
 
 
 @pytest.mark.parametrize("institution", list(_PARSERS))
+def test_real_pdfs_stock_qty_price_reconciles(institution):
+    """#72: for non-option equity trades, quantity*price must reconcile with the
+    amount. A column-boundary spill (wide price losing its leading digit to the
+    quantity cell) breaks this — structural, no values pinned."""
+    checked = 0
+    for pdf, data in _parse_all(institution):
+        for t in data.investment_transactions:
+            if (t.transaction_type in ("BUY", "SELL", "REINVESTMENT")
+                    and t.security_type != SecurityType.OPTION
+                    and t.quantity and t.price_per_share and t.total_amount):
+                checked += 1
+                target = abs(t.total_amount)
+                tol = max(target * Decimal("0.01"), Decimal("1"))
+                assert abs(t.quantity * t.price_per_share - target) <= tol, (
+                    f"{pdf.name}: {t.transaction_type} {t.symbol} "
+                    f"qty*price ({t.quantity}*{t.price_per_share}) != amount ({target})"
+                )
+    assert checked > 0, f"{institution}: no non-option equity trades to reconcile"
+
+
+@pytest.mark.parametrize("institution", list(_PARSERS))
 def test_real_pdfs_account_last4(institution):
     last4s = [
         data.account_info.account_number_last4
