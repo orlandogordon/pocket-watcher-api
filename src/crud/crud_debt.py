@@ -1,4 +1,5 @@
 from datetime import date
+from src.utils.time import utcnow
 from decimal import Decimal
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
@@ -410,7 +411,7 @@ def update_debt_payment(db: Session, payment_id: int, user_id: int, payment_data
 
     if loan_account and remaining_balance is not None:
         loan_account.balance = remaining_balance
-        loan_account.balance_last_updated = datetime.utcnow()
+        loan_account.balance_last_updated = utcnow()
 
     # 6. Apply all fields to the payment record
     for key, value in update_data.items():
@@ -436,7 +437,7 @@ def delete_debt_payment(db: Session, payment_id: int, user_id: int) -> bool:
             loan_account.balance += (db_payment.principal_amount or Decimal('0'))
         else:  # CREDIT_CARD
             loan_account.balance += (db_payment.payment_amount or Decimal('0'))
-        loan_account.balance_last_updated = datetime.utcnow()
+        loan_account.balance_last_updated = utcnow()
 
     db.delete(db_payment)
     db.commit()

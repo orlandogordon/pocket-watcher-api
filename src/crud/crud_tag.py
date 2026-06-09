@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import desc
 from typing import Optional, List
 from datetime import datetime
+from src.utils.time import utcnow
 from uuid import UUID, uuid4
 
 # Import your database models
@@ -37,7 +38,7 @@ def create_db_tag(db: Session, user_id: int, tag_data: TagCreate) -> TagDB:
         user_id=user_id,
         tag_name=tag_data.tag_name.strip(),
         color=tag_data.color,
-        created_at=datetime.utcnow()
+        created_at=utcnow()
     )
     
     try:
@@ -173,7 +174,7 @@ def add_tag_to_transaction(db: Session, user_id: int, transaction_id: int, tag_i
     db_transaction_tag = TransactionTagDB(
         transaction_id=transaction_id,
         tag_id=tag_id,
-        created_at=datetime.utcnow()
+        created_at=utcnow()
     )
     
     try:
@@ -445,7 +446,7 @@ def bulk_tag_transactions(db: Session, user_id: int, transaction_ids: List[int],
             db_transaction_tag = TransactionTagDB(
                 transaction_id=transaction_id,
                 tag_id=tag_id,
-                created_at=datetime.utcnow()
+                created_at=utcnow()
             )
             
             db.add(db_transaction_tag)

@@ -22,6 +22,7 @@ See backend todo #57.
 """
 from dataclasses import dataclass
 from datetime import date, datetime
+from src.utils.time import utcnow
 from decimal import Decimal
 from typing import List, Literal, Optional, Tuple
 from uuid import uuid4
@@ -200,7 +201,7 @@ def create_synthetic_expiration(
         transaction_date=orphan.expiration_date,
         description=SYNTHETIC_EXPIRATION_DESCRIPTION,
         security_type="OPTION",
-        created_at=datetime.utcnow(),
+        created_at=utcnow(),
     )
     db.add(txn)
     db.commit()

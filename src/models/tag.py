@@ -3,6 +3,8 @@ from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
 
+from src.utils.time import UTCDateTime
+
 
 # ===== TAG PYDANTIC MODELS =====
 
@@ -47,7 +49,7 @@ class TagResponse(BaseModel):
     tag_name: str
     color: Optional[str]
     is_system: bool = False
-    created_at: datetime
+    created_at: UTCDateTime
     transaction_count: Optional[int] = None
 
     class Config:
@@ -64,7 +66,7 @@ class TransactionTagResponse(BaseModel):
     """Transaction-Tag relationship response"""
     transaction_uuid: UUID
     tag_uuid: UUID
-    created_at: datetime
+    created_at: UTCDateTime
 
     class Config:
         from_attributes = True
@@ -94,4 +96,4 @@ class TagStats(BaseModel):
     transaction_count: int
     total_amount: float
     average_amount: float
-    most_recent_use: Optional[datetime]
+    most_recent_use: Optional[UTCDateTime]

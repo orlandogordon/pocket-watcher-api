@@ -62,6 +62,7 @@ from src.models.preview import (
 )
 from src.parser.models import ParsedInvestmentTransaction
 from src.logging_config import get_logger
+from src.utils.time import to_utc_iso, utcnow
 
 logger = get_logger(__name__)
 
@@ -851,7 +852,7 @@ def _apply_llm_processing(
         item["llm_status"] = result.source
         item["llm_model"] = result.llm_model
         item["llm_processed_at"] = (
-            result.llm_processed_at.isoformat() if result.llm_processed_at else None
+            to_utc_iso(result.llm_processed_at) if result.llm_processed_at else None
         )
         if result.llm_suggestion is not None:
             # Surface the suggestion to the preview UI under the #29-spec shape.
@@ -1306,8 +1307,8 @@ async def confirm_statement_import(
         transactions_skipped=len(session["rejected"]["transactions"]),
         investment_transactions_created=0,
         investment_transactions_skipped=len(session["rejected"]["investment_transactions"]),
-        started_at=datetime.utcnow(),
-        completed_at=datetime.utcnow(),
+        started_at=utcnow(),
+        completed_at=utcnow(),
     )
     db.add(upload_job)
     db.flush()  # assign upload_job.db_id so created rows can link to this document

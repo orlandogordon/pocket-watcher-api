@@ -9,6 +9,7 @@ import os
 from abc import ABC, abstractmethod
 from typing import Optional
 from datetime import date, datetime, timedelta
+from src.utils.time import utcnow
 from sqlalchemy.orm import Session
 
 from src.db.core import session_local as SessionLocal, SnapshotBackfillJobDB
@@ -88,7 +89,7 @@ def run_backfill_worker(job_id: int, account_id: int, start_date: date, end_date
                 return
 
             job.status = 'IN_PROGRESS'
-            job.started_at = datetime.utcnow()
+            job.started_at = utcnow()
             db.commit()
 
             logger.info(f"Starting backfill job {job_id} for account {account_id} ({start_date} to {end_date})")
@@ -104,7 +105,7 @@ def run_backfill_worker(job_id: int, account_id: int, start_date: date, end_date
 
             # Update job with results
             job.status = 'COMPLETED'
-            job.completed_at = datetime.utcnow()
+            job.completed_at = utcnow()
             job.snapshots_created = result['created']
             job.snapshots_updated = result['updated']
             job.snapshots_failed = result['failed']
@@ -123,7 +124,7 @@ def run_backfill_worker(job_id: int, account_id: int, start_date: date, end_date
 
                 if job:
                     job.status = 'FAILED'
-                    job.completed_at = datetime.utcnow()
+                    job.completed_at = utcnow()
                     job.error_message = str(e)[:500]  # Limit error message length
                     db.commit()
             except Exception as commit_error:
@@ -150,7 +151,7 @@ def recover_interrupted_jobs():
         for job in interrupted:
             job.status = 'FAILED'
             job.error_message = 'Server restarted during execution'
-            job.completed_at = datetime.utcnow()
+            job.completed_at = utcnow()
 
         db.commit()
         logger.info(f"Marked {len(interrupted)} interrupted jobs as FAILED")

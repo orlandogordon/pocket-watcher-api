@@ -5,6 +5,8 @@ from decimal import Decimal
 from uuid import UUID
 from enum import Enum
 
+from src.utils.time import UTCDateTime
+
 from src.models.category import CategoryResponse
 from src.db.core import RelationshipType
 
@@ -168,8 +170,8 @@ class TransactionResponse(BaseModel):
     source_type: SourceTypeEnum
     tags: List[EmbeddedTagResponse] = []
     split_allocations: List[SplitAllocationResponse] = []
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
 
     class Config:
         from_attributes = True
@@ -336,7 +338,7 @@ class TransactionRelationship(BaseModel):
     relationship_type: RelationshipType
     amount_allocated: Optional[Decimal] = None
     notes: Optional[str] = None
-    created_at: datetime
+    created_at: UTCDateTime
 
     class Config:
         from_attributes = True

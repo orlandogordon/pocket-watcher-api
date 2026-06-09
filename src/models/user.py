@@ -5,6 +5,8 @@ from uuid import UUID
 from typing_extensions import Self
 import re
 
+from src.utils.time import UTCDateTime
+
 
 # ===== USER PYDANTIC MODELS =====
 
@@ -88,9 +90,9 @@ class UserResponse(BaseModel):
     first_name: Optional[str]
     last_name: Optional[str]
     date_of_birth: Optional[date]
-    last_login_at: Optional[datetime]
-    created_at: datetime
-    updated_at: datetime
+    last_login_at: Optional[UTCDateTime]
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
     is_admin: bool
 
     class Config:
@@ -110,7 +112,7 @@ class UserLogin(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-    expires_at: datetime
+    expires_at: UTCDateTime
 
 
 class PasswordChange(BaseModel):

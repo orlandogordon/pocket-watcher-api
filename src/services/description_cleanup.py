@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from src.utils.time import utcnow
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -187,7 +188,7 @@ def _run_llm_batch(
         for r, res in zip(batch_raws, batch_results):
             result_by_raw[r] = res
 
-    now = datetime.utcnow()
+    now = utcnow()
     model_name = client.model_name
 
     for i in indices:

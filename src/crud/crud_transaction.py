@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import and_, or_, desc, asc, exists, select, func
 from typing import Optional, List, Dict, Any, Set, Tuple
 from datetime import datetime, date
+from src.utils.time import utcnow
 from decimal import Decimal
 from uuid import uuid4, UUID
 import hashlib
@@ -290,8 +291,8 @@ def create_db_transaction(db: Session, user_id: int, transaction_data: Transacti
         description=transaction_data.description,
         merchant_name=transaction_data.merchant_name,
         comments=transaction_data.comments,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        created_at=utcnow(),
+        updated_at=utcnow()
     )
 
     try:
@@ -650,7 +651,7 @@ def update_db_transaction(db: Session, transaction_id: int, user_id: int,
             logger.info(f"Cleared split allocations for transaction {db_transaction.uuid} — amount changed")
 
     # Always update the updated_at timestamp
-    db_transaction.updated_at = datetime.utcnow()
+    db_transaction.updated_at = utcnow()
 
     try:
         db.commit()
@@ -781,8 +782,8 @@ def bulk_create_transactions(db: Session, user_id: int, transaction_import: Tran
                 description=transaction_data.description,
                 merchant_name=transaction_data.merchant_name,
                 comments=transaction_data.comments,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
+                created_at=utcnow(),
+                updated_at=utcnow()
             )
             
             db.add(db_transaction)
@@ -1450,7 +1451,7 @@ def bulk_update_db_transactions(db: Session, user_id: int, transaction_ids: List
     )
     
     # Add updated_at timestamp
-    updates_with_timestamp = {**updates, "updated_at": datetime.utcnow()}
+    updates_with_timestamp = {**updates, "updated_at": utcnow()}
     
     updated_count = update_query.update(updates_with_timestamp, synchronize_session=False)
     

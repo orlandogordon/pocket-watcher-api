@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import case, desc
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, date, timedelta
+from src.utils.time import utcnow
 from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID, uuid4
 import hashlib
@@ -73,7 +74,7 @@ def update_db_investment_holding_by_uuid(db: Session, holding_uuid: 'UUID', user
     update_data = updates.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(holding, field, value)
-    holding.updated_at = datetime.utcnow()
+    holding.updated_at = utcnow()
     db.commit()
     db.refresh(holding)
     return holding
@@ -722,7 +723,7 @@ def update_db_investment_transaction(db: Session, transaction_id: int, user_id: 
         else:
             setattr(db_transaction, field, value)
 
-    db_transaction.updated_at = datetime.utcnow()
+    db_transaction.updated_at = utcnow()
 
     try:
         db.commit()

@@ -8,6 +8,7 @@ import yfinance as yf
 from typing import Dict, List, Optional, Tuple
 from decimal import Decimal
 from datetime import datetime, date, timedelta
+from src.utils.time import utcnow
 import time
 
 from src.logging_config import get_logger
@@ -356,7 +357,7 @@ def update_holding_price(holding, new_price: Decimal) -> Tuple[Decimal, Decimal]
     """
     old_price = holding.current_price or holding.average_cost_basis
     holding.current_price = new_price
-    holding.last_price_update = datetime.utcnow()
+    holding.last_price_update = utcnow()
 
     market_value = holding.quantity * new_price if holding.quantity else Decimal('0')
     price_change = new_price - old_price if old_price else Decimal('0')

@@ -1,9 +1,10 @@
 import json
 from typing import Optional, Dict, Any, List, Tuple
-from datetime import datetime, timedelta
+from datetime import timedelta
 from uuid import uuid4
 import redis
 from src.logging_config import get_logger
+from src.utils.time import utcnow, to_utc_iso
 
 logger = get_logger(__name__)
 
@@ -35,7 +36,7 @@ def create_preview_session(
         (session_id, expires_at_iso)
     """
     session_id = str(uuid4())
-    expires_at = datetime.utcnow() + timedelta(seconds=expiry)
+    expires_at = utcnow() + timedelta(seconds=expiry)
 
     session_data = {
         "user_id": user_id,
@@ -52,14 +53,14 @@ def create_preview_session(
         "ready_to_import": ready_to_import,
         "summary": summary,
         "llm_summary": llm_summary,
-        "created_at": datetime.utcnow().isoformat(),
-        "expires_at": expires_at.isoformat(),
+        "created_at": to_utc_iso(utcnow()),
+        "expires_at": to_utc_iso(expires_at),
     }
 
     key = f"{SESSION_PREFIX}{session_id}"
     r.setex(key, expiry, json.dumps(session_data, default=str))
     logger.info(f"Created preview session {session_id} for user {user_id} ({expiry}s TTL)")
-    return session_id, expires_at.isoformat()
+    return session_id, to_utc_iso(expires_at)
 
 
 def get_preview_session(
@@ -149,7 +150,7 @@ def extend_session_expiry(
     if not session:
         return None
     key = f"{SESSION_PREFIX}{session_id}"
-    new_expires_at = datetime.utcnow() + timedelta(seconds=additional_seconds)
-    session["expires_at"] = new_expires_at.isoformat()
+    new_expires_at = utcnow() + timedelta(seconds=additional_seconds)
+    session["expires_at"] = to_utc_iso(new_expires_at)
     r.setex(key, additional_seconds, json.dumps(session, default=str))
-    return new_expires_at.isoformat()
+    return to_utc_iso(new_expires_at)

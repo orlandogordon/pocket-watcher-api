@@ -9,6 +9,8 @@ from datetime import datetime
 from typing import Any, Literal, Optional
 from uuid import UUID
 
+from src.utils.time import UTCDateTime
+
 from pydantic import BaseModel
 
 
@@ -59,7 +61,7 @@ class AttentionItem(BaseModel):
     summary: str
     details: dict[str, Any]
     confidence: Optional[AttentionConfidence] = None
-    created_at: datetime
+    created_at: UTCDateTime
     actions: list[AttentionAction]
 
 

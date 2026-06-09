@@ -5,6 +5,7 @@ investment) for the user to confirm, dismiss, or leave alone. See
 `src/services/transfer_pairing.py` for the pairing logic.
 """
 from datetime import datetime
+from src.utils.time import utcnow
 from typing import Optional
 from uuid import UUID, uuid4
 
@@ -271,7 +272,7 @@ def dismiss_suggestion(
         from_investment_transaction_id=from_inv.db_id if from_inv else None,
         to_transaction_id=to_reg.db_id if to_reg else None,
         to_investment_transaction_id=to_inv.db_id if to_inv else None,
-        created_at=datetime.utcnow(),
+        created_at=utcnow(),
     )
     db.add(dismissal)
     db.commit()

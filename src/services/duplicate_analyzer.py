@@ -6,6 +6,7 @@ from src.crud.crud_transaction import generate_transaction_hash
 from src.crud.crud_investment import generate_investment_transaction_hash, map_transaction_type_to_enum
 from src.parser.models import ParsedTransaction, ParsedInvestmentTransaction
 from src.logging_config import get_logger
+from src.utils.time import to_utc_iso
 
 logger = get_logger(__name__)
 
@@ -39,7 +40,7 @@ def _serialize_existing_transaction(txn: TransactionDB) -> Dict:
         "description": txn.description,
         "transaction_type": txn.transaction_type.value,
         "institution_name": txn.account.institution_name if txn.account else None,
-        "created_at": txn.created_at.isoformat() if txn.created_at else None,
+        "created_at": to_utc_iso(txn.created_at) if txn.created_at else None,
     }
 
 
@@ -54,7 +55,7 @@ def _serialize_existing_investment_transaction(txn: InvestmentTransactionDB) -> 
         "price_per_share": str(txn.price_per_share) if txn.price_per_share else None,
         "total_amount": str(txn.total_amount),
         "description": txn.description,
-        "created_at": txn.created_at.isoformat() if txn.created_at else None,
+        "created_at": to_utc_iso(txn.created_at) if txn.created_at else None,
     }
 
 

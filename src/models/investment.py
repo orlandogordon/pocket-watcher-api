@@ -5,6 +5,8 @@ from decimal import Decimal
 from enum import Enum
 from uuid import UUID
 
+from src.utils.time import UTCDateTime
+
 
 # ===== ENUMS =====
 
@@ -58,14 +60,14 @@ class InvestmentHoldingResponse(InvestmentHoldingBase):
     id: UUID = Field(validation_alias="uuid")
     account_uuid: UUID
     current_price: Optional[Decimal]
-    last_price_update: Optional[datetime]
+    last_price_update: Optional[UTCDateTime]
     security_type: Optional[SecurityTypeEnum] = None
     underlying_symbol: Optional[str] = None
     option_type: Optional[str] = None
     strike_price: Optional[Decimal] = None
     expiration_date: Optional[date] = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
 
     class Config:
         from_attributes = True
@@ -122,8 +124,8 @@ class InvestmentTransactionResponse(InvestmentTransactionBase):
     account_uuid: UUID
     holding_uuid: Optional[UUID] = None
     cost_basis_at_sale: Optional[Decimal] = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
 
     class Config:
         from_attributes = True

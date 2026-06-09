@@ -7,6 +7,7 @@ and net worth calculations across all account types.
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
 from datetime import date, datetime, timedelta
+from src.utils.time import utcnow
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional, Dict
 from uuid import uuid4
@@ -570,7 +571,7 @@ def recalculate_non_investment_snapshots(
                 existing_snapshot.balance = historical_balance
                 existing_snapshot.principal_paid_ytd = loan_data.get('principal_paid_ytd')
                 existing_snapshot.interest_paid_ytd = loan_data.get('interest_paid_ytd')
-                existing_snapshot.last_recalculated_at = datetime.utcnow()
+                existing_snapshot.last_recalculated_at = utcnow()
                 existing_snapshot.recalculation_count += 1
                 existing_snapshot.recalculation_reason = reason
                 if needs_review:
@@ -745,7 +746,7 @@ def recalculate_account_snapshots(
                 existing_snapshot.cash_balance = cash_balance
                 existing_snapshot.total_cost_basis = total_cost_basis
                 existing_snapshot.unrealized_gain_loss = unrealized_gain_loss
-                existing_snapshot.last_recalculated_at = datetime.utcnow()
+                existing_snapshot.last_recalculated_at = utcnow()
                 existing_snapshot.recalculation_count += 1
                 existing_snapshot.recalculation_reason = reason
 
@@ -958,7 +959,7 @@ def update_investment_prices(
 
         if price:
             holding.current_price = price
-            holding.last_price_update = datetime.utcnow()
+            holding.last_price_update = utcnow()
             updated += 1
         else:
             logger.warning(f"Failed to fetch price for {holding.symbol}")

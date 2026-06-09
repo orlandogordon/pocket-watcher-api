@@ -5,6 +5,8 @@ from decimal import Decimal
 from enum import Enum
 from uuid import UUID
 
+from src.utils.time import UTCDateTime
+
 
 # ===== ACCOUNT PYDANTIC MODELS =====
 
@@ -114,7 +116,7 @@ class AccountResponse(BaseModel):
     account_number_last4: Optional[str]
     balance: Decimal
     initial_cash_balance: Optional[Decimal] = None
-    balance_last_updated: Optional[datetime]
+    balance_last_updated: Optional[UTCDateTime]
     interest_rate: Optional[Decimal]
     interest_rate_type: Optional[str]
     original_principal: Optional[Decimal]
@@ -124,8 +126,8 @@ class AccountResponse(BaseModel):
     accrued_interest: Optional[Decimal] = None
     match_aliases: Optional[List[str]] = None
     comments: Optional[str]
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
 
     class Config:
         from_attributes = True
@@ -148,7 +150,7 @@ class AccountBalance(BaseModel):
     """Account balance information"""
     account_uuid: UUID
     balance: Decimal
-    balance_last_updated: Optional[datetime]
+    balance_last_updated: Optional[UTCDateTime]
 
 
 class AccountStats(BaseModel):

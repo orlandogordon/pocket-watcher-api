@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import and_, or_
 from typing import Optional, List, Dict, Tuple
 from datetime import datetime, date
+from src.utils.time import utcnow
 from decimal import Decimal
 from uuid import uuid4, UUID
 from calendar import monthrange
@@ -42,8 +43,8 @@ def create_template(db: Session, user_id: int, data: TemplateCreate,
         user_id=user_id,
         template_name=data.template_name.strip(),
         is_default=data.is_default,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=utcnow(),
+        updated_at=utcnow(),
     )
 
     try:
@@ -116,7 +117,7 @@ def update_template(db: Session, template_uuid: UUID, user_id: int,
 
     for field, value in update_data.items():
         setattr(template, field, value)
-    template.updated_at = datetime.utcnow()
+    template.updated_at = utcnow()
 
     try:
         db.commit()
@@ -179,7 +180,7 @@ def add_template_category(db: Session, template_uuid: UUID, user_id: int,
         category_id=category_id,
         subcategory_id=subcategory_id,
         allocated_amount=data.allocated_amount,
-        created_at=datetime.utcnow(),
+        created_at=utcnow(),
     )
 
     try:
@@ -278,8 +279,8 @@ def get_or_create_budget_month(db: Session, user_id: int, year: int, month: int)
         template_id=default_template.db_id if default_template else None,
         year=year,
         month=month,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=utcnow(),
+        updated_at=utcnow(),
     )
     db.add(budget_month)
     db.commit()
@@ -298,7 +299,7 @@ def update_budget_month(db: Session, user_id: int, year: int, month: int,
     else:
         budget_month.template_id = resolved_template_id
 
-    budget_month.updated_at = datetime.utcnow()
+    budget_month.updated_at = utcnow()
     db.commit()
     db.refresh(budget_month)
     return budget_month
@@ -724,7 +725,7 @@ def _add_template_categories(db: Session, template: BudgetTemplateDB,
             category_id=cat_id,
             subcategory_id=sub_id,
             allocated_amount=cat_data.allocated_amount,
-            created_at=datetime.utcnow(),
+            created_at=utcnow(),
         )
         db.add(alloc)
 

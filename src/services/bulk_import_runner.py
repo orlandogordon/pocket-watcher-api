@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime
+from src.utils.time import utcnow
 
 from sqlalchemy import func
 
@@ -67,7 +68,7 @@ def process_batch(db, batch_id: int) -> None:
             break
 
         job.status = "PROCESSING"
-        job.started_at = datetime.utcnow()
+        job.started_at = utcnow()
         db.commit()
 
         try:
@@ -98,7 +99,7 @@ def process_batch(db, batch_id: int) -> None:
             job.error_message = str(e)
             logger.error("bulk file %s failed: %s", job.uuid, e, exc_info=True)
 
-        job.completed_at = datetime.utcnow()
+        job.completed_at = utcnow()
         batch.processed_files += 1
         db.commit()
 
@@ -109,7 +110,7 @@ def process_batch(db, batch_id: int) -> None:
             trigger_backfill_if_needed(db, batch.user_id, account_id, earliest)
 
     batch.status = "CANCELLED" if cancelled else "COMPLETED"
-    batch.completed_at = datetime.utcnow()
+    batch.completed_at = utcnow()
     db.commit()
     logger.info("bulk batch %s %s (%d files)", batch.uuid, batch.status, batch.processed_files)
 

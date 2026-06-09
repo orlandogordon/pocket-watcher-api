@@ -5,6 +5,8 @@ from decimal import Decimal
 from enum import Enum
 from uuid import UUID
 
+from src.utils.time import UTCDateTime
+
 # ===== ENUMS =====
 
 class DebtStrategyEnum(str, Enum):
@@ -31,8 +33,8 @@ class DebtRepaymentPlanResponse(BaseModel):
     strategy: DebtStrategyEnum
     target_payoff_date: Optional[date]
     status: str
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
 
     class Config:
         from_attributes = True
@@ -114,7 +116,7 @@ class DebtPaymentResponse(BaseModel):
     remaining_balance_after_payment: Optional[Decimal]
     payment_date: date
     description: Optional[str]
-    created_at: datetime
+    created_at: UTCDateTime
 
     class Config:
         from_attributes = True

@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from typing import Optional, List
 from uuid import uuid4, UUID
 from datetime import datetime
+from src.utils.time import utcnow
 import bcrypt
 
 # Import your database models and Pydantic models
@@ -52,8 +53,8 @@ def create_db_user(db: Session, user_data: UserCreate) -> UserDB:
         first_name=user_data.first_name,
         last_name=user_data.last_name,
         date_of_birth=user_data.date_of_birth,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        created_at=utcnow(),
+        updated_at=utcnow()
     )
     
     try:
@@ -124,7 +125,7 @@ def update_db_user(db: Session, user_id: int, user_updates: UserUpdate) -> UserD
         setattr(db_user, field, value)
     
     # Always update the updated_at timestamp
-    db_user.updated_at = datetime.utcnow()
+    db_user.updated_at = utcnow()
     
     try:
         db.commit()
@@ -167,8 +168,8 @@ def authenticate_user(db: Session, email: str, password: str) -> Optional[UserDB
         return None
     
     # Update last login time
-    user.last_login_at = datetime.utcnow()
-    user.updated_at = datetime.utcnow()
+    user.last_login_at = utcnow()
+    user.updated_at = utcnow()
     db.commit()
     db.refresh(user)
     
@@ -188,7 +189,7 @@ def change_user_password(db: Session, user_id: int, password_change: PasswordCha
     
     # Update password
     db_user.password_hash = hash_password(password_change.new_password)
-    db_user.updated_at = datetime.utcnow()
+    db_user.updated_at = utcnow()
     
     try:
         db.commit()

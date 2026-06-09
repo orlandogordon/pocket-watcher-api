@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from typing import Optional, List, Dict
 from datetime import datetime
+from src.utils.time import utcnow
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -54,12 +55,12 @@ def create_db_account(db: Session, user_id: int, account_data: AccountCreate) ->
         account_number_last4=account_data.account_number_last4,
         balance=account_data.balance,
         initial_cash_balance=initial_cash,
-        balance_last_updated=datetime.utcnow() if account_data.balance != 0 else None,
+        balance_last_updated=utcnow() if account_data.balance != 0 else None,
         interest_rate=account_data.interest_rate,
         interest_rate_type=account_data.interest_rate_type.value if account_data.interest_rate_type else None,
         comments=account_data.comments,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        created_at=utcnow(),
+        updated_at=utcnow()
     )
     
     try:
@@ -144,14 +145,14 @@ def update_db_account(db: Session, account_id: int, user_id: int, account_update
             setattr(db_account, field, AccountType(value.value))
         elif field == 'balance' and value is not None:
             setattr(db_account, field, value)
-            db_account.balance_last_updated = datetime.utcnow()
+            db_account.balance_last_updated = utcnow()
         elif field == 'interest_rate_type' and value:
             setattr(db_account, field, value.value)
         else:
             setattr(db_account, field, value)
     
     # Always update the updated_at timestamp
-    db_account.updated_at = datetime.utcnow()
+    db_account.updated_at = utcnow()
     
     try:
         db.commit()
@@ -198,8 +199,8 @@ def update_account_balance(db: Session, account_id: int, new_balance: Decimal) -
         raise NotFoundError(f"Account with id {account_id} not found")
     
     db_account.balance = round(new_balance, 2)
-    db_account.balance_last_updated = datetime.utcnow()
-    db_account.updated_at = datetime.utcnow()
+    db_account.balance_last_updated = utcnow()
+    db_account.updated_at = utcnow()
     
     try:
         db.commit()
@@ -320,13 +321,13 @@ def update_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int, acc
             setattr(db_account, field, AccountType(value.value))
         elif field == 'balance' and value is not None:
             setattr(db_account, field, value)
-            db_account.balance_last_updated = datetime.utcnow()
+            db_account.balance_last_updated = utcnow()
         elif field == 'interest_rate_type' and value:
             setattr(db_account, field, value.value)
         else:
             setattr(db_account, field, value)
 
-    db_account.updated_at = datetime.utcnow()
+    db_account.updated_at = utcnow()
 
     try:
         db.commit()

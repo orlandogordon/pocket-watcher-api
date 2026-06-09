@@ -4,6 +4,8 @@ from decimal import Decimal
 from datetime import datetime, date
 from uuid import UUID
 
+from src.utils.time import UTCDateTime
+
 # Financial Plan Expense Models
 
 class FinancialPlanExpenseBase(BaseModel):
@@ -26,7 +28,7 @@ class FinancialPlanExpenseUpdate(BaseModel):
 
 class FinancialPlanExpense(FinancialPlanExpenseBase):
     id: UUID = Field(validation_alias="uuid")
-    created_at: datetime
+    created_at: UTCDateTime
 
     class Config:
         from_attributes = True
@@ -49,7 +51,7 @@ class FinancialPlanMonthUpdate(BaseModel):
 
 class FinancialPlanMonth(FinancialPlanMonthBase):
     id: UUID = Field(validation_alias="uuid")
-    created_at: datetime
+    created_at: UTCDateTime
     expenses: List[FinancialPlanExpense] = []
 
     class Config:
@@ -72,8 +74,8 @@ class FinancialPlanUpdate(BaseModel):
 
 class FinancialPlan(FinancialPlanBase):
     id: UUID = Field(validation_alias="uuid")
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
     monthly_periods: List[FinancialPlanMonth] = []
 
     class Config:

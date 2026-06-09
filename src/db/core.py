@@ -4,6 +4,7 @@ from sqlalchemy import CheckConstraint, create_engine, event, ForeignKey, Index,
 from sqlalchemy.types import Enum
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, Mapped, relationship, mapped_column
 from datetime import datetime, date
+from src.utils.time import utcnow
 from uuid import UUID
 from decimal import Decimal
 import enum
@@ -57,8 +58,8 @@ class UserDB(Base):
     is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     
     # Audit Trail
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
     
     # Relationships
     accounts = relationship("AccountDB", back_populates="user", cascade="all, delete-orphan")
@@ -167,8 +168,8 @@ class BudgetTemplateDB(Base):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Audit Trail
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
     # Relationships
     user = relationship("UserDB", back_populates="budget_templates")
@@ -197,7 +198,7 @@ class BudgetTemplateCategoryDB(Base):
     allocated_amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
 
     # Audit Trail
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     # Relationships
     template = relationship("BudgetTemplateDB", back_populates="categories")
@@ -227,8 +228,8 @@ class BudgetMonthDB(Base):
     month: Mapped[int] = mapped_column(Integer, nullable=False)
 
     # Audit Trail
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
     # Relationships
     user = relationship("UserDB", back_populates="budget_months")
@@ -271,8 +272,8 @@ class InvestmentHoldingDB(Base):
     expiration_date: Mapped[Optional[date]] = mapped_column(Date)  # e.g., 2025-01-17
 
     # Audit Trail
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
     # Relationships
     account = relationship("AccountDB", back_populates="investment_holdings")
@@ -328,8 +329,8 @@ class InvestmentTransactionDB(Base):
     cost_basis_at_sale: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 4))  # Snapshot of avg cost basis at time of SELL
 
     # Audit Trail
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
     # Relationships
     user = relationship("UserDB", back_populates="investment_transactions")
@@ -375,7 +376,7 @@ class DebtPaymentDB(Base):
     description: Mapped[Optional[str]] = mapped_column(String(500))
     
     # Audit Trail
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     # Relationships
     loan_account = relationship("AccountDB", foreign_keys=[loan_account_id], back_populates="debt_payments")
@@ -404,8 +405,8 @@ class DebtRepaymentPlanDB(Base):
     target_payoff_date: Mapped[Optional[date]] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(50), default="ACTIVE")
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
     user = relationship("UserDB", back_populates="debt_repayment_plans")
     linked_accounts = relationship("DebtPlanAccountLinkDB", back_populates="plan", cascade="all, delete-orphan")
@@ -478,8 +479,8 @@ class TransactionDB(Base):
     comments: Mapped[Optional[str]] = mapped_column(Text)
 
     # Audit Trail
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
     # Relationships
     user = relationship("UserDB", back_populates="transactions")
@@ -547,7 +548,7 @@ class TransactionRelationshipDB(Base):
     amount_allocated: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))
     notes: Mapped[Optional[str]] = mapped_column(Text)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     from_transaction = relationship("TransactionDB", foreign_keys=[from_transaction_id], back_populates="relationship_from")
     to_transaction = relationship("TransactionDB", foreign_keys=[to_transaction_id], back_populates="relationship_to")
@@ -596,7 +597,7 @@ class DismissedTransferPairDB(Base):
         ForeignKey("investment_transactions.db_id", ondelete="CASCADE"), nullable=True
     )
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
 
 class TransactionSplitAllocationDB(Base):
@@ -617,8 +618,8 @@ class TransactionSplitAllocationDB(Base):
     category_id:   Mapped[int]           = mapped_column(ForeignKey("categories.db_id"))
     subcategory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.db_id"))
     amount:        Mapped[Decimal]       = mapped_column(DECIMAL(15, 2), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
     transaction = relationship("TransactionDB", back_populates="split_allocations")
     category    = relationship("CategoryDB", foreign_keys=[category_id])
@@ -639,7 +640,7 @@ class TransactionAmortizationScheduleDB(Base):
     transaction_id: Mapped[int] = mapped_column(ForeignKey("transactions.db_id"))
     month_date: Mapped[date] = mapped_column(Date, nullable=False)
     amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     transaction = relationship("TransactionDB", back_populates="amortization_schedule")
 
@@ -665,7 +666,7 @@ class TagDB(Base):
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Audit Trail
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     # Relationships
     user = relationship("UserDB", back_populates="tags")
@@ -680,7 +681,7 @@ class TransactionTagDB(Base):
     tag_id: Mapped[int] = mapped_column(ForeignKey("tags.db_id"), primary_key=True)
     
     # Audit Trail
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     # Relationships
     transaction = relationship("TransactionDB", back_populates="transaction_tags")
@@ -730,8 +731,8 @@ class AccountDB(Base):
     comments: Mapped[Optional[str]] = mapped_column(Text)
 
     # Audit Trail
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
     # Relationships
     user = relationship("UserDB", back_populates="accounts")
@@ -795,7 +796,7 @@ class AccountValueHistoryDB(Base):
     review_reason: Mapped[Optional[str]] = mapped_column(String(255))
 
     # Audit Trail
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     # Relationships
     account = relationship("AccountDB", back_populates="value_history")
@@ -815,8 +816,8 @@ class FinancialPlanDB(Base):
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
     user = relationship("UserDB", back_populates="financial_plans")
     monthly_periods = relationship("FinancialPlanMonthDB", back_populates="plan", cascade="all, delete-orphan")
@@ -833,7 +834,7 @@ class FinancialPlanMonthDB(Base):
     year: Mapped[int] = mapped_column(nullable=False)
     month: Mapped[int] = mapped_column(nullable=False)
     planned_income: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     plan = relationship("FinancialPlanDB", back_populates="monthly_periods")
     expenses = relationship("FinancialPlanExpenseDB", back_populates="month", cascade="all, delete-orphan")
@@ -849,7 +850,7 @@ class FinancialPlanExpenseDB(Base):
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     amount: Mapped[Decimal] = mapped_column(DECIMAL(15, 2), nullable=False)
     expense_type: Mapped[str] = mapped_column(String(20), nullable=False)  # 'recurring' or 'one_time'
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     month = relationship("FinancialPlanMonthDB", back_populates="expenses")
     category = relationship("CategoryDB")
@@ -889,7 +890,7 @@ class SnapshotBackfillJobDB(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text)
 
     # Timestamps
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
@@ -926,7 +927,7 @@ class BulkImportBatchDB(Base):
     processed_files: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[Optional[str]] = mapped_column(Text)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
     user = relationship("UserDB")
@@ -989,7 +990,7 @@ class UploadJobDB(Base):
     llm_degraded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Timestamps
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
@@ -1042,7 +1043,7 @@ class SkippedTransactionDB(Base):
     )
 
     # Timestamp
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
     # Relationships
     upload_job = relationship("UploadJobDB", back_populates="skipped_transactions")
@@ -1089,7 +1090,7 @@ class ParsedImportDB(Base):
     llm_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     llm_processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
     upload_job = relationship("UploadJobDB", back_populates="parsed_imports")
     transaction = relationship(

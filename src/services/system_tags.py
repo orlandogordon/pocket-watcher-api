@@ -7,6 +7,7 @@ Ensures each user has the required set of protected system tags
 
 from uuid import uuid5, UUID
 from datetime import datetime
+from src.utils.time import utcnow
 from sqlalchemy.orm import Session
 
 from src.db.core import TagDB, TransactionTagDB
@@ -48,7 +49,7 @@ def ensure_system_tags(user_id: int, db: Session) -> list[TagDB]:
                 tag_name=defn["tag_name"],
                 color=defn["color"],
                 is_system=True,
-                created_at=datetime.utcnow(),
+                created_at=utcnow(),
             )
             db.add(tag)
             created.append(tag)

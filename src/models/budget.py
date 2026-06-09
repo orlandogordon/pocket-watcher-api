@@ -4,6 +4,8 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
+from src.utils.time import UTCDateTime
+
 from src.models.category import CategoryResponse
 
 
@@ -34,7 +36,7 @@ class TemplateCategoryResponse(BaseModel):
     category: CategoryResponse
     subcategory: Optional[CategoryResponse] = None
     allocated_amount: Decimal
-    created_at: datetime
+    created_at: UTCDateTime
 
     class Config:
         from_attributes = True
@@ -65,8 +67,8 @@ class TemplateResponse(BaseModel):
     id: UUID = Field(validation_alias="uuid")
     template_name: str
     is_default: bool
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
     categories: Optional[List[TemplateCategoryResponse]] = None
 
     class Config:
@@ -98,8 +100,8 @@ class BudgetMonthResponse(BaseModel):
     total_spent: Optional[Decimal] = None
     total_remaining: Optional[Decimal] = None
     percentage_used: Optional[float] = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
 
     class Config:
         from_attributes = True

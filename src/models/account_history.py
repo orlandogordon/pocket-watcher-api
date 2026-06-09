@@ -4,6 +4,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
+from src.utils.time import UTCDateTime
+
 
 class SnapshotUpdateRequest(BaseModel):
     """Request model to edit a single snapshot's values"""
@@ -38,7 +40,7 @@ class AccountSnapshotResponse(BaseModel):
     needs_review: bool = False
     review_reason: Optional[str] = None
     snapshot_source: str
-    created_at: datetime
+    created_at: UTCDateTime
 
     class Config:
         from_attributes = True
@@ -107,9 +109,9 @@ class SnapshotBackfillJobResponse(BaseModel):
     end_date: date
     status: str  # PENDING, IN_PROGRESS, COMPLETED, FAILED
     error_message: Optional[str]
-    created_at: datetime
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
+    created_at: UTCDateTime
+    started_at: Optional[UTCDateTime]
+    completed_at: Optional[UTCDateTime]
     snapshots_created: Optional[int]
     snapshots_updated: Optional[int]
     snapshots_failed: Optional[int]
