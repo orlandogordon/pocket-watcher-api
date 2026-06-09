@@ -899,6 +899,12 @@ def get_transaction_stats(db: Session, user_id: int, filters: Optional[Transacti
 
     transactions = query.all()
 
+    liability_account_ids = _liability_account_ids(db, user_id)
+
+    def _is_liability_interest(txn) -> bool:
+        return (txn.transaction_type == TransactionType.INTEREST
+                and txn.account_id in liability_account_ids)
+
     txn_ids = [t.db_id for t in transactions]
     adjustments, absorbed_ids = get_refund_adjustments(db, user_id, txn_ids)
 
@@ -924,9 +930,9 @@ def get_transaction_stats(db: Session, user_id: int, filters: Optional[Transacti
         adj = adjustments.get(transaction.db_id, Decimal('0.00'))
         effective = max(transaction.amount - adj, Decimal('0.00'))
 
-        if transaction.transaction_type in income_types:
+        if transaction.transaction_type in income_types and not _is_liability_interest(transaction):
             total_income += effective
-        elif transaction.transaction_type in expense_types:
+        elif transaction.transaction_type in expense_types or _is_liability_interest(transaction):
             total_expenses += effective
 
     # If category filter is active, adjust split transaction amounts
@@ -956,7 +962,7 @@ def get_transaction_stats(db: Session, user_id: int, filters: Optional[Transacti
                         ratio = 1 - adjustments[txn.db_id] / txn.amount
                         alloc_amount = max(alloc_amount * ratio, Decimal('0.00'))
 
-                    if txn.transaction_type in (TransactionType.PURCHASE, TransactionType.WITHDRAWAL, TransactionType.FEE):
+                    if txn.transaction_type in (TransactionType.PURCHASE, TransactionType.WITHDRAWAL, TransactionType.FEE) or _is_liability_interest(txn):
                         total_expenses -= full_amount
                         total_expenses += alloc_amount
                     elif txn.transaction_type in (TransactionType.CREDIT, TransactionType.DEPOSIT, TransactionType.INTEREST):
@@ -973,6 +979,18 @@ def get_transaction_stats(db: Session, user_id: int, filters: Optional[Transacti
 
 INCOME_TYPES = (TransactionType.CREDIT, TransactionType.DEPOSIT, TransactionType.INTEREST)
 EXPENSE_TYPES = (TransactionType.PURCHASE, TransactionType.WITHDRAWAL, TransactionType.FEE)
+
+
+def _liability_account_ids(db: Session, user_id: int) -> Set[int]:
+    """Account ids where INTEREST is a finance charge (expense) rather than
+    interest earned (income) — i.e. credit cards and loans. See #69."""
+    return {
+        row[0] for row in
+        db.query(AccountDB.db_id).filter(
+            AccountDB.user_id == user_id,
+            AccountDB.account_type.in_([AccountType.CREDIT_CARD, AccountType.LOAN]),
+        ).all()
+    }
 
 
 def get_monthly_averages(db: Session, user_id: int, year: int, month: Optional[int] = None, account_ids: Optional[List[int]] = None) -> MonthlyAverageResponse:
@@ -996,6 +1014,12 @@ def get_monthly_averages(db: Session, user_id: int, year: int, month: Optional[i
     query = db.query(TransactionDB).filter(TransactionDB.user_id == user_id)
     query = _apply_transaction_filters(query, filters)
     transactions = query.all()
+
+    liability_account_ids = _liability_account_ids(db, user_id)
+
+    def _is_liability_interest(txn) -> bool:
+        return (txn.transaction_type == TransactionType.INTEREST
+                and txn.account_id in liability_account_ids)
 
     txn_ids = [t.db_id for t in transactions]
     adjustments, absorbed_ids = get_refund_adjustments(db, user_id, txn_ids) if txn_ids else ({}, set())
@@ -1048,14 +1072,16 @@ def get_monthly_averages(db: Session, user_id: int, year: int, month: Optional[i
         month_key = txn.transaction_date.strftime("%Y-%m")
         months_seen.add(month_key)
 
+        is_expense = txn.transaction_type in EXPENSE_TYPES or _is_liability_interest(txn)
+
         # Accumulate month-level income/expenses
-        if txn.transaction_type in INCOME_TYPES:
+        if txn.transaction_type in INCOME_TYPES and not _is_liability_interest(txn):
             month_totals[month_key]["income"] += effective
-        elif txn.transaction_type in EXPENSE_TYPES:
+        elif is_expense:
             month_totals[month_key]["expenses"] += effective
 
         # Category breakdown (expenses only — income categories are less meaningful)
-        if txn.transaction_type not in EXPENSE_TYPES:
+        if not is_expense:
             continue
 
         if txn.db_id in split_map:

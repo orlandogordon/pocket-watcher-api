@@ -13,6 +13,7 @@ import pytest
 
 from src.crud.crud_transaction import get_monthly_averages
 from src.db.core import (
+    AccountType,
     RelationshipType,
     TransactionRelationshipDB,
     TransactionSplitAllocationDB,
@@ -112,6 +113,16 @@ def test_split_distributed_across_category_breakdown(db, user, account):
     totals = {c.category_uuid: c.total for c in res.by_category}
     assert totals[cat_a.uuid] == Decimal("60.00")
     assert totals[cat_b.uuid] == Decimal("40.00")
+
+
+def test_liability_interest_is_expense_asset_interest_is_income(db, user, account):
+    card = make_account(db, user, account_name="Card", account_type=AccountType.CREDIT_CARD)
+    _txn(db, user, card, "12.50", TransactionType.INTEREST, date(2026, 1, 5))   # finance charge
+    _txn(db, user, account, "3.00", TransactionType.INTEREST, date(2026, 1, 6))  # interest earned
+
+    res = get_monthly_averages(db, user.db_id, 2026)
+    assert res.totals.total_expenses == Decimal("12.50")
+    assert res.totals.total_income == Decimal("3.00")
 
 
 def test_single_month_query_scopes_to_that_month(db, user, account):

@@ -12,6 +12,7 @@ from src.db.core import (
     BudgetTemplateDB, BudgetTemplateCategoryDB, BudgetMonthDB,
     UserDB, TransactionDB, NotFoundError, TransactionType, CategoryDB,
     TransactionSplitAllocationDB, TransactionAmortizationScheduleDB,
+    AccountDB, AccountType,
 )
 from src.models.budget import (
     TemplateCreate, TemplateUpdate, TemplateCategoryCreate, TemplateCategoryUpdate,
@@ -352,17 +353,36 @@ def calculate_category_spending(db: Session, user_id: int, year: int, month: int
             )
         return query.filter(TransactionDB.category_id == category_id)
 
+    # INTEREST counts as spend only on liability accounts (credit card / loan),
+    # where it's a finance charge — the sibling of FEE. On asset accounts the
+    # same type is interest *earned* (income), so it stays excluded there.
+    liability_account_ids = (
+        db.query(AccountDB.db_id)
+        .filter(
+            AccountDB.user_id == user_id,
+            AccountDB.account_type.in_([AccountType.CREDIT_CARD, AccountType.LOAN]),
+        )
+        .scalar_subquery()
+    )
+    spend_type_filter = or_(
+        TransactionDB.transaction_type.in_([
+            TransactionType.PURCHASE,
+            TransactionType.WITHDRAWAL,
+            TransactionType.FEE,
+        ]),
+        and_(
+            TransactionDB.transaction_type == TransactionType.INTEREST,
+            TransactionDB.account_id.in_(liability_account_ids),
+        ),
+    )
+
     expense_txns = _txn_category_filter(
         db.query(TransactionDB.db_id, TransactionDB.amount)
         .filter(
             TransactionDB.user_id == user_id,
             TransactionDB.transaction_date >= start_date,
             TransactionDB.transaction_date <= end_date,
-            TransactionDB.transaction_type.in_([
-                TransactionType.PURCHASE,
-                TransactionType.WITHDRAWAL,
-                TransactionType.FEE,
-            ]),
+            spend_type_filter,
         )
     ).all()
 
@@ -447,11 +467,7 @@ def calculate_category_spending(db: Session, user_id: int, year: int, month: int
             TransactionSplitAllocationDB.category_id == category_id,
             TransactionDB.transaction_date >= start_date,
             TransactionDB.transaction_date <= end_date,
-            TransactionDB.transaction_type.in_([
-                TransactionType.PURCHASE,
-                TransactionType.WITHDRAWAL,
-                TransactionType.FEE,
-            ]),
+            spend_type_filter,
         )
     )
     if subcategory_id is not None:

@@ -12,6 +12,7 @@ import pytest
 
 from src.crud.crud_budget import calculate_category_spending
 from src.db.core import (
+    AccountType,
     RelationshipType,
     TransactionRelationshipDB,
     TransactionSplitAllocationDB,
@@ -89,6 +90,23 @@ def test_split_allocation_added_to_direct_spending(db, user, account, cat):
     db.flush()
     # 50 direct + 60 split allocation to this category.
     assert calculate_category_spending(db, user.db_id, 2026, 1, cat.db_id) == Decimal("110")
+
+
+def test_interest_counts_as_spend_on_liability_account(db, user, cat):
+    card = make_account(db, user, account_name="Test Card", account_type=AccountType.CREDIT_CARD)
+    _purchase(db, user, card, "40", date(2026, 1, 10), category_id=cat.db_id)
+    make_transaction(db, user, card, amount=Decimal("12.50"), transaction_type=TransactionType.INTEREST,
+                     transaction_date=date(2026, 1, 15), category_id=cat.db_id)
+    # 40 purchase + 12.50 finance charge.
+    assert calculate_category_spending(db, user.db_id, 2026, 1, cat.db_id) == Decimal("52.50")
+
+
+def test_interest_excluded_on_asset_account(db, user, account, cat):
+    # On a checking account, INTEREST is interest earned (income) — not spend.
+    _purchase(db, user, account, "40", date(2026, 1, 10), category_id=cat.db_id)
+    make_transaction(db, user, account, amount=Decimal("3.00"), transaction_type=TransactionType.INTEREST,
+                     transaction_date=date(2026, 1, 15), category_id=cat.db_id)
+    assert calculate_category_spending(db, user.db_id, 2026, 1, cat.db_id) == Decimal("40.00")
 
 
 def test_split_allocation_is_refund_scaled(db, user, account, cat):
