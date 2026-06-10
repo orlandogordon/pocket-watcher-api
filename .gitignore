@@ -8,6 +8,10 @@ __temp/
 # scripts/ is local-only dev tooling (#59) — runtime jobs live in src/jobs/.
 /scripts/
 /llm_inspect/
+# LLM A/B eval snapshots (#64) — contain real merchant/description data (PII).
+/inspect_*.json
+/inspect_*.csv
+/eval_*.json
 # Uploaded statement documents (local file storage, #59) — never committed.
 /data/
 # Real statements for local-only parser regression (never committed — PII).

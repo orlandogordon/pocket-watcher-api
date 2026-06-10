@@ -9,6 +9,11 @@ from uuid import UUID
 from decimal import Decimal
 import enum
 
+from dotenv import load_dotenv
+
+# Load .env before reading DATABASE_URL below — this module is imported first by
+# every DB entrypoint (app, Alembic, jobs). override=False keeps real env vars winning.
+load_dotenv()
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///test.db")
 

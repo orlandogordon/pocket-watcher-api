@@ -26,6 +26,7 @@ regex-first merchant extraction).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from src.utils.time import utcnow
@@ -78,7 +79,7 @@ def process_preview_items(
     parsed_items: list[dict],
     user_id: int,
     institution: Optional[str] = None,
-    batch_size: int = 20,
+    batch_size: Optional[int] = None,
 ) -> list[CleanedResult]:
     """Process a list of preview items. Order is preserved.
 
@@ -88,10 +89,21 @@ def process_preview_items(
     merchant patterns apply (case-insensitive — see
     ``merchant_extractor._INSTITUTION_HANDLERS``).
 
+    ``batch_size`` controls how many descriptions are sent per
+    ``process_transaction_batch`` call. When unset it resolves from the
+    ``LLM_BATCH_SIZE`` env var (default 20). Set ``LLM_BATCH_SIZE=1`` for a
+    bulk backfill: GPT-OSS categorization is nondeterministic across batch
+    positions (continuous-batching float-reduction order varies with batch
+    composition — see #64), so batch size 1 makes identical descriptions get
+    identical categories and isolates the rare over-reasoning empty-response
+    failure to a single row instead of nulling the whole batch.
+
     The ``user_id`` and ``db`` parameters are retained for API stability with
     earlier call sites; the cache stages they used to support are no longer
     invoked, but downstream callers expect the same signature.
     """
+    if batch_size is None:
+        batch_size = int(os.getenv("LLM_BATCH_SIZE", "20"))
     raws = [str(p.get("description") or "") for p in parsed_items]
 
     # Rows the source truncated mid-name (Amex activity-CSV fixed-width export):

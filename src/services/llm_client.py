@@ -48,12 +48,43 @@ _MERCHANT_CONFIDENCE_FLOOR = 0.85
 # with the schema-level nullability of the category UUID fields: ambiguous
 # rows surface as null and route through the "Needs Review" tag workflow at
 # confirm time (#34) instead of being filed under Miscellaneous at high
-# confidence. 0.8 is a starting value; tune via inspection runs.
-_CATEGORY_CONFIDENCE_FLOOR = 0.8
+# confidence. Tuned to GPT-OSS-20B (#64): a labeled band-precision sweep over
+# the consumer (non-investment) eval rows put category precision at ~58% below
+# 0.90 vs ~72–88% at/above it, so 0.90 is the precision-first cutoff. NOTE this
+# is a model-specific value — Qwen ran at 0.8; revisit if LLM_MODEL changes.
+_CATEGORY_CONFIDENCE_FLOOR = 0.90
 
 # Reachability-probe timeout for ``health_check()``. Short on purpose: "offline"
 # is a fine answer, and the probe must never contend with an in-flight import.
 _HEALTH_TIMEOUT_S = 2.0
+
+
+def _reasoning_extra_body(model: str) -> dict:
+    """Per-model-family request knob that suppresses reasoning for this
+    mechanical categorize/extract task (#64).
+
+    The two local model lines disable reasoning differently, and both are
+    expressed through llama-server's ``chat_template_kwargs`` pass-through so
+    the value reaches the model's own jinja chat template:
+
+    - **GPT-OSS** has a native low/med/high reasoning lever; force ``low`` for
+      latency (the harmony template renders this as ``Reasoning: low``). The
+      harder #30 PDF-parsing path may later dial this *up* — keep it a knob.
+    - **Qwen 3.x** uses ``enable_thinking=False`` to skip its ``<think>`` pass.
+
+    Keyed off the model name (not a separate env var) so the todo's "one-line
+    ``.env`` revert" holds: flip ``LLM_MODEL`` back to the Qwen alias and the
+    Qwen control returns automatically. llama-server ignores template kwargs a
+    given template doesn't define, so a mismatch is harmless — but we key off
+    the model anyway to stay explicit.
+    """
+    if "gpt-oss" in model.lower():
+        # Default low for the mechanical batch; LLM_REASONING_EFFORT lets the
+        # A/B eval (and the harder #30 PDF-parsing path) dial it up without a
+        # code change. Accepts low|medium|high.
+        effort = os.getenv("LLM_REASONING_EFFORT", "low").lower()
+        return {"chat_template_kwargs": {"reasoning_effort": effort}}
+    return {"chat_template_kwargs": {"enable_thinking": False}}
 
 
 class LLMUnavailableError(Exception):
@@ -115,20 +146,27 @@ _CATEGORY_RULES = """Category rules (applied to `suggested_category_uuid` + `sug
 - Home / renters insurance brands (LEMONADE, NATIONWIDE HOMEOWNERS, TRAVELERS HOME, USAA RENTERS) → Housing / Insurance.
 - Health insurance brands (BLUE CROSS, BLUE SHIELD, AETNA, CIGNA, UNITEDHEALTHCARE, KAISER, HUMANA) → Health / Health Insurance.
 - `WIRELESS`, `MOBILE`, `BROADBAND`, `CABLE`, `INTERNET`, electric/gas utility names (CONED, NATIONAL GRID, PSEG, PG&E, EDISON, DUKE ENERGY, PEPCO), wireless carriers (AT&T, T-MOBILE, VERIZON WIRELESS, SPECTRUM, COMCAST, XFINITY, FIOS, MINT MOBILE) → Housing / Utilities. **Wireless carriers are utilities, not insurance.**
-- `PARKING`, `PARK` (in payment context), `MPAY2PARK`, `MPAY`, `PARKMOBILE`, `LAZ PARKING`, `SPOTHERO`, `METER` → Transportation / Parking.
-- `FERRY`, `TRANSIT`, `METROCARD`, MTA, PATH, NJT, BART, METRO, AMTRAK (commuter context) → Transportation / Public Transit.
-- Gym + fitness brands (CRUNCH, PLANET FITNESS, EQUINOX, ANYTIME FITNESS, LA FITNESS, BLINK, CLASSPASS), auto club (AAA), AMAZON PRIME, professional dues → Subscriptions / Memberships. **`CLUBFEES` / `CLUB FEES` suffix is a membership signal, not an education signal.**
+- `PARKING`, `PARK` (in payment context), `MPAY2PARK`, `MPAY`, `PARKMOBILE`, `LAZ PARKING`, `SPOTHERO`, `METER`, and parking garages (`PARKING GARAGE`, `OFF STREET GARAGE`, `MUNICIPAL GARAGE`, `PUBLIC GARAGE`, `PARK GARAGE`, `TIBA` parking systems) → Transportation / Parking. A parking garage is parking, NOT auto repair.
+- `FERRY`, `TRANSIT`, `METROCARD`, `OMNY`, MTA, PATH, NJT, BART, METRO, AMTRAK (commuter context), and contactless transit-fare systems (OMNY, SMARTRIP, CLIPPER, VENTRA, CHARLIE, `*OMNY`, `MTA*`) → Transportation / Public Transit — NOT Shopping. A transit-fare tap is never general merchandise.
+- Auto dealerships, auto repair/service shops, and auto-parts stores (`MOTORS`, `AUTO BODY`, `AUTO REPAIR`, `SERVICE CENTER`, `TIRE`, `JIFFY LUBE`, `MIDAS`, `PEP BOYS`, `MEINEKE`, `VALVOLINE`, `MAVIS`, `AUTOZONE`, `ADVANCE AUTO`, `O'REILLY AUTO`, `NAPA AUTO`, or a car marque like VOLKSWAGEN/TOYOTA/HONDA/FORD/SUBARU on a non-payment POS purchase row) → Transportation / Car Maintenance — NOT Shopping. A charge at a dealer/repair shop/parts store is service or parts, not merchandise. (A *payment-shaped* row to a marque's financing arm is the Car Loan case below, not this.) **CAUTION: the bare word "GARAGE" does NOT mean auto repair — a parking garage (`OFF STREET GARAGE`, `PARKING GARAGE`, `MUNICIPAL/PUBLIC GARAGE`, `TIBA`) is Transportation / Parking (see above), never Car Maintenance.** Only treat "garage" as auto repair when paired with an explicit repair/service/auto-body signal.
+- Gym + fitness brands (CRUNCH, PLANET FITNESS, EQUINOX, ANYTIME FITNESS, LA FITNESS, BLINK, CLASSPASS), auto club (AAA), professional dues → Subscriptions / Memberships. **`CLUBFEES` / `CLUB FEES` suffix is a membership signal, not an education signal.**
+- `AMAZON PRIME`, `AMZN PRIME`, `PRIME MEMBERSHIP` (the Amazon Prime membership) → Subscriptions / Memberships — it is a membership bundle, NOT streaming. The ONLY exception is a standalone video subscription billed as `AMAZON PRIME VIDEO` / `PRIME VIDEO` (no "membership" context) → Subscriptions / Streaming. When in doubt between the two, plain "Amazon Prime" is the membership.
 - Warehouse clubs only when the row is the ANNUAL MEMBERSHIP FEE itself (e.g. `COSTCO MEMBERSHIP FEE` → Subscriptions / Memberships). Routine in-store purchases at warehouse clubs (`COSTCO WHSE`, `SAMS CLUB STORE`, `BJ'S WHOLESALE` with no `MEMBERSHIP`/`FEE` token) are Food / Groceries (groceries-typical amount) or Shopping / General (large mixed cart).
-- SaaS brands (CANVA, LINKEDIN PREMIUM, `LINKEDIN PRE*`, ADOBE, MICROSOFT 365, GITHUB, NOTION, FIGMA, DROPBOX, CLAUDE.AI, OPENAI, CHATGPT, ANTHROPIC, GOOGLE ONE, ICLOUD STORAGE) → Subscriptions / Software.
+- Supermarket / grocery chains (STOP & SHOP, `SUPERSTOPNSHOP`, SHOPRITE, WEGMANS, KROGER, PUBLIX, SAFEWAY, ALBERTSONS, GIANT, ACME, FOOD LION, WHOLE FOODS, TRADER JOE'S, ALDI, LIDL, H-E-B, MEIJER, HARRIS TEETER, VONS, RALPHS, FRESH MARKET, SPROUTS) → Food / Groceries — NOT Shopping / General. A grocery-store charge is groceries even when the specific items are unknown.
+- SaaS brands (CANVA, LINKEDIN PREMIUM, `LINKEDIN PRE*`, ADOBE, MICROSOFT 365, GITHUB, NOTION, FIGMA, DROPBOX, CLAUDE.AI, OPENAI, CHATGPT, ANTHROPIC, GOOGLE ONE, ICLOUD STORAGE) and web-hosting / domain registrars (NAMECHEAP, `NAME CHEAP`, GODADDY, BLUEHOST, HOSTGATOR, SQUARESPACE, WIX, CLOUDFLARE, DIGITALOCEAN, VERCEL, NETLIFY, `WWW NAMECHEAP`) → Subscriptions / Software — NOT Shopping. A domain/hosting charge is software, not merchandise.
 - Streaming brands (NETFLIX, HULU, SPOTIFY, DISNEY+, HBO MAX, PEACOCK, PARAMOUNT+, APPLE MUSIC, APPLE TV+, YOUTUBE PREMIUM) → Subscriptions / Streaming.
 - News / media subscriptions (NYT, WSJ, WASHINGTON POST, ECONOMIST, SUBSTACK) → Subscriptions / News & Media.
 - Pharmacy chains (CVS, CVS/PHARMACY, WALGREENS, RITE AID, DUANE READE) → Health / Prescriptions. **NOT Personal Care/Nails or Personal Care/Hair** — the new Personal Care subcategories are services (haircut, manicure, massage), not pharmacy products.
-- `APPLE.COM/BILL` is genuinely ambiguous when standalone — it can be iCloud storage (Subscriptions/Software), Apple Music / Apple TV+ (Subscriptions/Streaming), an App Store app purchase, or AppleCare. **Emit null** unless the description carries a disambiguating signal (e.g. `APPLE.COM/BILL APPLE MUSIC` → Streaming; `APPLE.COM/BILL ICLOUD` → Software).
-- `INTEREST CHARGE`, `INTEREST CHARGE ON PURCHASES`, `FINANCE CHARGE`, `INTEREST ASSESSED` → Debt Payment / Credit Card. These are interest accrued on a credit card balance, not bank fees.
+- `APPLE.COM/BILL` is genuinely ambiguous when standalone — it can be iCloud storage (Subscriptions/Software), Apple Music / Apple TV+ (Subscriptions/Streaming), an App Store app purchase, or AppleCare. **Emit null** unless the description carries a disambiguating signal that names an actual Apple PRODUCT (e.g. `APPLE.COM/BILL APPLE MUSIC` → Streaming; `APPLE.COM/BILL ICLOUD` → Software). Generic transaction descriptors are NOT product signals: `INTERNET CHARGE`, `INTERNET PURCHASE`, `RECURRING`, `WEB`, a phone number, or a store/order id do NOT disambiguate — `APPLE.COM/BILL INTERNET CHARGE` is still **null**, NOT Software.
+- `INTEREST CHARGE`, `INTEREST CHARGE ON PURCHASES`, `CHARGE ON PURCHASES`, `CHARGES ON PURCHASES`, `FINANCE CHARGE`, `INTEREST ASSESSED` → Debt Payment / Credit Card (consistently — these are interest accrued on a credit-card balance, NOT Miscellaneous / Bank Fee). Treat a bare `CHARGE ON PURCHASES` line as the purchases-interest line item; always file it under Debt Payment / Credit Card, never Bank Fee.
+- **Payments TO a credit card or retailer store card → Debt Payment / Credit Card, NOT Shopping.** A retailer/brand name combined with a payment signal on a card account — `PAYMENT`, `AUTOPAY`, `EPAY`, `ONLINE PYMT`, `BILL PAY`, `PAYMENT - THANK YOU` — is the balance being paid down, not a purchase. This holds even when the retailer's own name is in the description: `AMAZON SYNCB PAYMENT`, `AMAZONCORPSYFPAYMNT`, `SYNCHRONY BANK PAYMENT`, `COMENITY PAY <RETAILER>`, `<RETAILER> CARD PAYMENT`, `<STORE> CREDIT CARD AUTOPAY` all → Debt Payment / Credit Card. The brand name does not make it Shopping — a payment reduces a balance; direction/payment-shape overrides the brand. **Synchrony is the tell:** the tokens `SYNCB`, `SYF`, `SYNCHRONY` (Synchrony Financial) or `COMENITY` anywhere in a payment-shaped row mean a store-card payment → Debt Payment / Credit Card, even when fused to the retailer name like `AMAZONCORPSYFPAYMNT` (= Amazon + SYF + Paymnt).
 - Fee-shaped descriptions with no merchant context (`MONTHLY MAINTENANCE FEE`, `FOREIGN TRANSACTION FEE`, `OVERDRAFT FEE`, `ATM FEE`, `NSF FEE`, `LATE PAYMENT FEE`, `WIRE TRANSFER FEE`, `STOP PAYMENT FEE`, `RETURNED ITEM FEE`) → Miscellaneous / Bank Fee. These are the bank charging the account itself.
 - Zelle / Venmo / Cash App WITH spending context in the description (e.g. `Zelle: JOHN LANDLORD RENT MARCH`, `VENMO COFFEE WITH SUSAN`, `CASH APP TO MIKE GROCERIES`) → use the context: rent context → Housing / Rent, coffee → Food / Coffee Shops, groceries → Food / Groceries. Only return null when the P2P row has a counterparty name but NO spending context.
+- `AMEX SEND`, `SEND: ADD MONEY`, `AMEX SEND: ADD MONEY`, `PAYPAL INST XFER`, `VENMO ADD MONEY` and similar P2P funding/transfer rows → **null for both category fields**. These move money into/out of a P2P balance; they are NOT credit-card payments (do not file under Debt Payment) and NOT purchases (do not file under Shopping). Same rule as a context-less Zelle/Venmo: emit null and let the user categorize.
 
 **Restaurants requires a POSITIVE food signal** — a recognized restaurant brand (Chipotle, Shake Shack, Halal Guys, etc.), a food-service token in the merchant name (RESTAURANT, GRILL, DELI, PIZZA, BISTRO, BAKERY, TAVERN, EATERY, KITCHEN, NOODLES, RAMEN, SUSHI, TACO, BURGER), or a delivery aggregator + vendor (DOORDASH*X, GRUBHUB*X, UBER EATS *X). Do NOT default to Restaurants when the description is unfamiliar — check the token-priority list above first; if no priority token matches AND no food signal is present, emit null. The "guess Restaurants" default is wrong.
+
+**Drinking-focused venues → Entertainment / Bars & Clubs, NOT Shopping and NOT Restaurants.** A `BAR`, `PUB`, `LOUNGE`, `NIGHTCLUB`, `CLUB`, `WINERY`, `VINEYARD`, `BREWERY`, `BREWING`, `TAPROOM`, `DISTILLERY`, or `SPEAKEASY` token (or a known such venue) goes to Bars & Clubs. A `TST*` / Toast or `SQ*` / Square POS prefix signals a hospitality merchant (bar or restaurant) — never general retail; pick Bars & Clubs for drinking venues, Food / Restaurants for eateries. A standalone liquor/wine retail STORE (`WINE & SPIRITS`, `LIQUORS`, `BOTTLE SHOP` selling bottles to go) is Shopping / General, not Bars & Clubs — the distinction is drink-on-premises venue vs. retail bottle shop.
 
 - Pick the SUBCATEGORY first — the UUID MUST be one of the subcategory UUIDs listed below.
 - Its parent category UUID MUST be the parent it's listed under — never mix (e.g. subcategory "General" ONLY pairs with parent "Shopping"; "Home Goods" ONLY pairs with parent "Shopping"; these are not interchangeable).
@@ -136,12 +174,13 @@ _CATEGORY_RULES = """Category rules (applied to `suggested_category_uuid` + `sug
 - **Both category fields are nullable. Return null for both when the row's purpose is genuinely ambiguous and you'd be guessing rather than reasoning.** Typical case: peer-to-peer transfers (Zelle, Venmo, Cash App) where the source string contains a counterparty's name but no spending context — the same $40 Venmo could be a restaurant split, concert ticket, rent contribution, or loan repayment. Other examples: generic ACH deposits with no recognizable sender, bare-amount entries with no payee. Return null for BOTH category and subcategory together — they always travel as a pair, never split. The user will categorize from the preview UI; null routes the row to a review queue rather than filing it under a catchall at high confidence.
 - Do NOT pick a catchall category just to fill the field. "Shopping / General" is the right call when the row IS shopping but the specific subcategory is unclear (e.g. AMZN MKTP with no item context). It is the WRONG call when the row's category is unknown — emit null instead.
 - When no subcategory is a clean fit but the category itself is clear (e.g. "this is shopping, just unclear what kind"), pick "Shopping / General". Reserve null for genuine purpose-ambiguity, not subcategory-ambiguity.
+- **"Shopping / General" is for GENERAL-MERCHANDISE RETAIL ONLY — a store that sells physical goods whose specific type is unknown (Amazon with no item context; a department, variety, or discount store; an unrecognized retailer with a goods-shaped name). It is NOT a fallback for "I recognize the merchant but I'm unsure of the category."** This is the single most common misfile: a recognized NON-retail merchant gets dumped in Shopping / General. Before choosing it, ask: *is this merchant actually a retailer of goods?* If it is instead a service, venue, eatery, bar, grocery store, transit fare, car dealer/garage, utility, insurer, pharmacy, gym, or software/subscription, it does NOT belong in Shopping / General — route it to its real category via the token-priority list above, or emit null if genuinely unsure. A bar, a winery, a subway tap, a car dealer, a supermarket, and a domain registrar are NEVER Shopping / General.
 - For income-shaped transactions (payroll, direct deposit, dividend, interest received), pick under "Income".
 - Income / Investment Income is for DIVIDENDS, INTEREST, and brokerage gains — NOT for marketplace sales. Person-to-person marketplace sales (FACEBOOK MARKETPLACE SALE, CRAIGSLIST SALE, ETSY PAYOUT, EBAY SALE), garage sale proceeds, and one-off paid work (`PAYMENT FROM <person> FOR <work>`) → Income / Other Income.
 - **Donations and crowdfunding contributions you MAKE go to Miscellaneous / Gifts & Charity, NOT Income.** A `DONATION` token, a fundraising/crowdfunding platform (GOFUNDME, KICKSTARTER, INDIEGOGO, PATREON, DONORBOX), a charity (RED CROSS, UNICEF, ST JUDE, WIKIMEDIA, NPR/PBS pledge, church/temple offering), or a `… FOR <name>` campaign on an OUTGOING row (PURCHASE/DEBIT, money leaving the account) is a gift made — file it under Gifts & Charity. Direction is the discriminator: do NOT route it to Income just because the platform (e.g. GoFundMe) is associated with receiving money — the user here is the giver. This is the outgoing mirror of the marketplace-sales rule above. Gifts purchased for other people go here too.
 - Income / Taxes is BIDIRECTIONAL: tax refunds (IRS TREAS, STATE TAX REFUND) AND tax payments (IRS PAYMENT, ESTIMATED TAX, PROPERTY TAX) both go here.
 - Mortgage payments go to Housing / Mortgage — NOT Debt Payment. Debt Payment is for credit cards, student loans, and car loans only.
-- Student loan servicers (HESAA, Nelnet, MOHELA, Sallie Mae, Navient, Great Lakes, EdFinancial, Dept of Education / DEPTEDUCATION) on payment-shaped rows go to Debt Payment / Student Loan. The merchant token may be concatenated with PAYMENT (e.g. HESAAPAYMENT, NELNETPAYMENT) — preserve all letters of the servicer name; do not drop trailing letters when the token splits.
+- Student loan servicers (HESAA, `NJCLASS`, Nelnet, MOHELA, Sallie Mae, Navient, Great Lakes, EdFinancial, Dept of Education / DEPTEDUCATION) on payment-shaped rows go to Debt Payment / Student Loan. The merchant token may be concatenated with PAYMENT (e.g. HESAAPAYMENT, NELNETPAYMENT) — preserve all letters of the servicer name; do not drop trailing letters when the token splits. An education-loan-payment token — `ACHLNPYMT`, `ACH LN PYMT`, `LOAN PYMT`, `STUDENT LN`, `EDUCATIONALCOMP…ACHLNPYMT` — is a Debt Payment / Student Loan, **NOT Miscellaneous / Education** (Education is for tuition/courses/school fees, not loan repayment). An outgoing `NJCLASS`/`...CLASSLN` debit is a student-loan payment, NOT Income / Taxes — direction (money leaving) plus the loan token both point to Debt Payment / Student Loan. **`STATEOFNJ` (or any "State of <X>") does NOT make it a tax: `NJCLASS` is New Jersey's state student-loan program, so `STATEOFNJNJCLASSLN` = State-of-NJ NJCLASS Loan → Debt Payment / Student Loan, NOT Income / Taxes.** The `NJCLASS`/`CLASSLN` loan token overrides the `STATEOFNJ` government-entity signal. Only route to Income / Taxes when the row actually names a tax (IRS, tax refund/payment, property tax) with no loan token.
 - Auto lenders (Ally, Capital One Auto, Toyota Financial Services, Honda Financial, Ford Credit) on payment-shaped rows go to Debt Payment / Car Loan.
 - Home Depot, Lowe's, and similar home-improvement stores go to Housing / Home Repair — NOT Shopping / Home Goods.
 - Cosmetics and beauty stores (Sephora, Ulta, MAC) go to Shopping / Toiletries.
@@ -233,7 +272,25 @@ Input: {"description": "RED CROSS DONATION 800-RED-CROSS", "amount": "75.00", "t
 Output: {"merchant_name": "Red Cross", "suggested_category_uuid": "0284c65f-1af6-48d2-9133-3d3ac3393ede", "suggested_subcategory_uuid": "63e4c43b-a02e-4ac4-b820-46425a20d954", "confidence": 0.9}
 
 Input: {"description": "ACH CREDIT XXXXX1234 ", "amount": "320.00", "transaction_type": "DEPOSIT"}
-Output: {"merchant_name": null, "suggested_category_uuid": null, "suggested_subcategory_uuid": null, "confidence": 0.4}"""
+Output: {"merchant_name": null, "suggested_category_uuid": null, "suggested_subcategory_uuid": null, "confidence": 0.4}
+
+Input: {"description": "DEBITCARDPURCHASE,*****12345678,AUT031524VISADDAPUR OMNY.INFO 8777896669 NEW YORK NY", "amount": "2.90", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "OMNY", "suggested_category_uuid": "d0032366-ed8b-484b-9564-7f5e9721aa7e", "suggested_subcategory_uuid": "d07371fc-fbf5-4388-86de-a6b43c6be316", "confidence": 0.9}
+
+Input: {"description": "DEBITPOS,*****12345678,AUT040124DDAPURCHASE SHOPRITE OF BRICK 0123 BRICK NJ", "amount": "84.31", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "ShopRite", "suggested_category_uuid": "9bf074af-479f-4d55-853c-e807a4bbbe9e", "suggested_subcategory_uuid": "0b66599a-0919-46cb-8d86-ea0517a66f12", "confidence": 0.92}
+
+Input: {"description": "VISA DDA PUR AP 555000     LARSON TOYOTA SERVICE   PUYALLUP      * WA", "amount": "412.60", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "Larson Toyota", "suggested_category_uuid": "d0032366-ed8b-484b-9564-7f5e9721aa7e", "suggested_subcategory_uuid": "85c97dee-fea6-4c15-b594-285cc9daf747", "confidence": 0.88}
+
+Input: {"description": "SQ *THE LOCAL TAPROOM ASBURY PARK NJ", "amount": "31.00", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "The Local Taproom", "suggested_category_uuid": "78bd0a07-5447-4cb6-b2d6-315d3d4cb4a0", "suggested_subcategory_uuid": "65d418af-2b29-44a3-af3c-2093655e14c2", "confidence": 0.88}
+
+Input: {"description": "VISA DDA PUR AP 400099     SQSP* INV12345     SQUARESPACE.COM  * NY", "amount": "23.00", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "Squarespace", "suggested_category_uuid": "978bf5d7-68a7-49ce-9f6e-f05ff01f4e07", "suggested_subcategory_uuid": "d8a8d1c4-1ce3-4316-afc2-84e516652845", "confidence": 0.9}
+
+Input: {"description": "ACHDEBIT,STATEOFNJNJCLASSLN****41203", "amount": "312.00", "transaction_type": "PURCHASE"}
+Output: {"merchant_name": "NJCLASS", "suggested_category_uuid": "54812989-bc35-4acb-aa11-a93aaa7b6b65", "suggested_subcategory_uuid": "3280dd39-0173-4754-bdba-17b1a3981e1e", "confidence": 0.92}"""
 
 
 def _build_system_prompt() -> str:
@@ -406,10 +463,16 @@ class LlamaCppClient(LLMClient):
         model: str,
         timeout_s: float = 120.0,
         max_retries: int = 1,
+        extra_body: Optional[dict] = None,
     ):
         self._endpoint = endpoint
         self._model = model
         self._timeout_s = timeout_s
+        # Per-model reasoning-suppression knob sent on every completion. Defaults
+        # to the family inferred from the model name (#64); injectable for tests.
+        self._extra_body = (
+            extra_body if extra_body is not None else _reasoning_extra_body(model)
+        )
         self._client = OpenAI(
             base_url=endpoint,
             api_key="not-needed",  # llama-server ignores this
@@ -437,10 +500,11 @@ class LlamaCppClient(LLMClient):
                     "json_schema": _build_batch_json_schema(len(parsed)),
                 },
                 temperature=0.0,
-                # Qwen3 reasoning mode blows past the latency budget and adds
-                # nothing for this mechanical task. Harmless on non-Qwen3 models
-                # — the server ignores unknown template kwargs.
-                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+                # Reasoning mode blows past the latency budget and adds nothing
+                # for this mechanical task. The exact kwarg is model-family
+                # specific (Qwen enable_thinking vs GPT-OSS reasoning_effort) and
+                # resolved at construction — see _reasoning_extra_body (#64).
+                extra_body=self._extra_body,
             )
         except (APIConnectionError, APITimeoutError) as e:
             logger.warning(f"LLM backend unreachable ({type(e).__name__}): {e}")

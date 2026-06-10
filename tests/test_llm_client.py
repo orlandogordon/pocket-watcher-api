@@ -2,7 +2,7 @@
 
 Verifies the post-processing the client layers on top of the raw model output:
 the subcategory->parent correction (trust the harder subcategory pick, derive
-the parent), the independent category (0.8) and merchant (0.85) confidence
+the parent), the independent category (0.9) and merchant (0.85) confidence
 floors, null-merchant passthrough, and the failure modes that must surface as
 LLMUnavailableError (transport error, malformed JSON, result-count mismatch).
 """
@@ -68,12 +68,14 @@ def test_low_category_confidence_nulls_the_pair_and_merchant():
 
 
 def test_merchant_floor_independent_of_category_floor():
-    # 0.82: above the 0.8 category floor (keep category), below 0.85 merchant floor (drop merchant).
-    c = _client(_payload("Starbucks", SUB, CORRECT_PARENT, 0.82))
+    # 0.87: below the 0.90 category floor (drop the category pair), above the
+    # 0.85 merchant floor (keep the merchant). The floors are independent, and
+    # since #64 the category floor (0.90) sits ABOVE the merchant floor (0.85).
+    c = _client(_payload("Starbucks", SUB, CORRECT_PARENT, 0.87))
     [res] = c.process_transaction_batch([{"description": "SBUX"}])
-    assert res["suggested_subcategory_uuid"] == SUB
-    assert res["suggested_category_uuid"] == CORRECT_PARENT
-    assert res["merchant_name"] is None
+    assert res["suggested_subcategory_uuid"] is None
+    assert res["suggested_category_uuid"] is None
+    assert res["merchant_name"] == "Starbucks"
 
 
 def test_null_merchant_passes_through_with_category_kept():
