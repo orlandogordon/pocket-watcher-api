@@ -35,7 +35,7 @@ from src.services.duplicate_analyzer import (
 from src.services.description_cleanup import process_preview_items
 from src.services.transfer_classifier import classify_parsed_transactions
 from src.constants.categories import all_category_uuids
-from src.services.system_tags import get_system_tag
+from src.services.system_tags import get_system_tag, append_review_note
 from src.crud.crud_transaction import (
     generate_transaction_hash,
     update_account_balance_from_transaction,
@@ -592,27 +592,8 @@ def _to_raw_suggestion(suggestion: Optional[dict]) -> Optional[dict]:
     }
 
 
-def _append_review_note(
-    existing: Optional[str], *, missing_category: bool, missing_merchant: bool
-) -> Optional[str]:
-    """Compose the explanation appended to a transaction's ``comments`` when it
-    is auto-tagged 'Needs Review' at confirm time, so the review inbox (#46
-    surfaces ``comments``) and the transaction itself record WHY it was flagged
-    — otherwise it's impossible to tell what tripped the tag after the fact.
-
-    Any comment the user entered during preview is preserved and kept first.
-    Returns ``existing`` unchanged when neither trigger applies (defensive — the
-    caller only invokes this once a trigger is known to hold)."""
-    reasons: list[str] = []
-    if missing_category:
-        reasons.append("no category assigned")
-    if missing_merchant:
-        reasons.append("no merchant identified")
-    if not reasons:
-        return existing
-    note = "Auto-flagged for review: " + " and ".join(reasons) + "."
-    existing = (existing or "").strip()
-    return f"{existing}\n{note}" if existing else note
+# _append_review_note moved to src/services/system_tags.append_review_note (#68)
+# so the bulk-import path shares the exact same wording. Imported below.
 
 
 def _recompute_summary(session: dict) -> None:
@@ -1451,7 +1432,7 @@ async def confirm_statement_import(
             needs_review_count += 1
             # Record WHY on the transaction itself so the review inbox (#46)
             # shows what triggered the flag without opening each row.
-            db_txn.comments = _append_review_note(
+            db_txn.comments = append_review_note(
                 db_txn.comments,
                 missing_category=missing_category,
                 missing_merchant=missing_merchant,

@@ -22,10 +22,10 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from src.db.core import CategoryDB, TransactionTagDB
+from src.db.core import CategoryDB, TransactionTagDB, TransactionType
 from src.services.importer import PARSER_MAPPING
 from src.services.description_cleanup import process_preview_items, CleanedResult
-from src.services.system_tags import ensure_system_tags, get_system_tag
+from src.services.system_tags import ensure_system_tags, get_system_tag, append_review_note
 from src.crud import crud_transaction, crud_investment
 from src.logging_config import get_logger
 
@@ -142,10 +142,25 @@ def _apply_cleanup_to_created(db, user_id, created_rows, parsed_txns, results: l
                             row.subcategory_id = category_uuid_to_id[sub_uuid]
                         suggestions_applied += 1
 
-                    if needs_review_tag and (
-                        row.category_id is None or not row.merchant_name
+                    # Mirror the preview/confirm path (#68): exempt transfers
+                    # (TRANSFER_IN/OUT are balance-neutral and intentionally
+                    # categoryless, so the category-null heuristic would mis-flag
+                    # every one), and record WHY on the row so the review inbox
+                    # shows what tripped the flag instead of a bare tag.
+                    is_transfer = row.transaction_type in (
+                        TransactionType.TRANSFER_IN, TransactionType.TRANSFER_OUT
+                    )
+                    missing_category = row.category_id is None
+                    missing_merchant = not row.merchant_name
+                    if needs_review_tag and not is_transfer and (
+                        missing_category or missing_merchant
                     ):
                         needs_review_rows.append(row)
+                        row.comments = append_review_note(
+                            row.comments,
+                            missing_category=missing_category,
+                            missing_merchant=missing_merchant,
+                        )
                 break
 
     needs_review_count = 0

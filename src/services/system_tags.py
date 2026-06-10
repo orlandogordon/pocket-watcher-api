@@ -83,3 +83,26 @@ def remove_system_tag(db: Session, user_id: int, transaction_id: int, tag_name: 
         TransactionTagDB.tag_id == tag.db_id,
     ).delete(synchronize_session=False)
     return deleted > 0
+
+
+def append_review_note(
+    existing: str | None, *, missing_category: bool, missing_merchant: bool
+) -> str | None:
+    """Compose the explanation appended to a transaction's ``comments`` when it
+    is auto-tagged 'Needs Review', so the review inbox and the transaction itself
+    record WHY it was flagged. Shared by the preview/confirm (uploads) and bulk
+    import paths so both behave identically (#68).
+
+    Any comment the user entered during preview is preserved and kept first.
+    Returns ``existing`` unchanged when neither trigger applies (defensive — the
+    caller only invokes this once a trigger is known to hold)."""
+    reasons: list[str] = []
+    if missing_category:
+        reasons.append("no category assigned")
+    if missing_merchant:
+        reasons.append("no merchant identified")
+    if not reasons:
+        return existing
+    note = "Auto-flagged for review: " + " and ".join(reasons) + "."
+    existing = (existing or "").strip()
+    return f"{existing}\n{note}" if existing else note
