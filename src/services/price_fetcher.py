@@ -5,6 +5,7 @@ Fetches end-of-day prices for stocks and options using Yahoo Finance.
 Supports fallback strategies and error handling for production use.
 """
 import yfinance as yf
+from yfinance.exceptions import YFRateLimitError
 from typing import Dict, List, Optional, Tuple
 from decimal import Decimal
 from datetime import datetime, date, timedelta
@@ -19,6 +20,11 @@ logger = get_logger(__name__)
 class PriceFetchError(Exception):
     """Raised when price fetching fails"""
     pass
+
+
+# Exponential-backoff retry budget for the bulk historical fetch.
+_BULK_HISTORY_RETRIES = 4
+_BULK_HISTORY_BACKOFF_BASE_S = 2.0
 
 
 def parse_option_symbol(symbol: str) -> Optional[Dict[str, any]]:
@@ -290,32 +296,50 @@ def fetch_bulk_historical_prices(
             # For now, return empty dict (falls back to cost basis)
             results[symbol] = {}
         else:
-            # Stocks: Fetch all dates at once
-            try:
-                ticker = yf.Ticker(symbol)
-                hist = ticker.history(start=start_date, end=end_date + timedelta(days=1))
-
-                if hist.empty:
-                    logger.warning(f"No historical data for {symbol} in range {start_date} to {end_date}")
-                    results[symbol] = {}
-                    continue
-
-                # Convert to dict[date -> price]
-                symbol_prices = {}
-                for idx, row in hist.iterrows():
-                    price_date = idx.date()
-                    symbol_prices[price_date] = Decimal(str(round(row['Close'], 4)))
-
-                results[symbol] = symbol_prices
-
-            except Exception as e:
-                logger.error(f"Error fetching bulk historical prices for {symbol}: {str(e)}")
-                results[symbol] = {}
+            results[symbol] = _fetch_symbol_history(symbol, start_date, end_date)
 
         # Rate limiting between symbols
         time.sleep(0.5)
 
     return results
+
+
+def _fetch_symbol_history(
+    symbol: str,
+    start_date: date,
+    end_date: date,
+) -> Dict[date, Decimal]:
+    """Daily closing prices for one stock symbol as {date: Decimal}.
+
+    Retries transient failures with exponential backoff. An empty result is a
+    genuine "no data" answer (delisted / nothing in range) and returns {}. A
+    persistent rate-limit raises PriceFetchError so callers fail loudly instead
+    of mistaking a throttle for missing data (which would silently flag
+    snapshots for review). Other persistent errors degrade to {} so a single
+    bad symbol doesn't abort the whole batch.
+    """
+    for attempt in range(_BULK_HISTORY_RETRIES):
+        try:
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(start=start_date, end=end_date + timedelta(days=1))
+            if hist.empty:
+                logger.warning(f"No historical data for {symbol} in range {start_date} to {end_date}")
+                return {}
+            return {idx.date(): Decimal(str(round(row['Close'], 4))) for idx, row in hist.iterrows()}
+        except YFRateLimitError as e:
+            if attempt == _BULK_HISTORY_RETRIES - 1:
+                raise PriceFetchError(f"Rate limited fetching {symbol} after {_BULK_HISTORY_RETRIES} attempts") from e
+            backoff = _BULK_HISTORY_BACKOFF_BASE_S * (2 ** attempt)
+            logger.warning(f"Rate limited on {symbol} (attempt {attempt + 1}/{_BULK_HISTORY_RETRIES}); backing off {backoff}s")
+            time.sleep(backoff)
+        except Exception as e:
+            if attempt == _BULK_HISTORY_RETRIES - 1:
+                logger.error(f"Error fetching bulk historical prices for {symbol}, giving up: {str(e)}")
+                return {}
+            backoff = _BULK_HISTORY_BACKOFF_BASE_S * (2 ** attempt)
+            logger.warning(f"Error fetching {symbol} (attempt {attempt + 1}/{_BULK_HISTORY_RETRIES}): {str(e)}; retrying in {backoff}s")
+            time.sleep(backoff)
+    return {}
 
 
 def fetch_bulk_prices(symbols: List[str], delay: float = 0.5) -> Dict[str, Optional[Decimal]]:

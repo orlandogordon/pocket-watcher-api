@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
+from yfinance.exceptions import YFRateLimitError
 
 from src.services import price_fetcher as pf
 
@@ -125,6 +126,56 @@ def test_historical_falls_back_to_previous_trading_day(monkeypatch):
     ticker.history.side_effect = [empty, populated]
     _patch_ticker(monkeypatch, ticker)
     assert pf.fetch_stock_price_historical("AAPL", date(2025, 1, 18)) == Decimal("148.5")
+
+
+# ===== bulk historical fetch + backoff =====
+
+def _hist_df():
+    idx = pd.to_datetime([date(2024, 5, 1), date(2024, 5, 2)])
+    return pd.DataFrame({"Close": [150.0, 151.5]}, index=idx)
+
+
+def test_bulk_history_converts_close_by_date(monkeypatch):
+    _patch_ticker(monkeypatch, _ticker(history_df=_hist_df()))
+    out = pf.fetch_bulk_historical_prices(["AAPL"], date(2024, 5, 1), date(2024, 5, 2))
+    assert out["AAPL"] == {date(2024, 5, 1): Decimal("150.0"), date(2024, 5, 2): Decimal("151.5")}
+
+
+def test_bulk_history_options_skip_to_empty(monkeypatch):
+    _patch_ticker(monkeypatch, _ticker(history_df=_hist_df()))
+    out = pf.fetch_bulk_historical_prices(["AAPL250117C00150000"], date(2024, 5, 1), date(2024, 5, 2))
+    assert out["AAPL250117C00150000"] == {}
+
+
+def test_bulk_history_empty_is_genuine_no_data(monkeypatch):
+    _patch_ticker(monkeypatch, _ticker(history_df=pd.DataFrame({"Close": []})))
+    out = pf.fetch_bulk_historical_prices(["DELISTED"], date(2024, 5, 1), date(2024, 5, 2))
+    assert out["DELISTED"] == {}
+
+
+def test_bulk_history_rate_limit_retries_then_raises(monkeypatch):
+    ticker = MagicMock()
+    ticker.history.side_effect = YFRateLimitError()
+    _patch_ticker(monkeypatch, ticker)
+    with pytest.raises(pf.PriceFetchError):
+        pf.fetch_bulk_historical_prices(["AAPL"], date(2024, 5, 1), date(2024, 5, 2))
+    assert ticker.history.call_count == pf._BULK_HISTORY_RETRIES
+
+
+def test_bulk_history_rate_limit_then_success(monkeypatch):
+    ticker = MagicMock()
+    ticker.history.side_effect = [YFRateLimitError(), _hist_df()]
+    _patch_ticker(monkeypatch, ticker)
+    out = pf.fetch_bulk_historical_prices(["AAPL"], date(2024, 5, 1), date(2024, 5, 2))
+    assert out["AAPL"][date(2024, 5, 1)] == Decimal("150.0")
+
+
+def test_bulk_history_other_error_degrades_to_empty(monkeypatch):
+    ticker = MagicMock()
+    ticker.history.side_effect = RuntimeError("boom")
+    _patch_ticker(monkeypatch, ticker)
+    out = pf.fetch_bulk_historical_prices(["AAPL"], date(2024, 5, 1), date(2024, 5, 2))
+    assert out["AAPL"] == {}
 
 
 # ===== update_holding_price =====

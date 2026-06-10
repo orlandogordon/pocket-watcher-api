@@ -796,9 +796,11 @@ class AccountValueHistoryDB(Base):
     # Backfill audit trail
     last_recalculated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     recalculation_count: Mapped[int] = mapped_column(Integer, default=0)
-    recalculation_reason: Mapped[Optional[str]] = mapped_column(String(255))
+    # Text (not String(255)): review_reason enumerates every stale holding, which
+    # overflows 255 on options-heavy accounts and silently drops snapshots on PG.
+    recalculation_reason: Mapped[Optional[str]] = mapped_column(Text)
     needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
-    review_reason: Mapped[Optional[str]] = mapped_column(String(255))
+    review_reason: Mapped[Optional[str]] = mapped_column(Text)
 
     # Audit Trail
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

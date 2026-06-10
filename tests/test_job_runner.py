@@ -123,6 +123,26 @@ def test_worker_failure_marks_job_failed(job_env, monkeypatch):
     assert "snapshot blew up" in (job.error_message or "")
 
 
+def test_worker_marks_failed_on_rate_limit(job_env, monkeypatch):
+    # A PriceFetchError raised by the recalc (persistent Yahoo rate-limit)
+    # should land the job in FAILED with the reason recorded — not COMPLETED,
+    # and not an unhandled thread crash.
+    from src.services.price_fetcher import PriceFetchError
+    Session, uid, aid = job_env
+
+    def _rate_limited(**kwargs):
+        raise PriceFetchError("Rate limited fetching AAPL after 4 attempts")
+    monkeypatch.setattr(jr, "recalculate_account_snapshots", _rate_limited)
+    job_id = _seed_job(Session, uid, aid)
+
+    jr.run_backfill_worker(job_id, aid, date(2026, 1, 1), date(2026, 1, 31))
+
+    job = _get_job(Session, job_id)
+    assert job.status == "FAILED"
+    assert "Rate limited" in (job.error_message or "")
+    assert job.completed_at is not None
+
+
 def test_recover_interrupted_jobs(job_env):
     Session, uid, aid = job_env
     pending = _seed_job(Session, uid, aid, status="PENDING")

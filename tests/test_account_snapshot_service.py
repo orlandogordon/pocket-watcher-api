@@ -22,7 +22,22 @@ from src.services.account_snapshot import (
     get_account_value_history,
     recalculate_account_snapshots,
     _format_symbol_for_review,
+    _build_missing_price_review_reason,
+    _MAX_REASON_SYMBOLS,
 )
+
+
+def test_review_reason_summarizes_long_option_lists():
+    # An options-heavy account must not produce an unbounded reason. Past the
+    # cap the tail collapses to "(+N more)" — guards the readability cap that
+    # accompanies the TEXT-column widening (the old VARCHAR(255) silently
+    # dropped these snapshots on Postgres).
+    n = _MAX_REASON_SYMBOLS + 5
+    symbols = [f"SYM{i:02d}250117C00010000" for i in range(n)]
+    reason = _build_missing_price_review_reason(symbols)
+    assert reason.startswith("[stale-options] ")
+    assert "(+5 more)" in reason
+    assert reason.count(" CALL ") == _MAX_REASON_SYMBOLS
 
 
 def _make_user(session) -> UserDB:
@@ -485,6 +500,47 @@ class TestHoldAtCostValuation(unittest.TestCase):
         self.assertTrue(snap.needs_review)
         self.assertIn("[stale-options]", snap.review_reason)
         self.assertIn("SPY", snap.review_reason)
+
+    def test_successful_recalc_clears_stale_missing_price_flag(self):
+        # First pass: empty prices (transient fetch failure) flags the row.
+        acct = self._investment_account(1000)
+        self._option_txn(acct, InvestmentTransactionType.BUY,
+                         qty=1, price=5, txn_date=date(2024, 5, 1))
+        self._recalc(acct, date(2024, 5, 1), date(2024, 5, 1))
+        snap = self._snapshot(acct, date(2024, 5, 1))
+        self.assertTrue(snap.needs_review)
+
+        # Second pass: prices resolve, so the stale flag and reason clear.
+        with patch(
+            "src.services.account_snapshot.fetch_bulk_historical_prices",
+            return_value={self.OCC: {date(2024, 5, 1): Decimal("6")}},
+        ):
+            recalculate_account_snapshots(
+                self.session, acct.db_id,
+                start_date=date(2024, 5, 1), end_date=date(2024, 5, 1),
+                delay_between_prices=0,
+            )
+        self.session.refresh(snap)
+        self.assertFalse(snap.needs_review)
+        self.assertIsNone(snap.review_reason)
+
+    def test_recalc_propagates_price_fetch_error(self):
+        # A persistent rate-limit must escape recalc (not be swallowed into a
+        # silent cost-basis fallback) so the backfill job can fail loudly.
+        from src.services.price_fetcher import PriceFetchError
+        acct = self._investment_account(1000)
+        self._option_txn(acct, InvestmentTransactionType.BUY,
+                         qty=1, price=5, txn_date=date(2024, 5, 1))
+        with patch(
+            "src.services.account_snapshot.fetch_bulk_historical_prices",
+            side_effect=PriceFetchError("Rate limited fetching SPY after 4 attempts"),
+        ):
+            with self.assertRaises(PriceFetchError):
+                recalculate_account_snapshots(
+                    self.session, acct.db_id,
+                    start_date=date(2024, 5, 1), end_date=date(2024, 5, 1),
+                    delay_between_prices=0,
+                )
 
 
 class TestFormatSymbolForReview(unittest.TestCase):
