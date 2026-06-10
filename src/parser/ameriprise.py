@@ -58,13 +58,12 @@ def _parse_date_pdf(date_str: str, statement_year: Optional[int] = None) -> Opti
     return None
 
 
-def _normalize_transaction_type(raw_type: str, description: str = "") -> str:
+def _normalize_transaction_type(raw_type: str, description: str = "", amount: Optional[Decimal] = None) -> str:
     """
     Map Ameriprise transaction types to standard types:
     BUY, SELL, DIVIDEND, INTEREST, FEE, TRANSFER_IN, TRANSFER_OUT, OTHER
     """
     raw_type_upper = raw_type.upper().strip()
-    desc_upper = description.upper() if description else ""
 
     # BUY transactions
     if any(word in raw_type_upper for word in ['PURCHASE', 'BUY']):
@@ -86,10 +85,17 @@ def _normalize_transaction_type(raw_type: str, description: str = "") -> str:
     if any(word in raw_type_upper for word in ['FEE', 'BILL']):
         return 'FEE'
 
-    # TRANSFER transactions (ACH, deposits, withdrawals)
-    if 'WITHDRAWAL' in raw_type_upper or 'WITHDRAWAL' in desc_upper:
-        return 'TRANSFER_OUT'
-    if any(word in raw_type_upper for word in ['ACH', 'DEPOSIT', 'TRANSFER']):
+    # Cash transfers (ACH / deposits / withdrawals). Direction comes from the
+    # SIGNED amount, not the description: Ameriprise labels an ACH pull *into*
+    # the account "ACH DIRECT WITHDRAWAL" and lists it under "Deposits" with a
+    # positive amount, so keyword-matching the description mislabels deposits as
+    # withdrawals (deposits are positive, disbursements negative).
+    if any(word in raw_type_upper for word in ['ACH', 'DEPOSIT', 'WITHDRAWAL', 'TRANSFER', 'DISBURS']):
+        if amount is not None:
+            return 'TRANSFER_OUT' if amount < 0 else 'TRANSFER_IN'
+        # No amount context — fall back to an explicit direction word in the type.
+        if 'WITHDRAWAL' in raw_type_upper or 'DISBURS' in raw_type_upper:
+            return 'TRANSFER_OUT'
         return 'TRANSFER_IN'
 
     # Everything else
@@ -242,17 +248,17 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 logger.debug(f"Skipping money market interest reinvestment: {raw_description}")
                 continue
 
+            # Parse amounts first — the sign disambiguates transfer direction.
+            # Amount can be negative (purchases) or positive (sales, dividends)
+            amount = Decimal(amount_str) if amount_str else Decimal(0)
+
             # Normalize transaction type
-            transaction_type = _normalize_transaction_type(raw_type, raw_description)
+            transaction_type = _normalize_transaction_type(raw_type, raw_description, amount)
 
             # Parse date
             parsed_date = _parse_date_csv(date_str)
             if not parsed_date:
                 continue
-
-            # Parse amounts
-            # Amount can be negative (purchases) or positive (sales, dividends)
-            amount = Decimal(amount_str) if amount_str else Decimal(0)
             quantity = Decimal(quantity_str) if quantity_str else None
             price = Decimal(price_str) if price_str else None
 
@@ -454,8 +460,8 @@ def parse_pdf(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                     logger.debug(f"  Skipping money market interest reinvestment: {transaction} - {description} ({amount})")
                     continue
 
-                # Normalize transaction type
-                transaction_type = _normalize_transaction_type(transaction, description)
+                # Normalize transaction type (amount sign disambiguates transfers)
+                transaction_type = _normalize_transaction_type(transaction, description, amount)
 
                 # Classify security type
                 security_type = _classify_security_type(description, symbol, transaction_type)

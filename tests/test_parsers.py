@@ -1,6 +1,7 @@
 """Tests for parser TRANSFER_IN/TRANSFER_OUT output."""
 import re
 import unittest
+from decimal import Decimal
 from pathlib import Path
 
 INPUT_DIR = Path(__file__).parent / "parsers" / "fixtures" / "local"
@@ -19,9 +20,16 @@ class TestAmeripriseNormalize(unittest.TestCase):
         from src.parser.ameriprise import _normalize_transaction_type
         self.assertEqual(_normalize_transaction_type("ACH", "ACH DIRECT DEPOSIT"), "TRANSFER_IN")
 
-    def test_ach_withdrawal(self):
+    def test_ach_direction_comes_from_amount_sign(self):
+        # Ameriprise labels an ACH pull *into* the account "ACH DIRECT WITHDRAWAL"
+        # and lists it under Deposits with a positive amount — so the sign, not
+        # the description keyword, decides direction.
         from src.parser.ameriprise import _normalize_transaction_type
-        self.assertEqual(_normalize_transaction_type("ACH", "ACH DIRECT WITHDRAWAL TRACE #123"), "TRANSFER_OUT")
+        desc = "ACH DIRECT WITHDRAWAL TRACE #123"
+        self.assertEqual(_normalize_transaction_type("ACH", desc, Decimal("2017.00")), "TRANSFER_IN")
+        self.assertEqual(_normalize_transaction_type("ACH", desc, Decimal("-2017.00")), "TRANSFER_OUT")
+        # Without an amount, a generic ACH defaults to a deposit (no direction word).
+        self.assertEqual(_normalize_transaction_type("ACH", desc), "TRANSFER_IN")
 
     def test_non_transfer_unchanged(self):
         from src.parser.ameriprise import _normalize_transaction_type
