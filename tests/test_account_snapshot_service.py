@@ -27,6 +27,24 @@ from src.services.account_snapshot import (
 )
 
 
+def test_apply_position_trade_long_and_short():
+    from src.services.account_snapshot import _apply_position_trade as apt
+    D = Decimal
+    # open long; add long -> weighted avg; reduce long -> basis unchanged
+    assert apt(D('0'), D('0'), D('10'), D('5')) == (D('10'), D('5'))
+    assert apt(D('10'), D('5'), D('10'), D('7')) == (D('20'), D('6'))
+    assert apt(D('20'), D('6'), D('-5'), D('99')) == (D('15'), D('6'))
+    # open short (sell-to-open); add to short -> weighted avg premium
+    assert apt(D('0'), D('0'), D('-3'), D('8')) == (D('-3'), D('8'))
+    assert apt(D('-3'), D('8'), D('-1'), D('4')) == (D('-4'), D('7'))
+    # buy-to-close part of short -> basis unchanged; close fully -> flat
+    assert apt(D('-4'), D('7'), D('1'), D('99')) == (D('-3'), D('7'))
+    assert apt(D('-3'), D('7'), D('3'), D('99')) == (D('0'), D('0'))
+    # flips: long->short and short->long take the trade price for the leftover
+    assert apt(D('2'), D('5'), D('-5'), D('9')) == (D('-3'), D('9'))
+    assert apt(D('-2'), D('5'), D('5'), D('9')) == (D('3'), D('9'))
+
+
 def test_review_reason_summarizes_long_option_lists():
     # An options-heavy account must not produce an unbounded reason. Past the
     # cap the tail collapses to "(+N more)" — guards the readability cap that
@@ -489,6 +507,43 @@ class TestHoldAtCostValuation(unittest.TestCase):
         snap = self._snapshot(acct, date(2024, 5, 2))
         # 1 contract remains at the unchanged $5 avg cost: 1 * 5 * 100 = $500.
         self.assertEqual(snap.securities_value, Decimal("500.00"))
+
+    def test_sell_to_open_short_is_negative_securities(self):
+        # Writing an option (sell-to-open, no prior holding) is a short: it adds
+        # premium to cash and contributes negative securities value at cost.
+        acct = self._investment_account(1000)
+        self._option_txn(acct, InvestmentTransactionType.SELL,
+                         qty=1, price=5, txn_date=date(2024, 5, 1))
+        self._recalc(acct, date(2024, 5, 1), date(2024, 5, 1))
+        snap = self._snapshot(acct, date(2024, 5, 1))
+        self.assertEqual(snap.securities_value, Decimal("-500.00"))  # -1 * 5 * 100
+        self.assertEqual(snap.cash_balance, Decimal("1500.00"))      # 1000 + 500 premium
+        self.assertEqual(snap.balance, Decimal("1000.00"))
+
+    def test_buy_to_close_flattens_short(self):
+        acct = self._investment_account(1000)
+        self._option_txn(acct, InvestmentTransactionType.SELL,
+                         qty=1, price=5, txn_date=date(2024, 5, 1))
+        self._option_txn(acct, InvestmentTransactionType.BUY,
+                         qty=1, price=2, txn_date=date(2024, 5, 2))
+        self._recalc(acct, date(2024, 5, 1), date(2024, 5, 2))
+        snap = self._snapshot(acct, date(2024, 5, 2))
+        self.assertEqual(snap.securities_value, Decimal("0.00"))     # closed
+        self.assertEqual(snap.cash_balance, Decimal("1300.00"))      # 1000 + 500 - 200
+
+    def test_vertical_spread_values_at_net_debit(self):
+        # Long $140 + short $145 (same day/qty) = bull call debit spread.
+        acct = self._investment_account(1000)
+        self._option_txn(acct, InvestmentTransactionType.BUY, qty=1, price=9,
+                         txn_date=date(2024, 5, 1), api_symbol="PTON240517C00140000")
+        self._option_txn(acct, InvestmentTransactionType.SELL, qty=1, price=7,
+                         txn_date=date(2024, 5, 1), api_symbol="PTON240517C00145000")
+        self._recalc(acct, date(2024, 5, 1), date(2024, 5, 1))
+        snap = self._snapshot(acct, date(2024, 5, 1))
+        # 900 long - 700 short = 200 net debit; cash 1000 - 900 + 700 = 800.
+        self.assertEqual(snap.securities_value, Decimal("200.00"))
+        self.assertEqual(snap.cash_balance, Decimal("800.00"))
+        self.assertEqual(snap.balance, Decimal("1000.00"))
 
     def test_cost_basis_fallback_flags_stale_options(self):
         acct = self._investment_account(1000)

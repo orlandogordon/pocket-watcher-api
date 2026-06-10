@@ -31,7 +31,7 @@ from src.models.investment import (
     InvestmentTransactionBulkCreate
 )
 from src.parser.models import ParsedInvestmentTransaction
-from src.services.account_snapshot import parse_split_ratio
+from src.services.account_snapshot import parse_split_ratio, _apply_position_trade
 from src.services.price_fetcher import is_option_symbol, parse_option_symbol
 
 
@@ -176,21 +176,39 @@ def rebuild_holdings_from_transactions(db: Session, account_id: int) -> List[Inv
             holding = holdings_map[key]
             qty = txn.quantity or Decimal('0')
             pps = txn.price_per_share or Decimal('0')
-            new_quantity = holding.quantity + qty
-            if new_quantity > 0:
-                old_total_cost = holding.quantity * (holding.average_cost_basis or Decimal('0'))
-                new_total_cost = qty * pps
-                holding.average_cost_basis = (old_total_cost + new_total_cost) / new_quantity
-            holding.quantity = new_quantity
+            # BUY = +qty: opens/adds a long, or buys-to-close a short.
+            holding.quantity, holding.average_cost_basis = _apply_position_trade(
+                holding.quantity, holding.average_cost_basis or Decimal('0'), qty, pps
+            )
             txn.holding_id = holding.db_id
 
         elif txn_type == InvestmentTransactionType.SELL:
-            if not key or key not in holdings_map:
+            if not key:
                 continue
+            if key not in holdings_map:
+                # Sell-to-open (writing an option / shorting): no prior holding.
+                holding = InvestmentHoldingDB(
+                    uuid=uuid4(),
+                    account_id=account_id,
+                    symbol=key,
+                    quantity=Decimal('0'),
+                    average_cost_basis=Decimal('0'),
+                )
+                db.add(holding)
+                db.flush()
+                holdings_map[key] = holding
+
             holding = holdings_map[key]
             qty = txn.quantity or Decimal('0')
-            txn.cost_basis_at_sale = holding.average_cost_basis
-            holding.quantity -= qty
+            pps = txn.price_per_share or Decimal('0')
+            # cost_basis_at_sale only applies to closing a long; a sell-to-open
+            # (flat/short) has no basis at sale.
+            txn.cost_basis_at_sale = holding.average_cost_basis if holding.quantity > 0 else None
+            # SELL = -qty: sells-to-close a long, or sells-to-open a short
+            # (pps becomes the premium-received basis for the new short).
+            holding.quantity, holding.average_cost_basis = _apply_position_trade(
+                holding.quantity, holding.average_cost_basis or Decimal('0'), -qty, pps
+            )
             txn.holding_id = holding.db_id
 
         elif txn_type == InvestmentTransactionType.EXPIRATION:
@@ -246,8 +264,8 @@ def rebuild_holdings_from_transactions(db: Session, account_id: int) -> List[Inv
             holding.current_price = price_cache[symbol]['current_price']
             holding.last_price_update = price_cache[symbol]['last_price_update']
 
-    # 7. Remove holdings with quantity <= 0
-    to_remove = [sym for sym, h in holdings_map.items() if h.quantity <= 0]
+    # 7. Remove fully-closed holdings (quantity == 0); keep open longs and shorts
+    to_remove = [sym for sym, h in holdings_map.items() if h.quantity == 0]
     for sym in to_remove:
         holding = holdings_map.pop(sym)
         # Null out holding_id on transactions that reference this holding

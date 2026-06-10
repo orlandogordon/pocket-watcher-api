@@ -109,6 +109,28 @@ def test_expiration_removes_option_holding(db, user, account):
     assert _holdings_by_symbol(db, account) == {}
 
 
+def test_sell_to_open_creates_short_then_buy_to_close_removes_it(db, user, account):
+    # Write (sell-to-open) an option with no prior holding -> short position.
+    sell = make_investment_txn(
+        db, user, account, transaction_type=InvestmentTransactionType.SELL,
+        symbol="QQQ", api_symbol=_QQQ_PUT, security_type="OPTION",
+        quantity=Decimal("2"), price_per_share=Decimal("5"), transaction_date=date(2026, 1, 1),
+    )
+    short = _holdings_by_symbol(db, account)[_QQQ_PUT]
+    assert short.quantity == Decimal("-2")
+    assert short.average_cost_basis == Decimal("5")  # premium received per unit
+    db.refresh(sell)
+    assert sell.cost_basis_at_sale is None  # opening a short has no basis at sale
+
+    # Buy-to-close the short -> flat -> holding removed.
+    make_investment_txn(
+        db, user, account, transaction_type=InvestmentTransactionType.BUY,
+        symbol="QQQ", api_symbol=_QQQ_PUT, security_type="OPTION",
+        quantity=Decimal("2"), price_per_share=Decimal("2"), transaction_date=date(2026, 1, 2),
+    )
+    assert _QQQ_PUT not in _holdings_by_symbol(db, account)
+
+
 def test_split_adjusts_quantity_and_cost(db, user, account):
     _buy(db, user, account, symbol="QQQ", quantity=Decimal("10"), price_per_share=Decimal("100"), transaction_date=date(2026, 1, 1))
     make_investment_txn(

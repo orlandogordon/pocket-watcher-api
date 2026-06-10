@@ -70,6 +70,39 @@ def _contract_multiplier(symbol: str) -> Decimal:
     return OPTION_CONTRACT_MULTIPLIER if is_option_symbol(symbol) else Decimal("1")
 
 
+def _apply_position_trade(
+    quantity: Decimal,
+    average_cost_basis: Decimal,
+    signed_delta: Decimal,
+    price_per_unit: Decimal,
+) -> tuple:
+    """Apply one trade to a signed position, returning (new_quantity, new_basis).
+
+    Handles long (qty > 0) and short (qty < 0) uniformly so sold-to-open /
+    bought-to-close (option writing, spread legs, naked shorts) replay correctly.
+    `average_cost_basis` is stored positive — the sign of `quantity` carries the
+    direction (price paid for longs, premium received for shorts).
+
+    `signed_delta` is +qty for BUY, -qty for SELL. Cases:
+    - opening from flat, or adding in the same direction -> magnitude-weighted avg
+    - reducing toward zero (closing)                     -> basis unchanged
+    - crossing zero (flip)                               -> basis = trade price
+    A zero resulting quantity yields a zero basis (no div-by-zero; also covers the
+    zero-quantity cash-sweep BUY).
+    """
+    new_quantity = quantity + signed_delta
+    if new_quantity == 0:
+        return new_quantity, Decimal('0')
+    if quantity == 0 or (quantity > 0) == (signed_delta > 0):
+        total = abs(quantity) * average_cost_basis + abs(signed_delta) * price_per_unit
+        return new_quantity, total / abs(new_quantity)
+    if abs(signed_delta) <= abs(quantity):
+        # reducing the existing position; remaining basis is unchanged
+        return new_quantity, average_cost_basis
+    # flipped past zero; the leftover is a fresh position at the trade price
+    return new_quantity, price_per_unit
+
+
 def _build_missing_price_review_reason(missing_symbols: List[str]) -> Optional[str]:
     """Compose the review_reason for a snapshot that fell back to cost basis
     because one or more holdings had no historical price.
@@ -310,36 +343,37 @@ def get_account_state_on_date(
         pps = txn.price_per_share or Decimal('0')
 
         if txn.transaction_type == InvestmentTransactionType.BUY:
-            # Update holdings
             if symbol not in holdings:
                 holdings[symbol] = {
                     'quantity': Decimal('0'),
                     'average_cost_basis': Decimal('0'),
                     'api_symbol': txn.api_symbol or symbol
                 }
-
-            # Weighted average cost basis
-            old_qty = holdings[symbol]['quantity']
-            old_basis = holdings[symbol]['average_cost_basis']
-            new_qty = old_qty + qty
-
-            # Guard against a zero-quantity BUY (e.g. TD Ameritrade money-market /
-            # cash-sweep rows arrive as BUY with quantity 0) — dividing would raise
-            # DivisionByZero. Mirrors the REINVESTMENT branch and the holdings rebuild.
-            if new_qty > 0:
-                holdings[symbol]['average_cost_basis'] = (
-                    (old_qty * old_basis + qty * pps) / new_qty
+            # BUY = +qty: opens/adds a long, or buys-to-close a short.
+            holdings[symbol]['quantity'], holdings[symbol]['average_cost_basis'] = (
+                _apply_position_trade(
+                    holdings[symbol]['quantity'], holdings[symbol]['average_cost_basis'], qty, pps
                 )
-            holdings[symbol]['quantity'] = new_qty
+            )
 
             # Decrease cash (total cost of purchase)
             # total_amount may be negative (e.g. -1714.65 for a buy) — use abs
             cash_balance -= abs(txn.total_amount)
 
         elif txn.transaction_type == InvestmentTransactionType.SELL:
-            if symbol in holdings:
-                holdings[symbol]['quantity'] -= qty
-                # Cost basis stays same (weighted average)
+            if symbol not in holdings:
+                holdings[symbol] = {
+                    'quantity': Decimal('0'),
+                    'average_cost_basis': Decimal('0'),
+                    'api_symbol': txn.api_symbol or symbol
+                }
+            # SELL = -qty: sells-to-close a long, or sells-to-open a short
+            # (pps becomes the premium-received basis for the new short).
+            holdings[symbol]['quantity'], holdings[symbol]['average_cost_basis'] = (
+                _apply_position_trade(
+                    holdings[symbol]['quantity'], holdings[symbol]['average_cost_basis'], -qty, pps
+                )
+            )
 
             # Increase cash (proceeds from sale)
             cash_balance += abs(txn.total_amount)
@@ -371,17 +405,12 @@ def get_account_state_on_date(
                     'average_cost_basis': Decimal('0'),
                     'api_symbol': txn.api_symbol or symbol
                 }
-
-            # Weighted average cost basis
-            old_qty = holdings[symbol]['quantity']
-            old_basis = holdings[symbol]['average_cost_basis']
-            new_qty = old_qty + qty
-
-            if new_qty > 0:
-                holdings[symbol]['average_cost_basis'] = (
-                    (old_qty * old_basis + qty * pps) / new_qty
+            # Dividend reinvested into more shares — a long add, cash already booked.
+            holdings[symbol]['quantity'], holdings[symbol]['average_cost_basis'] = (
+                _apply_position_trade(
+                    holdings[symbol]['quantity'], holdings[symbol]['average_cost_basis'], qty, pps
                 )
-            holdings[symbol]['quantity'] = new_qty
+            )
 
         elif txn.transaction_type == InvestmentTransactionType.SPLIT:
             # Adjust quantity and cost basis
@@ -395,8 +424,8 @@ def get_account_state_on_date(
             if symbol in holdings:
                 holdings[symbol]['quantity'] = Decimal('0')
 
-    # Filter out zero/negative holdings
-    active_holdings = {s: h for s, h in holdings.items() if h['quantity'] > 0}
+    # Keep open positions, long or short; drop only fully-closed (qty == 0) ones.
+    active_holdings = {s: h for s, h in holdings.items() if h['quantity'] != 0}
 
     return {
         'holdings': active_holdings,
@@ -835,7 +864,8 @@ def calculate_investment_account_snapshot(
     total_cost_basis = Decimal('0.00')
 
     for holding in holdings:
-        if holding.quantity and holding.quantity > 0:
+        # Include shorts (quantity < 0); they contribute negative value/basis.
+        if holding.quantity and holding.quantity != 0:
             multiplier = _contract_multiplier(holding.symbol)
             # Use current_price if available, otherwise use cost basis
             price = holding.current_price if holding.current_price else holding.average_cost_basis
@@ -846,11 +876,11 @@ def calculate_investment_account_snapshot(
             if holding.average_cost_basis:
                 total_cost_basis += holding.quantity * holding.average_cost_basis * multiplier
 
-    unrealized_gain_loss = total_value - total_cost_basis if total_cost_basis > 0 else None
+    unrealized_gain_loss = total_value - total_cost_basis if total_cost_basis != 0 else None
 
     return {
         'balance': total_value,
-        'total_cost_basis': total_cost_basis if total_cost_basis > 0 else None,
+        'total_cost_basis': total_cost_basis if total_cost_basis != 0 else None,
         'unrealized_gain_loss': unrealized_gain_loss
     }
 
