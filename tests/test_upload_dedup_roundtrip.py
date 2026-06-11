@@ -134,6 +134,23 @@ class TestUploadDedupRoundtrip(unittest.TestCase):
         self.assertEqual(len(rejected), 0)
         self.assertEqual(len(ready), 1)
 
+    def test_within_statement_duplicate_flagged_not_rejected(self):
+        """#73 parity: a genuine same-day identical pair (neither in the DB) is
+        detected as a within-statement duplicate — both rows ship to
+        ready_to_import (auto-kept), with the 2nd flagged is_duplicate=True so it
+        flows through make_unique hashing at confirm. Matches the bulk path."""
+        pair = [_make_parsed("2.90", "MTA PAYGO", 5), _make_parsed("2.90", "MTA PAYGO", 5)]
+
+        rejected, ready = analyze_regular_transactions(
+            pair, self.user.db_id, self.account.db_id, self.session,
+        )
+
+        self.assertEqual(len(rejected), 0, "within-statement dups are not DB rejects")
+        self.assertEqual(len(ready), 2, "both copies are kept")
+        self.assertFalse(ready[0]["is_duplicate"])
+        self.assertTrue(ready[1]["is_duplicate"])
+        self.assertEqual(ready[1]["duplicate_type"], "within_statement")
+
     def test_analyzer_rejects_none_account_id(self):
         with self.assertRaises(ValueError):
             analyze_regular_transactions(

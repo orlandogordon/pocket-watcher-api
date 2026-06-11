@@ -76,6 +76,15 @@ def test_upload_file_unknown_institution_400(client, cc_account):
     assert resp.status_code == 400
 
 
+@pytest.mark.parametrize("institution", ["venmo", "cashapp"])
+def test_upload_file_rejects_p2p_institutions_400(client, cc_account, institution):
+    """#77: Venmo/Cash App are pass-throughs, not accounts — they were removed
+    from PARSER_MAPPING, so the upload flow must reject them as unknown
+    institutions. Guards against silently re-adding them."""
+    resp = _upload(client, cc_account.uuid, institution=institution)
+    assert resp.status_code == 400
+
+
 def test_upload_file_bad_account_uuid_400(client):
     resp = _upload(client, "not-a-uuid")
     assert resp.status_code == 400

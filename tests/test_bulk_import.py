@@ -10,6 +10,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+from src.crud.crud_transaction import bulk_create_transactions_from_parsed_data
 from src.db.core import AccountType, TransactionDB, TransactionTagDB, TransactionType
 from src.parser.models import ParsedTransaction
 from src.services import bulk_import
@@ -186,3 +187,84 @@ def test_process_file_marks_degraded_when_llm_unavailable(db, test_user, monkeyp
     assert result.ok
     assert result.transactions_created == 4
     assert result.degraded is True
+
+
+def _mta_pair():
+    """Two genuinely identical same-day rows (e.g. two MTA pay-go taps)."""
+    return [
+        ParsedTransaction(transaction_date=date(2026, 3, 1), description="MTA PAYGO",
+                          amount=Decimal("2.90"), transaction_type="PURCHASE"),
+        ParsedTransaction(transaction_date=date(2026, 3, 1), description="MTA PAYGO",
+                          amount=Decimal("2.90"), transaction_type="PURCHASE"),
+    ]
+
+
+def test_within_statement_duplicate_pair_gets_distinct_hashes(db, test_user):
+    """#73: two genuinely identical rows in one file are both kept (auto-accept)
+    but stored with DISTINCT transaction_hash, mirroring the preview path — so
+    the bulk path no longer emits colliding hashes for within-statement repeats."""
+    account = _amex_account(db, test_user)
+
+    created, skipped = bulk_create_transactions_from_parsed_data(
+        db, test_user.db_id, _mta_pair(), account.db_id,
+    )
+
+    assert len(created) == 2
+    assert len(skipped) == 0
+    hashes = {t.transaction_hash for t in created}
+    assert len(hashes) == 2, "within-statement duplicates must get distinct hashes"
+
+
+def test_process_file_within_statement_pair_distinct_hashes(db, test_user, fake_llm):
+    """#73 end-to-end: a statement whose parse yields a genuine same-day identical
+    pair imports BOTH rows through the real process_file path (parser doesn't
+    collapse them) with DISTINCT transaction hashes."""
+    account = _amex_account(db, test_user)
+    csv_bytes = (
+        b"Date,Description,Amount\n"
+        b"05/01/2026,MTA PAYGO NEW YORK NY,2.90\n"
+        b"05/01/2026,MTA PAYGO NEW YORK NY,2.90\n"
+    )
+
+    result = bulk_import.process_file(
+        db,
+        file_bytes=csv_bytes,
+        filename="dup_pair.csv",
+        institution="amex",
+        account_id=account.db_id,
+        user_id=test_user.db_id,
+    )
+
+    assert result.ok
+    assert result.transactions_created == 2
+    assert result.transactions_skipped == 0
+
+    rows = (
+        db.query(TransactionDB)
+        .filter(TransactionDB.account_id == account.db_id)
+        .all()
+    )
+    assert len(rows) == 2
+    assert len({r.transaction_hash for r in rows}) == 2, \
+        "within-statement duplicates must get distinct hashes"
+
+
+def test_within_statement_pair_reupload_is_net_zero(db, test_user):
+    """#73: re-importing the same statement (including its within-statement pair)
+    skips every row — the duplicate's base hash is now in the DB snapshot, so no
+    new rows and none restored."""
+    account = _amex_account(db, test_user)
+
+    first_created, _ = bulk_create_transactions_from_parsed_data(
+        db, test_user.db_id, _mta_pair(), account.db_id,
+    )
+    assert len(first_created) == 2
+
+    second_created, second_skipped = bulk_create_transactions_from_parsed_data(
+        db, test_user.db_id, _mta_pair(), account.db_id,
+    )
+    assert len(second_created) == 0
+    assert len(second_skipped) == 2
+    assert db.query(TransactionDB).filter(
+        TransactionDB.account_id == account.db_id
+    ).count() == 2

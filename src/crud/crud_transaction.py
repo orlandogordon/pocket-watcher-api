@@ -1368,13 +1368,18 @@ def bulk_create_transactions_from_parsed_data(
     skipped_duplicates = []
     duplicate_count = 0
 
-    # Pre-fetch all existing transaction hashes for this user to avoid flagging within-statement duplicates
+    # Frozen snapshot of the user's existing hashes (pre-upload) — used to detect
+    # pre-existing duplicates. NOT mutated during the loop: within-statement
+    # duplicates are tracked separately (below) so they're auto-kept with a
+    # unique hash rather than skipped. See backend todo #73.
     existing_hashes_dict = {
         t.transaction_hash: t for t in
         db.query(TransactionDB)
         .filter(TransactionDB.user_id == user_id)
         .all()
     }
+    # Base hashes already emitted earlier in THIS file (within-statement dups).
+    within_statement: set[str] = set()
 
     for t_data in transactions:
         try:
@@ -1384,26 +1389,30 @@ def bulk_create_transactions_from_parsed_data(
             logger.warning(f"Skipping transaction with unknown type: {t_data.transaction_type}")
             continue
 
-        transaction_hash = generate_transaction_hash(
+        # Deterministic base hash (no UUID) — the stable identity used both for
+        # pre-existing-duplicate detection against the DB snapshot and for
+        # within-statement duplicate detection across this file.
+        base_hash = generate_transaction_hash(
             user_id=user_id,
             account_id=account.db_id if account else 0,
             transaction_date=t_data.transaction_date,
             transaction_type_value=transaction_type_enum.value,
             amount=t_data.amount,
             description=t_data.description,
-            make_unique=account is None,
+            make_unique=False,
         )
 
-        # Check if transaction hash existed in database BEFORE this upload
-        is_duplicate = transaction_hash in existing_hashes_dict
+        # Pre-existing duplicate: this row already existed in the DB before this
+        # upload. In bulk (no review) skip it — the re-upload safety net.
+        is_duplicate = base_hash in existing_hashes_dict
 
         # If duplicate and skip_duplicates=True, add to skipped list instead of creating
         if is_duplicate and skip_duplicates:
-            existing_transaction = existing_hashes_dict[transaction_hash]
+            existing_transaction = existing_hashes_dict[base_hash]
             skipped_duplicates.append({
                 'parsed_transaction': t_data,
                 'existing_transaction': existing_transaction,
-                'transaction_hash': transaction_hash
+                'transaction_hash': base_hash
             })
             duplicate_count += 1
             logger.debug(f"Skipping duplicate transaction: {t_data.transaction_date} - {t_data.description}")
@@ -1412,6 +1421,26 @@ def bulk_create_transactions_from_parsed_data(
         if is_duplicate and not skip_duplicates:
             duplicate_count += 1
             logger.debug(f"Found duplicate transaction in database (will create anyway): {t_data.transaction_date} - {t_data.description}")
+
+        # Stored hash: keep two genuinely-identical rows from the same file
+        # distinguishable (#73). A within-statement repeat (base hash already
+        # emitted earlier in THIS file) — or any no-account row, which has no
+        # stable identity — gets a UUID-unique hash; otherwise store the
+        # deterministic base hash. Mirrors the preview path's within_statement
+        # handling (duplicate_analyzer.analyze_regular_transactions).
+        if account is None or base_hash in within_statement:
+            transaction_hash = generate_transaction_hash(
+                user_id=user_id,
+                account_id=account.db_id if account else 0,
+                transaction_date=t_data.transaction_date,
+                transaction_type_value=transaction_type_enum.value,
+                amount=t_data.amount,
+                description=t_data.description,
+                make_unique=True,
+            )
+        else:
+            transaction_hash = base_hash
+        within_statement.add(base_hash)
 
         db_transaction = TransactionDB(
             uuid=uuid4(),
