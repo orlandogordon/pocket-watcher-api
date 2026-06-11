@@ -37,6 +37,75 @@ class TestAmeripriseNormalize(unittest.TestCase):
         self.assertEqual(_normalize_transaction_type("BUY", ""), "BUY")
         self.assertEqual(_normalize_transaction_type("SELL", ""), "SELL")
 
+    def test_journal_direction_from_amount_sign(self):
+        # #76: JOURNAL rows move cash/positions between a client's own re-numbered
+        # sub-accounts during account restructurings — classified as transfers by
+        # the signed amount so symmetric legs net to zero across both statements.
+        from src.parser.ameriprise import _normalize_transaction_type
+        self.assertEqual(
+            _normalize_transaction_type("JOURNAL", "APPLE INC TO: 72127402-1", Decimal("-267.46")),
+            "TRANSFER_OUT",
+        )
+        self.assertEqual(
+            _normalize_transaction_type("JOURNAL", "APPLE INC FROM: 75958883-1", Decimal("267.46")),
+            "TRANSFER_IN",
+        )
+
+
+class TestAmeripriseClassifyRow(unittest.TestCase):
+    """#76: _classify_row applies the statement-specific rules layered on top of
+    _normalize_transaction_type (DRIP reinvest, fee rebate, money-market sweeps)."""
+
+    def _classify(self, raw_type, desc, amount, qty=None, price=None):
+        from src.parser.ameriprise import _classify_row
+        amt = Decimal(amount) if amount is not None else None
+        q = Decimal(qty) if qty is not None else None
+        p = Decimal(price) if price is not None else None
+        return _classify_row(raw_type, desc, amt, q, p)
+
+    def test_security_dividend_reinvest_becomes_buy(self):
+        # A DRIP line buys fractional shares with the just-paid dividend; modeled
+        # as BUY (engine: -cash, +shares) so it nets the paired DIVIDEND to zero.
+        ttype, qty, price, skip = self._classify(
+            "REINVEST DIV", "MICROSOFT CORP REINVEST AT 404.941 DIVIDEND R", "-0.91"
+        )
+        self.assertFalse(skip)
+        self.assertEqual(ttype, "BUY")
+        self.assertEqual(price, Decimal("404.941"))
+        # qty derived from |amount| / price
+        self.assertEqual(qty, Decimal("0.91") / Decimal("404.941"))
+
+    def test_money_market_interest_reinvest_skipped(self):
+        _, _, _, skip = self._classify(
+            "INTEREST REINVEST", "AMERIPRISE INSURED MONEY MARKET ACCOUNT", "-0.02"
+        )
+        self.assertTrue(skip)
+
+    def test_money_market_cash_sweep_purchase_skipped(self):
+        _, _, _, skip = self._classify(
+            "PURCHASE", "AMERIPRISE INSURED MONEY MARKET ACCOUNT", "-1.83"
+        )
+        self.assertTrue(skip)
+
+    def test_money_market_interest_income_kept(self):
+        ttype, _, _, skip = self._classify(
+            "INTEREST", "AMERIPRISE INSURED MONEY MARKET ACCOUNT 082925 APYE .16%", "0.02"
+        )
+        self.assertFalse(skip)
+        self.assertEqual(ttype, "INTEREST")
+
+    def test_fee_rebate_credit_becomes_transfer_in(self):
+        # A positive-amount FEE is a rebate/credit; the snapshot engine's FEE path
+        # only subtracts, so credits route through TRANSFER_IN (adds cash).
+        ttype, _, _, skip = self._classify("FEE", "FEE REBATE REBATED FOR 009 DAYS", "2.46")
+        self.assertFalse(skip)
+        self.assertEqual(ttype, "TRANSFER_IN")
+
+    def test_normal_fee_stays_fee(self):
+        ttype, _, _, skip = self._classify("FEE", "ASSET-BASED BILL VAL 2,926.94", "-8.49")
+        self.assertFalse(skip)
+        self.assertEqual(ttype, "FEE")
+
 
 class TestSchwabNormalize(unittest.TestCase):
     def test_withdrawal(self):

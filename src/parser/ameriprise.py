@@ -10,7 +10,7 @@ Features:
 - API symbol formatting (OCC format for options)
 """
 import csv
-import pdfplumber
+import fitz  # PyMuPDF — reads both old (Type1) and new (Type0/Type3) Ameriprise PDFs
 import re
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
@@ -62,6 +62,13 @@ def _normalize_transaction_type(raw_type: str, description: str = "", amount: Op
     """
     Map Ameriprise transaction types to standard types:
     BUY, SELL, DIVIDEND, INTEREST, FEE, TRANSFER_IN, TRANSFER_OUT, OTHER
+
+    Transfer direction (ACH / deposit / withdrawal / JOURNAL) comes from the
+    SIGNED amount, not the description: Ameriprise labels an ACH pull *into* the
+    account "ACH DIRECT WITHDRAWAL" under "Deposits" with a positive amount, so
+    keyword-matching the description would mislabel deposits as withdrawals.
+    JOURNAL rows move cash/positions between a client's own re-numbered
+    sub-accounts during restructurings; symmetric in/out legs net to zero.
     """
     raw_type_upper = raw_type.upper().strip()
 
@@ -85,12 +92,8 @@ def _normalize_transaction_type(raw_type: str, description: str = "", amount: Op
     if any(word in raw_type_upper for word in ['FEE', 'BILL']):
         return 'FEE'
 
-    # Cash transfers (ACH / deposits / withdrawals). Direction comes from the
-    # SIGNED amount, not the description: Ameriprise labels an ACH pull *into*
-    # the account "ACH DIRECT WITHDRAWAL" and lists it under "Deposits" with a
-    # positive amount, so keyword-matching the description mislabels deposits as
-    # withdrawals (deposits are positive, disbursements negative).
-    if any(word in raw_type_upper for word in ['ACH', 'DEPOSIT', 'WITHDRAWAL', 'TRANSFER', 'DISBURS']):
+    # Transfer direction comes from the signed amount (see docstring).
+    if any(word in raw_type_upper for word in ['ACH', 'DEPOSIT', 'WITHDRAWAL', 'TRANSFER', 'DISBURS', 'JOURNAL']):
         if amount is not None:
             return 'TRANSFER_OUT' if amount < 0 else 'TRANSFER_IN'
         # No amount context — fall back to an explicit direction word in the type.
@@ -242,25 +245,24 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             raw_type = parts[0].strip()
             description = parts[1].strip() if len(parts) > 1 else raw_type
 
-            # Skip money market interest reinvestments (internal sweeps that
-            # net to zero against INTEREST income entries)
-            if 'REINVEST' in raw_type.upper() and 'MONEY MARKET' in raw_description.upper():
-                logger.debug(f"Skipping money market interest reinvestment: {raw_description}")
-                continue
-
             # Parse amounts first — the sign disambiguates transfer direction.
             # Amount can be negative (purchases) or positive (sales, dividends)
             amount = Decimal(amount_str) if amount_str else Decimal(0)
+            quantity = Decimal(quantity_str) if quantity_str else None
+            price = Decimal(price_str) if price_str else None
 
-            # Normalize transaction type
-            transaction_type = _normalize_transaction_type(raw_type, raw_description, amount)
+            # Pass raw_description so money-market / REINVEST-AT detection sees the full text.
+            transaction_type, quantity, price, skip = _classify_row(
+                raw_type, raw_description, amount, quantity, price
+            )
+            if skip:
+                logger.debug(f"Skipping money-market sweep: {raw_description}")
+                continue
 
             # Parse date
             parsed_date = _parse_date_csv(date_str)
             if not parsed_date:
                 continue
-            quantity = Decimal(quantity_str) if quantity_str else None
-            price = Decimal(price_str) if price_str else None
 
             # Classify security type (only for BUY/SELL)
             security_type = _classify_security_type(description, symbol, transaction_type)
@@ -293,149 +295,181 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     return ParsedData(account_info=account_info, investment_transactions=investment_transactions)
 
 
+def _classify_row(
+    raw_type: str,
+    description: str,
+    amount: Optional[Decimal],
+    quantity: Optional[Decimal],
+    price: Optional[Decimal],
+):
+    """
+    Apply Ameriprise-specific classification on top of _normalize_transaction_type.
+
+    Returns ``(transaction_type, quantity, price, skip)``:
+      - ``REINVEST DIV`` (security dividend reinvestment / DRIP) → ``BUY``,
+        deriving qty/price from the "REINVEST AT <price>" text when absent. The
+        paired ``DIVIDEND`` row books the cash; modelling the reinvest as a BUY
+        (engine: −cash, +shares) nets cash to zero while growing the position.
+      - A ``FEE`` with a positive (credit) amount is a fee rebate; the snapshot
+        engine's FEE path only subtracts, so credits route through ``TRANSFER_IN``.
+      - Any "MONEY MARKET" row except INTEREST is internal cash-sweep mechanics
+        (purchases/sales/reinvestments of the insured money market account) and
+        is skipped; real money-market INTEREST income is kept.
+    """
+    raw_u = (raw_type or "").upper()
+    desc_u = (description or "").upper()
+
+    if 'REINVEST' in raw_u:
+        transaction_type = 'BUY'
+        if price is None:
+            m = re.search(r'REINVEST AT\s+([\d.,]+)', desc_u)
+            if m:
+                try:
+                    price = Decimal(m.group(1).replace(',', ''))
+                except InvalidOperation:
+                    price = None
+        if (quantity is None or quantity == 0) and price and amount is not None and price != 0:
+            quantity = abs(amount) / price
+    else:
+        transaction_type = _normalize_transaction_type(raw_type, description, amount)
+
+    if transaction_type == 'FEE' and amount is not None and amount > 0:
+        transaction_type = 'TRANSFER_IN'
+
+    if 'MONEY MARKET' in desc_u and transaction_type != 'INTEREST':
+        return transaction_type, quantity, price, True
+
+    return transaction_type, quantity, price, False
+
+
+def _group_lines(words, tol: float = 2.5):
+    """
+    Cluster fitz word tuples ``(x0, y0, x1, y1, text, ...)`` into visual rows by
+    their top (y0) within ``tol`` pixels, each row's words sorted left-to-right.
+    Mirrors the prior pdfplumber "within 3px" row assembly.
+    """
+    rows: List[dict] = []
+    for w in sorted(words, key=lambda t: (t[1], t[0])):
+        for row in rows:
+            if abs(row['top'] - w[1]) <= tol:
+                row['words'].append(w)
+                break
+        else:
+            rows.append({'top': w[1], 'words': [w]})
+    for row in rows:
+        row['words'].sort(key=lambda t: t[0])
+    return rows
+
+
 def parse_pdf(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """
-    Parses an Ameriprise PDF statement using table-based approach.
-    Uses fixed column boundaries to extract transaction data.
+    Parses an Ameriprise PDF statement using PyMuPDF (fitz) word geometry.
+
+    fitz extracts text from both the old (Type1 + FontFile3) and the newer
+    (Type0/Type3, no embedded font program) statement generators; pdfplumber/
+    pdfminer decoded almost nothing from the latter, silently yielding 0
+    transactions (#76). The fixed column boundaries below are identical across
+    both formats.
     """
     logger.info("Parsing investment transaction data from Ameriprise PDF...")
     investment_transactions: List[ParsedInvestmentTransaction] = []
     account_info: Optional[ParsedAccountInfo] = None
 
-    # Column boundaries based on header analysis
-    # Columns: Date, Transaction, Description, Symbol/CUSIP, Quantity, Price, Amount
-    COL_DATE_START = 40
-    COL_DATE_END = 100  # Adjusted to end right after date column
-    COL_TRANSACTION_START = 100
-    COL_TRANSACTION_END = 190
-    COL_DESCRIPTION_START = 190
-    COL_DESCRIPTION_END = 430
-    COL_SYMBOL_START = 430
-    COL_SYMBOL_END = 550
-    COL_QUANTITY_START = 550
-    COL_QUANTITY_END = 625
-    COL_PRICE_START = 625
-    COL_PRICE_END = 705  # Moved left by ~15 pixels
+    # Column boundaries (word x0): Date, Transaction, Description, Symbol/CUSIP,
+    # Quantity, Price, Amount. Verified identical for the old & new formats.
+    COL_DATE_START, COL_DATE_END = 40, 100
+    COL_TRANSACTION_START, COL_TRANSACTION_END = 100, 190
+    COL_DESCRIPTION_START, COL_DESCRIPTION_END = 190, 430
+    COL_SYMBOL_START, COL_SYMBOL_END = 430, 550
+    COL_QUANTITY_START, COL_QUANTITY_END = 550, 625
+    COL_PRICE_START, COL_PRICE_END = 625, 705
     COL_AMOUNT_START = 705
-    COL_AMOUNT_END = 761  # End after "Amount" header (x1=760.50)
 
-    with pdfplumber.open(file_source) as pdf:
-        # Extract account number and statement year from any page
-        account_number = None
+    # fitz opens a filesystem path or an in-memory byte stream
+    if isinstance(file_source, (str, Path)):
+        doc = fitz.open(str(file_source))
+    else:
+        try:
+            file_source.seek(0)
+        except (AttributeError, OSError):
+            pass
+        doc = fitz.open(stream=file_source.read(), filetype="pdf")
+
+    date_pattern = re.compile(r'^\d{2}/\d{2}/\d{4}$')
+
+    def get_column_text(line_words, start_x, end_x):
+        cells = [w for w in line_words if start_x <= w[0] < end_x]
+        return ' '.join(w[4] for w in sorted(cells, key=lambda t: t[0]))
+
+    try:
+        full_text = "\n".join(page.get_text() for page in doc)
+
+        # Account number: "Account #: 0000 7595 8883 3 133"
+        acct_match = re.search(r'Account #:\s*([\d\s]+)', full_text)
+        if acct_match:
+            account_number = acct_match.group(1).strip().replace(' ', '')
+            if len(account_number) >= 4:
+                account_info = ParsedAccountInfo(account_number_last4=account_number[-4:])
+
+        # Statement year from header (e.g. "AUG 01, 2025 TO AUG 31, 2025")
         statement_year = None
+        year_match = re.search(r'(\d{4})\s+TO', full_text)
+        if year_match:
+            statement_year = int(year_match.group(1))
 
-        for page in pdf.pages:
-            page_text = page.extract_text()
-
-            # Look for account number pattern: "Account #: 0000 7595 8883 3 133"
-            if not account_number:
-                account_match = re.search(r'Account #:\s*([\d\s]+)', page_text)
-                if account_match:
-                    account_number = account_match.group(1).strip().replace(' ', '')
-                    if len(account_number) >= 4:
-                        account_info = ParsedAccountInfo(account_number_last4=account_number[-4:])
-
-            # Extract statement year from header
-            if not statement_year:
-                year_match = re.search(r'(\d{4})\s+TO', page_text)
-                if year_match:
-                    statement_year = int(year_match.group(1))
-
-        # Process each page
-        for page_num, page in enumerate(pdf.pages, 1):
-            text = page.extract_text()
-
-            # Only process pages with transaction activity
-            # Must have BOTH a section header AND the table headers
-            has_activity_section = ("Your account activity" in text or
-                                    "Trade activity" in text or
-                                    "Deposits" in text or
-                                    "Income" in text or
-                                    "Fees" in text or
-                                    "Other activity" in text)
-            has_table_headers = ("Date Transaction Description" in text or
-                                "Date\nTransaction\nDescription" in text.replace(" ", "\n"))
-
-            if not (has_activity_section and has_table_headers):
+        for page_num, page in enumerate(doc, 1):
+            words = page.get_text("words")  # (x0, y0, x1, y1, text, block, line, word)
+            if not words:
                 continue
+
+            lines = _group_lines(words)
+
+            # Activity pages carry a Date+Transaction+Description header row.
+            header_tops = [
+                row['top'] for row in lines
+                if {'Date', 'Transaction', 'Description'} <= {w[4] for w in row['words']}
+            ]
+            if not header_tops:
+                continue
+            first_header_top = min(header_tops)
+
+            # Stop at the next "Date"-labeled sub-table (money-market sweep / gain-loss detail).
+            label_tops = [
+                row['top'] for row in lines
+                if any(w[4] == 'Date' and COL_DATE_START - 2 <= w[0] < COL_DATE_END for w in row['words'])
+                and row['top'] > first_header_top + 1
+            ]
+            section_end_top = min(label_tops) if label_tops else float('inf')
 
             logger.debug(f"Processing page {page_num}...")
 
-            # Extract words with positions
-            words = page.extract_words()
-
-            # Find section boundary: exclude the money market sweep section at
-            # the bottom of the page (has its own reduced header:
-            # "Date Transaction Description Amount" without CUSIP/Quantity/Price)
-            section_end_y = page.height  # Default to end of page
-
-            # Look for a second "Date" header that starts the money market table
-            date_header_count = 0
-            for word in words:
-                if word['text'] == 'Date':
-                    # Check if this "Date" word is followed by "Transaction" on the same line
-                    same_line = [w for w in words if abs(w['top'] - word['top']) < 3]
-                    line_text = ' '.join([w['text'] for w in sorted(same_line, key=lambda x: x['x0'])])
-                    if 'Transaction' in line_text and 'Description' in line_text:
-                        date_header_count += 1
-                        if date_header_count == 2:
-                            # Second table header = money market section, exclude it
-                            section_end_y = word['top']
-                            logger.debug(f"  Found money market section header at y={section_end_y:.1f}, excluding")
-                            break
-
-            # Find transaction rows by looking for date pattern
-            date_pattern = re.compile(r'^\d{2}/\d{2}/\d{4}$')
-            transaction_rows = []
-
-            for word in words:
-                if date_pattern.match(word['text']) and COL_DATE_START <= word['x0'] < COL_DATE_END:
-                    # Only include if it's BEFORE the section boundary
-                    if word['top'] < section_end_y:
-                        # This is a date in the date column - marks start of transaction row
-                        transaction_rows.append({
-                            'date_word': word,
-                            'y_position': word['top']
-                        })
-
-            logger.debug(f"  Found {len(transaction_rows)} transaction rows in Trade activity section")
-
-            # For each transaction row, extract data from columns
-            for row in transaction_rows:
-                y_pos = row['y_position']
-                date_text = row['date_word']['text']
-
-                # Get all words on this line (within 3 pixels vertically)
-                line_words = [w for w in words if abs(w['top'] - y_pos) < 3]
-
-                # Extract data from each column
-                def get_column_text(start_x, end_x):
-                    """Get all text in a column range"""
-                    col_words = [w for w in line_words if start_x <= w['x0'] < end_x]
-                    col_words_sorted = sorted(col_words, key=lambda x: x['x0'])
-                    return ' '.join([w['text'] for w in col_words_sorted])
-
-                # Extract fields
-                date_str = date_text
-                transaction = get_column_text(COL_TRANSACTION_START, COL_TRANSACTION_END)
-                description = get_column_text(COL_DESCRIPTION_START, COL_DESCRIPTION_END)
-                symbol = get_column_text(COL_SYMBOL_START, COL_SYMBOL_END).strip() or None
-                quantity_str = get_column_text(COL_QUANTITY_START, COL_QUANTITY_END).strip()
-                price_str = get_column_text(COL_PRICE_START, COL_PRICE_END).strip()
-                amount_str = get_column_text(COL_AMOUNT_START, page.width).strip()
-
-                # Parse date
-                try:
-                    parsed_date = datetime.strptime(date_str, "%m/%d/%Y").date()
-                except ValueError:
-                    logger.warning(f"  Skipping row - invalid date: {date_str}")
+            for row in lines:
+                if row['top'] <= first_header_top or row['top'] >= section_end_top:
+                    continue
+                line_words = row['words']
+                date_cells = [
+                    w for w in line_words
+                    if date_pattern.match(w[4]) and COL_DATE_START <= w[0] < COL_DATE_END
+                ]
+                if not date_cells:
                     continue
 
-                # Parse amounts
+                date_str = date_cells[0][4]
+                transaction = get_column_text(line_words, COL_TRANSACTION_START, COL_TRANSACTION_END)
+                description = get_column_text(line_words, COL_DESCRIPTION_START, COL_DESCRIPTION_END)
+                symbol = get_column_text(line_words, COL_SYMBOL_START, COL_SYMBOL_END).strip() or None
+                quantity_str = get_column_text(line_words, COL_QUANTITY_START, COL_QUANTITY_END).strip()
+                price_str = get_column_text(line_words, COL_PRICE_START, COL_PRICE_END).strip()
+                amount_str = get_column_text(line_words, COL_AMOUNT_START, page.rect.width).strip()
+
+                parsed_date = _parse_date_pdf(date_str, statement_year)
+                if not parsed_date:
+                    continue
+
                 try:
                     amount = Decimal(amount_str.replace('$', '').replace(',', ''))
                 except (InvalidOperation, ValueError):
-                    logger.warning(f"  Skipping row - invalid amount: {amount_str}")
+                    logger.warning(f"  Skipping row - invalid amount: {amount_str!r} ({transaction})")
                     continue
 
                 quantity = None
@@ -452,21 +486,14 @@ def parse_pdf(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                     except (InvalidOperation, ValueError):
                         pass
 
-                # Skip money market interest reinvestments — these are internal
-                # sweeps that offset the corresponding INTEREST income entry and
-                # net to zero (e.g. "INTEREST REINVEST AMERIPRISE INSURED MONEY
-                # MARKET ACCOUNT")
-                if 'REINVEST' in transaction.upper() and 'MONEY MARKET' in description.upper():
-                    logger.debug(f"  Skipping money market interest reinvestment: {transaction} - {description} ({amount})")
+                transaction_type, quantity, price, skip = _classify_row(
+                    transaction, description, amount, quantity, price
+                )
+                if skip:
+                    logger.debug(f"  Skipping money-market sweep: {transaction} - {description} ({amount})")
                     continue
 
-                # Normalize transaction type (amount sign disambiguates transfers)
-                transaction_type = _normalize_transaction_type(transaction, description, amount)
-
-                # Classify security type
                 security_type = _classify_security_type(description, symbol, transaction_type)
-
-                # Format API symbol
                 api_symbol = _format_api_symbol(symbol, security_type, description)
 
                 investment_transactions.append(
@@ -482,6 +509,8 @@ def parse_pdf(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                         api_symbol=api_symbol
                     )
                 )
+    finally:
+        doc.close()
 
     logger.info(f"Successfully parsed {len(investment_transactions)} investment transactions from Ameriprise PDF")
 
