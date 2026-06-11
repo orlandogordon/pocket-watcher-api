@@ -974,22 +974,32 @@ def create_account_snapshot(
 def update_investment_prices(
     db: Session,
     user_id: int,
-    delay: float = 0.5
+    delay: float = 0.5,
+    account_id: Optional[int] = None
 ) -> Dict[str, int]:
     """
-    Update current prices for all investment holdings for a user.
+    Update current prices for the user's investment holdings.
     Fetches live prices from Yahoo Finance.
+
+    Args:
+        account_id: when given, scope the refresh to that single (owned)
+            investment account — used after a statement import so only the
+            touched account is re-priced, not the user's whole portfolio. When
+            None, refresh every investment account (the nightly EOD job).
 
     Returns: {
         'updated': count of holdings updated,
         'failed': count of holdings that failed to update
     }
     """
-    # Get all investment accounts for user
-    investment_accounts = db.query(AccountDB).filter(
+    # Get the user's investment accounts (optionally a single one)
+    account_query = db.query(AccountDB).filter(
         AccountDB.user_id == user_id,
         AccountDB.account_type == AccountType.INVESTMENT
-    ).all()
+    )
+    if account_id is not None:
+        account_query = account_query.filter(AccountDB.db_id == account_id)
+    investment_accounts = account_query.all()
 
     if not investment_accounts:
         return {'updated': 0, 'failed': 0}

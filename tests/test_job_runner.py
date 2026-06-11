@@ -143,6 +143,66 @@ def test_worker_marks_failed_on_rate_limit(job_env, monkeypatch):
     assert job.completed_at is not None
 
 
+def test_worker_refreshes_current_prices_scoped_to_account(job_env, monkeypatch):
+    # Worker re-prices the affected account's holdings, leaving other accounts alone.
+    from decimal import Decimal
+    from src.services import price_fetcher
+    from src.db.core import AccountDB, AccountType, InvestmentHoldingDB
+    Session, uid, _aid = job_env
+    monkeypatch.setattr(jr, "recalculate_account_snapshots",
+                        lambda **k: {"created": 0, "updated": 0, "failed": 0, "skipped": 0})
+    monkeypatch.setattr(price_fetcher, "fetch_bulk_prices",
+                        lambda symbols, delay=0.5: {s: Decimal("200.00") for s in symbols})
+
+    s = Session()
+    acct_a = AccountDB(uuid=uuid4(), user_id=uid, account_name="A", account_type=AccountType.INVESTMENT,
+                       institution_name="x", balance=Decimal("0"))
+    acct_b = AccountDB(uuid=uuid4(), user_id=uid, account_name="B", account_type=AccountType.INVESTMENT,
+                       institution_name="x", balance=Decimal("0"))
+    s.add_all([acct_a, acct_b])
+    s.flush()
+    a_id, b_id = acct_a.db_id, acct_b.db_id
+    s.add_all([
+        InvestmentHoldingDB(uuid=uuid4(), account_id=a_id, symbol="AAPL",
+                            quantity=Decimal("1"), average_cost_basis=Decimal("100"), current_price=None),
+        InvestmentHoldingDB(uuid=uuid4(), account_id=b_id, symbol="MSFT",
+                            quantity=Decimal("1"), average_cost_basis=Decimal("100"), current_price=None),
+    ])
+    s.commit()
+    s.close()
+
+    job_id = _seed_job(Session, uid, a_id)
+    jr.run_backfill_worker(job_id, a_id, date(2026, 1, 1), date(2026, 1, 31))
+
+    s = Session()
+    try:
+        ha = s.query(InvestmentHoldingDB).filter(InvestmentHoldingDB.account_id == a_id).first()
+        hb = s.query(InvestmentHoldingDB).filter(InvestmentHoldingDB.account_id == b_id).first()
+        assert ha.current_price == Decimal("200.00")  # affected account re-priced
+        assert hb.current_price is None                # other account untouched
+    finally:
+        s.close()
+    assert _get_job(Session, job_id).status == "COMPLETED"
+
+
+def test_worker_price_refresh_failure_is_nonfatal(job_env, monkeypatch):
+    # A price-fetch failure must not fail the job — cost-basis fallback stays valid.
+    Session, uid, aid = job_env
+    monkeypatch.setattr(jr, "recalculate_account_snapshots",
+                        lambda **k: {"created": 1, "updated": 0, "failed": 0, "skipped": 0})
+
+    def _boom(*a, **k):
+        raise RuntimeError("yahoo down")
+    monkeypatch.setattr(jr, "update_investment_prices", _boom)
+    job_id = _seed_job(Session, uid, aid)
+
+    jr.run_backfill_worker(job_id, aid, date(2026, 1, 1), date(2026, 1, 31))
+
+    job = _get_job(Session, job_id)
+    assert job.status == "COMPLETED"
+    assert job.snapshots_created == 1
+
+
 def test_recover_interrupted_jobs(job_env):
     Session, uid, aid = job_env
     pending = _seed_job(Session, uid, aid, status="PENDING")

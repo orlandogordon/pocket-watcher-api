@@ -13,7 +13,7 @@ from src.utils.time import utcnow
 from sqlalchemy.orm import Session
 
 from src.db.core import session_local as SessionLocal, SnapshotBackfillJobDB
-from src.services.account_snapshot import recalculate_account_snapshots
+from src.services.account_snapshot import recalculate_account_snapshots, update_investment_prices
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -102,6 +102,20 @@ def run_backfill_worker(job_id: int, account_id: int, start_date: date, end_date
                 end_date=end_date,
                 reason=f"Backfill job {job_id}"
             )
+
+            # Re-price this account's holdings (recalc only sets historical values); non-fatal.
+            try:
+                price_result = update_investment_prices(
+                    db, job.user_id, account_id=account_id
+                )
+                logger.info(
+                    f"Backfill job {job_id} refreshed current prices: {price_result}"
+                )
+            except Exception as price_error:
+                logger.warning(
+                    f"Backfill job {job_id} price refresh failed (non-fatal): {price_error}"
+                )
+                db.rollback()
 
             # Update job with results
             job.status = 'COMPLETED'
