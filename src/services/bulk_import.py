@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
@@ -46,6 +47,11 @@ class FileImportResult:
     # unreachable) — surfaced per-file so the bulk UI can flag un-enriched
     # imports (#60), mirroring the single-file llm_summary.degraded signal.
     degraded: bool = False
+    # Statement-reconciliation warning (#78): parsed rows didn't sum to the
+    # statement's own begin->end balance move. Non-blocking — rows still import.
+    reconciliation_warning: bool = False
+    reconciliation_delta: Optional[Decimal] = None
+    reconciliation_detail: Optional[str] = None
     error: Optional[str] = None
 
     @property
@@ -208,6 +214,17 @@ def process_file(
     try:
         is_csv = filename.lower().endswith(".csv")
         parsed_data = parser.parse(io.BytesIO(file_bytes), is_csv=is_csv)
+
+        # Statement reconciliation (#78): a numeric mismatch is a non-blocking
+        # warning carried on the result; the rows below still import. (An
+        # unclassified type would have raised inside parse and is handled by the
+        # except below as a hard failure.)
+        rec = parsed_data.reconciliation
+        if rec is not None and not rec.reconciled:
+            result.reconciliation_warning = True
+            result.reconciliation_delta = rec.delta
+            result.reconciliation_detail = rec.detail
+            logger.warning("bulk_import: %s — %s", filename, rec.detail)
 
         if parsed_data.transactions:
             parsed_items = [

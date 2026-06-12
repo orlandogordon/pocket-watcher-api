@@ -390,11 +390,13 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
 
     # Reconcile against the statement's own begin/end balance — a TD checking
     # statement is an asset account, so deposits raise the balance and
-    # payments/withdrawals lower it. Catches dropped/duplicated rows loudly
-    # instead of importing a wrong balance (todo #78). Only runs when both
-    # balances were found (always true for these PDFs; never for the CSV path).
+    # payments/withdrawals lower it. A numeric mismatch returns a non-fatal
+    # warning carried on ParsedData (import-and-flag); an unclassified type still
+    # raises (todo #78). Only runs when both balances were found (always true for
+    # these PDFs; never for the CSV path).
+    reconciliation = None
     if beginning_balance is not None and ending_balance is not None:
-        reconcile_statement_balance(
+        reconciliation = reconcile_statement_balance(
             transactions,
             expected_net_change=ending_balance - beginning_balance,
             credit_types=frozenset({"DEPOSIT", "CREDIT", "INTEREST", "TRANSFER_IN"}),
@@ -407,7 +409,11 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     if account_number and len(account_number) >= 4:
         account_info = ParsedAccountInfo(account_number_last4=account_number[-4:])
 
-    return ParsedData(account_info=account_info, transactions=transactions)
+    return ParsedData(
+        account_info=account_info,
+        transactions=transactions,
+        reconciliation=reconciliation,
+    )
 
 
 def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:

@@ -801,7 +801,7 @@ class TestReconcileStatementBalance(unittest.TestCase):
 
     def _reconcile(self, txns, expected_net):
         from src.parser.models import reconcile_statement_balance
-        reconcile_statement_balance(
+        return reconcile_statement_balance(
             txns,
             expected_net_change=Decimal(expected_net),
             credit_types=self.CREDIT,
@@ -809,20 +809,22 @@ class TestReconcileStatementBalance(unittest.TestCase):
             context="test",
         )
 
-    def test_passes_when_rows_match_net_change(self):
+    def test_reconciled_when_rows_match_net_change(self):
         # +2669.21 +2681.08 deposits, -253.45 purchases -> net +5096.84.
         txns = [
             self._txn("2669.21", "Deposit"),
             self._txn("2681.08", "Deposit"),
             self._txn("253.45", "Purchase"),
         ]
-        self._reconcile(txns, "5096.84")  # must not raise
+        result = self._reconcile(txns, "5096.84")
+        self.assertTrue(result.reconciled)
+        self.assertEqual(result.detail, "")
 
-    def test_raises_when_a_row_is_dropped(self):
+    def test_unreconciled_when_a_row_is_dropped(self):
         # Statement says the balance fell 3882.77, but a parser that dropped the
         # large payments hands back only deposits + a few small purchases (the
-        # exact 2026-05-13 failure that motivated this guard).
-        from src.parser.models import StatementParseError
+        # exact 2026-05-13 failure that motivated this guard). Numeric mismatch is
+        # a non-fatal warning: reconciled=False, no raise.
         # Kept rows net to +7830.48 (4 deposits 8083.45 - purchases 252.97);
         # statement moved -3882.77 -> off by exactly 11713.25.
         short = [
@@ -832,20 +834,19 @@ class TestReconcileStatementBalance(unittest.TestCase):
             self._txn("46.98", "Deposit"),
             self._txn("252.97", "Purchase"),
         ]
-        with self.assertRaises(StatementParseError) as ctx:
-            self._reconcile(short, "-3882.77")
-        # Message surfaces the delta so the failure is diagnosable.
-        self.assertIn("11713.25", str(ctx.exception).replace(",", ""))
+        result = self._reconcile(short, "-3882.77")
+        self.assertFalse(result.reconciled)
+        self.assertEqual(result.delta, Decimal("11713.25"))
+        self.assertIn("11713.25", result.detail.replace(",", ""))
 
     def test_tolerance_absorbs_one_cent(self):
-        self._reconcile([self._txn("100.00", "Deposit")], "100.01")  # within $0.01
+        self.assertTrue(self._reconcile([self._txn("100.00", "Deposit")], "100.01").reconciled)
 
-    def test_raises_just_outside_tolerance(self):
-        from src.parser.models import StatementParseError
-        with self.assertRaises(StatementParseError):
-            self._reconcile([self._txn("100.00", "Deposit")], "100.02")
+    def test_unreconciled_just_outside_tolerance(self):
+        self.assertFalse(self._reconcile([self._txn("100.00", "Deposit")], "100.02").reconciled)
 
     def test_unclassified_type_raises_not_silently_skipped(self):
+        # A type in neither set is a parser bug, not statement drift -> hard fail.
         from src.parser.models import StatementParseError
         with self.assertRaises(StatementParseError):
             self._reconcile([self._txn("100.00", "Mystery")], "100.00")
@@ -858,13 +859,14 @@ class TestReconcileStatementBalance(unittest.TestCase):
             self._txn("5255.87", "Purchase"),
             self._txn("6186.16", "Credit"),
         ]
-        reconcile_statement_balance(
+        result = reconcile_statement_balance(
             txns,
             expected_net_change=Decimal("-930.29"),
             credit_types=frozenset({"PURCHASE", "FEE", "INTEREST"}),
             debit_types=frozenset({"CREDIT", "TRANSFER_IN"}),
             context="cc",
         )
+        self.assertTrue(result.reconciled)
 
 
 class TestTdBankStatementReconciliation(unittest.TestCase):
@@ -881,9 +883,14 @@ class TestTdBankStatementReconciliation(unittest.TestCase):
         for pdf in pdfs:
             with self.subTest(statement=pdf.name):
                 try:
-                    parse_statement(pdf)
+                    parsed = parse_statement(pdf)
                 except StatementParseError as e:
-                    self.fail(f"{pdf.name} failed reconciliation: {e}")
+                    self.fail(f"{pdf.name} raised during reconciliation: {e}")
+                self.assertIsNotNone(parsed.reconciliation, f"{pdf.name}: no balances found")
+                self.assertTrue(
+                    parsed.reconciliation.reconciled,
+                    f"{pdf.name} did not reconcile: {parsed.reconciliation.detail}",
+                )
 
 
 if __name__ == "__main__":

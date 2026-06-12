@@ -24,6 +24,7 @@ def create_preview_session(
     summary: Dict[str, Any],
     account_info: Optional[Dict] = None,
     llm_summary: Optional[Dict[str, Any]] = None,
+    reconciliation: Optional[Dict[str, Any]] = None,
     storage_key: Optional[str] = None,
     file_size: Optional[int] = None,
     content_type: Optional[str] = None,
@@ -53,6 +54,8 @@ def create_preview_session(
         "ready_to_import": ready_to_import,
         "summary": summary,
         "llm_summary": llm_summary,
+        # Statement reconciliation outcome (#78); None when not checked.
+        "reconciliation": reconciliation,
         "created_at": to_utc_iso(utcnow()),
         "expires_at": to_utc_iso(expires_at),
     }

@@ -89,6 +89,9 @@ def process_batch(db, batch_id: int) -> None:
             job.investment_transactions_skipped = result.investments_skipped
             job.needs_review = result.needs_review
             job.llm_degraded = result.degraded
+            job.reconciliation_warning = result.reconciliation_warning
+            job.reconciliation_delta = result.reconciliation_delta
+            job.reconciliation_detail = result.reconciliation_detail
             job.status = "COMPLETED" if result.ok else "FAILED"
             job.error_message = result.error
             if result.ok and job.account_id is not None:
