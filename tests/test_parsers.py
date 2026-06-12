@@ -782,5 +782,109 @@ class TestAmexActivityCsvParse(unittest.TestCase):
         self.assertTrue(txns[1].merchant_truncated)
 
 
+class TestReconcileStatementBalance(unittest.TestCase):
+    """Statement-level reconciliation guard (todo #78). Asset convention:
+    deposits/credits raise the balance, purchases/withdrawals/fees lower it."""
+
+    CREDIT = frozenset({"DEPOSIT", "CREDIT", "INTEREST", "TRANSFER_IN"})
+    DEBIT = frozenset({"PURCHASE", "WITHDRAWAL", "FEE", "TRANSFER_OUT"})
+
+    def _txn(self, amount, ttype):
+        from src.parser.models import ParsedTransaction
+        from datetime import date
+        return ParsedTransaction(
+            transaction_date=date(2026, 5, 1),
+            description="x",
+            amount=Decimal(amount),
+            transaction_type=ttype,
+        )
+
+    def _reconcile(self, txns, expected_net):
+        from src.parser.models import reconcile_statement_balance
+        reconcile_statement_balance(
+            txns,
+            expected_net_change=Decimal(expected_net),
+            credit_types=self.CREDIT,
+            debit_types=self.DEBIT,
+            context="test",
+        )
+
+    def test_passes_when_rows_match_net_change(self):
+        # +2669.21 +2681.08 deposits, -253.45 purchases -> net +5096.84.
+        txns = [
+            self._txn("2669.21", "Deposit"),
+            self._txn("2681.08", "Deposit"),
+            self._txn("253.45", "Purchase"),
+        ]
+        self._reconcile(txns, "5096.84")  # must not raise
+
+    def test_raises_when_a_row_is_dropped(self):
+        # Statement says the balance fell 3882.77, but a parser that dropped the
+        # large payments hands back only deposits + a few small purchases (the
+        # exact 2026-05-13 failure that motivated this guard).
+        from src.parser.models import StatementParseError
+        # Kept rows net to +7830.48 (4 deposits 8083.45 - purchases 252.97);
+        # statement moved -3882.77 -> off by exactly 11713.25.
+        short = [
+            self._txn("2669.21", "Deposit"),
+            self._txn("2681.08", "Deposit"),
+            self._txn("2686.18", "Deposit"),
+            self._txn("46.98", "Deposit"),
+            self._txn("252.97", "Purchase"),
+        ]
+        with self.assertRaises(StatementParseError) as ctx:
+            self._reconcile(short, "-3882.77")
+        # Message surfaces the delta so the failure is diagnosable.
+        self.assertIn("11713.25", str(ctx.exception).replace(",", ""))
+
+    def test_tolerance_absorbs_one_cent(self):
+        self._reconcile([self._txn("100.00", "Deposit")], "100.01")  # within $0.01
+
+    def test_raises_just_outside_tolerance(self):
+        from src.parser.models import StatementParseError
+        with self.assertRaises(StatementParseError):
+            self._reconcile([self._txn("100.00", "Deposit")], "100.02")
+
+    def test_unclassified_type_raises_not_silently_skipped(self):
+        from src.parser.models import StatementParseError
+        with self.assertRaises(StatementParseError):
+            self._reconcile([self._txn("100.00", "Mystery")], "100.00")
+
+    def test_credit_card_debt_convention(self):
+        # Liability convention: charges raise the (debt) balance, payments lower
+        # it. New-Previous = +5255.87 - 6186.16 = -930.29.
+        from src.parser.models import reconcile_statement_balance
+        txns = [
+            self._txn("5255.87", "Purchase"),
+            self._txn("6186.16", "Credit"),
+        ]
+        reconcile_statement_balance(
+            txns,
+            expected_net_change=Decimal("-930.29"),
+            credit_types=frozenset({"PURCHASE", "FEE", "INTEREST"}),
+            debit_types=frozenset({"CREDIT", "TRANSFER_IN"}),
+            context="cc",
+        )
+
+
+class TestTdBankStatementReconciliation(unittest.TestCase):
+    """The TD parser must reconcile every real statement in the local corpus
+    (skips when the gitignored corpus is absent, e.g. fresh clone / CI)."""
+
+    def test_all_local_tdbank_statements_reconcile(self):
+        corpus = INPUT_DIR / "tdbank"
+        pdfs = sorted(corpus.glob("*.pdf")) if corpus.exists() else []
+        if not pdfs:
+            self.skipTest("no local tdbank corpus")
+        from src.parser.tdbank import parse_statement
+        from src.parser.models import StatementParseError
+        for pdf in pdfs:
+            with self.subTest(statement=pdf.name):
+                try:
+                    parse_statement(pdf)
+                except StatementParseError as e:
+                    self.fail(f"{pdf.name} failed reconciliation: {e}")
+
+
 if __name__ == "__main__":
     unittest.main()

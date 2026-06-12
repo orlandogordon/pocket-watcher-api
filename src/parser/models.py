@@ -199,3 +199,51 @@ class ParsedData(BaseModel):
     account_info: Optional[ParsedAccountInfo] = None
     transactions: List[ParsedTransaction] = Field(default_factory=list)
     investment_transactions: List[ParsedInvestmentTransaction] = Field(default_factory=list)
+
+
+def reconcile_statement_balance(
+    transactions: List[ParsedTransaction],
+    *,
+    expected_net_change: Decimal,
+    credit_types: frozenset,
+    debit_types: frozenset,
+    context: str = "",
+    tolerance: Decimal = Decimal("0.01"),
+) -> None:
+    """Fail a statement whose parsed rows don't reconcile to its own control totals.
+
+    The statement prints a trustworthy net balance move (e.g. a checking
+    statement's ``EndingBalance - BeginningBalance``); the parsed rows must sum to
+    it. ``credit_types`` move the balance up by ``abs(amount)``, ``debit_types``
+    move it down, both in the statement's own balance convention (for a credit
+    card that's debt: charges are credits, payments are debits). A type in
+    neither set raises rather than being silently skipped — an unclassified type
+    is exactly how a dropped row hides.
+
+    Raises ``StatementParseError`` on a mismatch beyond ``tolerance``. This is the
+    statement-level analogue of ``reconcile_equity_qty_price`` (#71/#72): silently
+    importing a wrong-but-plausible balance is the worst outcome for financial
+    data, and imports are atomic + dedup-safe, so fail-loud → fix → re-run is the
+    cheap, correct path. Callers should only invoke this when the control totals
+    were actually found (skip the check otherwise, e.g. CSVs with no balances).
+    """
+    net = Decimal("0")
+    for t in transactions:
+        tt = t.transaction_type.upper()
+        amt = abs(t.amount)
+        if tt in credit_types:
+            net += amt
+        elif tt in debit_types:
+            net -= amt
+        else:
+            raise StatementParseError(
+                f"{context}: transaction type {t.transaction_type!r} is not "
+                f"classified for balance reconciliation (credit or debit)"
+            )
+    delta = net - expected_net_change
+    if abs(delta) > tolerance:
+        raise StatementParseError(
+            f"{context}: parsed transactions net to {net:+.2f} but the statement "
+            f"balance moved {expected_net_change:+.2f} (off by {delta:+.2f}) — a "
+            f"transaction was likely dropped or duplicated during parsing"
+        )
