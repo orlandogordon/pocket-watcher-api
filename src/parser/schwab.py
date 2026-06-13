@@ -241,6 +241,59 @@ def _extract_fee_from_description(description: str) -> Decimal:
             pass
     return total
 
+# Boundary sits this far left of a left-aligned column's header word x0, so the
+# column's text (which left-aligns to that x0) falls cleanly inside the cell.
+_TEXT_COLUMN_MARGIN = 4
+
+# Fallback boundaries if a header word can't be located (legacy/static values).
+_FALLBACK_BOUNDARIES = {
+    "Date": 16, "Category": 45, "Action": 98, "CUSIP": 178, "Description": 252,
+}
+
+
+def _compute_vertical_lines(page, header_line) -> List[float]:
+    """Build the activity-table column boundaries from the header word positions.
+
+    Schwab renders different statements with a few-pixel horizontal shift, and the
+    transaction data left-aligns exactly to its column header (e.g. tickers start
+    at the "Symbol/CUSIP" header x0, company names at the "Description" header x0).
+    Hardcoded absolute boundaries therefore clip a leading glyph into the
+    neighbouring cell on the shifted statements (#79). Anchoring the five left,
+    text-aligned boundaries to their header word x0 makes them track the shift.
+
+    The five right, numeric columns are right-aligned and shift the other way, so
+    their tuned offsets are kept as-is.
+    """
+    words = [
+        w for w in page.extract_words(x_tolerance=1.5)
+        if header_line["top"] - 2 <= w["top"] <= header_line["bottom"] + 2
+    ]
+    first_x0 = {}
+    for w in words:
+        first_x0.setdefault(w["text"], w["x0"])
+
+    def left_edge(label: str) -> float:
+        # exact header word, else any word containing the label, else static fallback
+        x0 = first_x0.get(label)
+        if x0 is None:
+            x0 = next((w["x0"] for w in words if label in w["text"]), None)
+        return (x0 - _TEXT_COLUMN_MARGIN) if x0 is not None else _FALLBACK_BOUNDARIES[label]
+
+    return [
+        left_edge("Date"),
+        left_edge("Category"),
+        left_edge("Action"),
+        left_edge("CUSIP"),        # Symbol/CUSIP column
+        left_edge("Description"),
+        442,    # Before Quantity (right-aligned numeric; tuned)
+        512,    # Before Price/per Share
+        570,    # Before Charges/Interest
+        630,    # Before Amount
+        712,    # Before Gain/Loss
+        header_line["x1"],  # End of row
+    ]
+
+
 def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses a Schwab PDF statement using table-based extraction."""
     logger.info("Parsing investment transaction data from Schwab statement...")
@@ -295,26 +348,10 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
 
                 # Detect table header and set up column boundaries
                 if tracking_activity and "Date" in line_text and "Category" in line_text and "CUSIP" in line_text:
-                    # Header found - set vertical boundaries based on column positions
-                    # Columns: Date(18.2), Category(52.3), Action(108.7), Symbol/CUSIP(196.3),
-                    #          Description(271.9), Quantity(476.1), Price/Rate(539.2),
-                    #          Charges/Interest(593.5), Amount(673.9), Gain/Loss(754.0)
-
+                    # Header found - derive boundaries from the header word positions
+                    # so they track Schwab's per-statement horizontal shift (#79).
                     if not vertical_lines:  # Only set once
-                        # Precise boundaries based on visual alignment
-                        vertical_lines = [
-                            16,      # Before Date (18.2)
-                            45,      # Before Category (52.3)
-                            98,      # Before Action (108.7)
-                            178,     # Before CUSIP (196.3)
-                            252,     # Before Description (271.9)
-                            442,     # Before Quantity (476.1)
-                            512,     # Before perShare (539.2)
-                            570,     # Before Interest (593.5)
-                            630,     # Before Amount (673.9)
-                            712,     # Before Gain/Loss
-                            line['x1']  # End of row
-                        ]
+                        vertical_lines = _compute_vertical_lines(page, line)
                         logger.debug(f"Page {page_num + 1}: Set up column boundaries: {[f'{v:.1f}' for v in vertical_lines]}")
                     continue
 

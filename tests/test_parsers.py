@@ -126,6 +126,31 @@ class TestSchwabNormalize(unittest.TestCase):
         self.assertEqual(_normalize_transaction_type("Sell"), "SELL")
 
 
+class TestSchwabStatementSymbolIntegrity(unittest.TestCase):
+    """End-to-end #79 regression on the real corpus statement that exhibits the
+    column-boundary clip. The fix derives the activity-table boundaries from the
+    header word positions so they track Schwab's per-statement horizontal shift;
+    the recovered ticker AND its (previously truncated) description must come
+    through intact. Skips when the gitignored corpus is absent."""
+
+    def test_clipped_statement_parses_clean(self):
+        pdf = INPUT_DIR / "schwab" / "Brokerage Statement_2026-05-31_145.PDF"
+        if not pdf.exists():
+            self.skipTest("no local schwab corpus statement for #79")
+        from src.parser.schwab import parse
+        txns = parse(pdf).investment_transactions
+        symbols = {t.symbol for t in txns if t.symbol}
+        # ticker recovered, truncated form gone
+        self.assertIn("TSLA", symbols)
+        self.assertNotIn("SLA", symbols)
+        # description no longer loses its leading glyph ("ESLAINC" -> "TESLA…")
+        tsla = next(t for t in txns if t.symbol == "TSLA")
+        self.assertTrue(
+            tsla.description.upper().startswith("TESLA"),
+            f"description still truncated: {tsla.description!r}",
+        )
+
+
 class TestTDAmeritradeNormalize(unittest.TestCase):
     def test_funds_deposited(self):
         from src.parser.tdameritrade import _normalize_transaction_type
