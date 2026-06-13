@@ -893,5 +893,60 @@ class TestTdBankStatementReconciliation(unittest.TestCase):
                 )
 
 
+class TestAmazonSynchronyStatementReconciliation(unittest.TestCase):
+    """The Amazon (SYF) parser must reconcile every real statement in the local
+    corpus — including the consolidated multi-month bundles, which telescope from
+    the oldest Previous Balance to the newest New Balance (todo #78). Skips when
+    the gitignored corpus is absent (fresh clone / CI)."""
+
+    def test_all_local_amzn_statements_reconcile(self):
+        corpus = INPUT_DIR / "amzn-synchrony"
+        pdfs = sorted(corpus.glob("*.pdf")) if corpus.exists() else []
+        if not pdfs:
+            self.skipTest("no local amzn-synchrony corpus")
+        from src.parser.amzn_syf import parse_statement
+        from src.parser.models import StatementParseError
+        for pdf in pdfs:
+            with self.subTest(statement=pdf.name):
+                try:
+                    parsed = parse_statement(pdf)
+                except StatementParseError as e:
+                    self.fail(f"{pdf.name} raised during reconciliation: {e}")
+                self.assertIsNotNone(parsed.reconciliation, f"{pdf.name}: no balances found")
+                self.assertTrue(
+                    parsed.reconciliation.reconciled,
+                    f"{pdf.name} did not reconcile: {parsed.reconciliation.detail}",
+                )
+
+
+class TestAmexStatementReconciliation(unittest.TestCase):
+    """The Amex parser must reconcile every real statement in the local corpus,
+    dodging the all-$0.00 "Minimum Payment Warning" decoy block and the
+    Pay-Over-Time sub-balance breakdown (todo #78). Skips when the gitignored
+    corpus is absent (fresh clone / CI)."""
+
+    def test_all_local_amex_statements_reconcile(self):
+        from src.parser.amex import parse_statement
+        from src.parser.models import StatementParseError
+        pdfs = []
+        for sub in ("amex", "amex-gold-1005"):
+            corpus = INPUT_DIR / sub
+            if corpus.exists():
+                pdfs.extend(sorted(corpus.glob("*.pdf")))
+        if not pdfs:
+            self.skipTest("no local amex corpus")
+        for pdf in pdfs:
+            with self.subTest(statement=pdf.name):
+                try:
+                    parsed = parse_statement(pdf)
+                except StatementParseError as e:
+                    self.fail(f"{pdf.name} raised during reconciliation: {e}")
+                self.assertIsNotNone(parsed.reconciliation, f"{pdf.name}: no balances found")
+                self.assertTrue(
+                    parsed.reconciliation.reconciled,
+                    f"{pdf.name} did not reconcile: {parsed.reconciliation.detail}",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

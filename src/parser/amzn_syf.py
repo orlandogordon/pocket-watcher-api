@@ -1,4 +1,5 @@
 import csv
+import re
 import pdfplumber
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
@@ -6,12 +7,27 @@ from datetime import datetime
 from typing import List, Optional, Union, IO
 import io
 
-from src.parser.models import ParsedData, ParsedTransaction, ParsedAccountInfo
+from src.parser.models import (
+    ParsedData,
+    ParsedTransaction,
+    ParsedAccountInfo,
+    reconcile_statement_balance,
+)
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
 
 DATES = ['01/', '02/', '03/', '04/', '05/', '06/', '07/', '08/', '09/', '10/', '11/', '12/']
+
+# Account-summary balance anchors (todo #78). Only the "as of <date>" variants are
+# trustworthy control totals — the bare "New Balance: $Y" near the top and the
+# "MM/DD/YY New Balance $Y" payment-stub lines are decoys. findall returns them in
+# document (reverse-chronological) order, so the oldest Previous Balance is last and
+# the newest New Balance is first; a consolidated multi-month bundle telescopes
+# (each month's New Balance == the next month's Previous Balance), so opening==oldest
+# Previous and closing==newest New reconciles the whole file regardless of span.
+_PREV_BALANCE_RE = re.compile(r'Previous Balance as of \d{2}/\d{2}/\d{2,4}\s+\$?([\d,]+\.\d{2})')
+_NEW_BALANCE_RE = re.compile(r'New Balance as of \d{2}/\d{2}/\d{2,4}\s+\$?([\d,]+\.\d{2})')
 
 def _map_transaction_type(line: str, keywords: dict) -> List[bool]:
     """Determines the type of transactions being tracked based on section headers."""
@@ -184,8 +200,31 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             logger.warning(f"Skipping a row in AMZN_SYF statement due to parsing error: {line} -> {e}")
         i += 1
 
+    # Reconcile against the statement's own begin/end balance — a Synchrony store
+    # card is a liability, so charges (Purchase/Fee/Interest) raise the balance owed
+    # and payments/returns (TRANSFER_IN/Credit) lower it. A numeric mismatch returns
+    # a non-fatal warning on ParsedData (import-and-flag); an unclassified type still
+    # raises (todo #78). Only runs when both anchors were found.
+    reconciliation = None
+    prev_balances = _PREV_BALANCE_RE.findall(text)
+    new_balances = _NEW_BALANCE_RE.findall(text)
+    if prev_balances and new_balances:
+        opening = Decimal(prev_balances[-1].replace(',', ''))
+        closing = Decimal(new_balances[0].replace(',', ''))
+        reconciliation = reconcile_statement_balance(
+            parsed_transactions,
+            expected_net_change=closing - opening,
+            credit_types=frozenset({"PURCHASE", "FEE", "INTEREST"}),
+            debit_types=frozenset({"CREDIT", "TRANSFER_IN"}),
+            context="Amazon (SYF) statement",
+        )
+
     account_info = ParsedAccountInfo(account_number_last4=account_number[-4:]) if account_number else None
-    return ParsedData(account_info=account_info, transactions=parsed_transactions)
+    return ParsedData(
+        account_info=account_info,
+        transactions=parsed_transactions,
+        reconciliation=reconciliation,
+    )
 
 def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     """Parses an Amazon Synchrony CSV from a file path or in-memory stream."""

@@ -1,19 +1,35 @@
 import csv
 import re
 import pdfplumber
+from collections import Counter
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import List, Optional, IO, Union
 import io
 
-from src.parser.models import ParsedData, ParsedTransaction, ParsedAccountInfo
+from src.parser.models import (
+    ParsedData,
+    ParsedTransaction,
+    ParsedAccountInfo,
+    reconcile_statement_balance,
+)
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
 
 # A list of month prefixes to identify transaction lines
 DATES = ['01/', '02/', '03/', '04/', '05/', '06/', '07/', '08/', '09/', '10/', '11/', '12/']
+
+# Account-summary balance anchors for post-parse reconciliation (todo #78). Amex
+# interleaves these with disclosure prose and prints a decoy all-$0.00 "Minimum/
+# Late Payment Warning" example block plus (some layouts) a Pay-Over-Time
+# sub-balance breakdown, so the real Previous/New Balance is not the only match.
+# Empirically robust across every layout 2022→2026: the *last* Previous Balance
+# occurrence is the real opening, and the *most frequent* New Balance value is the
+# real closing (the real figure repeats 2-3x; the $0.00 decoy appears once).
+_PREV_BALANCE_RE = re.compile(r'Previous Balance\s+\$?([\d,]+\.\d{2})')
+_NEW_BALANCE_RE = re.compile(r'New Balance\s*=?\s*\$?([\d,]+\.\d{2})')
 
 def _clean_description(description: str) -> str:
     """Strip Amex-specific noise from a parsed description:
@@ -193,11 +209,31 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
             logger.warning(f"Skipping a row in AMEX statement due to parsing error: {line} -> {e}")
             continue
 
+    # Reconcile against the statement's own begin/end balance — an Amex card is a
+    # liability, so charges (Purchase/Fee/Interest) raise the balance owed and
+    # payments/credits (TRANSFER_IN/Credit) lower it. A numeric mismatch returns a
+    # non-fatal warning on ParsedData (import-and-flag); an unclassified type still
+    # raises (todo #78). Only runs when both anchors were found.
+    reconciliation = None
+    prev_balances = [Decimal(m.replace(',', '')) for m in _PREV_BALANCE_RE.findall(text)]
+    new_balances = [Decimal(m.replace(',', '')) for m in _NEW_BALANCE_RE.findall(text)]
+    if prev_balances and new_balances:
+        opening = prev_balances[-1]
+        closing = Counter(new_balances).most_common(1)[0][0]
+        reconciliation = reconcile_statement_balance(
+            parsed_transactions,
+            expected_net_change=closing - opening,
+            credit_types=frozenset({"PURCHASE", "FEE", "INTEREST"}),
+            debit_types=frozenset({"TRANSFER_IN", "CREDIT"}),
+            context="Amex statement",
+        )
+
     account_info = ParsedAccountInfo(account_number_last4=account_number.replace("-", "")) if account_number else None
 
     return ParsedData(
         account_info=account_info,
-        transactions=parsed_transactions
+        transactions=parsed_transactions,
+        reconciliation=reconciliation,
     )
 
 def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
