@@ -24,7 +24,7 @@ def _parse_date(date_str: str) -> Optional[datetime.date]:
     logger.warning(f"Could not parse date: {date_str}")
     return None
 
-def _normalize_transaction_type(transaction_type: str, description: str) -> str:
+def _normalize_transaction_type(transaction_type: str, description: str, amount: Optional[Decimal] = None) -> str:
     """
     Normalize TD Ameritrade transaction types to standard types:
     BUY, SELL, DIVIDEND, INTEREST, FEE, TRANSFER, OTHER
@@ -34,6 +34,11 @@ def _normalize_transaction_type(transaction_type: str, description: str) -> str:
     - "Margin Sell Securities Sold"
     - "Div/Int Income"
     - "Funds Deposited"
+
+    Interest direction follows the SIGNED amount (mirrors how transfer direction
+    is resolved in the Ameriprise parser): a charge is a cash debit, income a
+    credit. The cash replay encodes direction by type (INTEREST always credits),
+    so an interest charge must map to a debit type (FEE).
     """
     txn_lower = transaction_type.lower()
     desc_lower = description.lower() if description else ""
@@ -48,6 +53,10 @@ def _normalize_transaction_type(transaction_type: str, description: str) -> str:
     if "div" in txn_lower and re.search(r'\bdividend\b', desc_lower):
         return "DIVIDEND"
     if "int" in txn_lower or re.search(r'\binterest\b', desc_lower):
+        # Charge (negative amount) -> FEE (debit); income -> INTEREST (credit).
+        # Fall back to charge wording when the amount is unavailable.
+        if (amount is not None and amount < 0) or "margin interest" in desc_lower:
+            return "FEE"
         return "INTEREST"
 
     # Deposits/Withdrawals
@@ -66,6 +75,26 @@ def _normalize_transaction_type(transaction_type: str, description: str) -> str:
 
     # Everything else
     return "OTHER"
+
+def _maybe_recover_cash_journal(transaction_type: str, full_transaction_type: str,
+                                symbol: Optional[str], quantity: Optional[Decimal],
+                                amount: Optional[Decimal]) -> str:
+    """Reclassify a cash-only journal to a signed transfer (#80).
+
+    TDA posts cash adjustments (e.g. "Margin Journal - Other" courtesy credits) as
+    a journal _normalize_transaction_type can't map -> OTHER -> dropped at import.
+    A cash journal has no shares and a real amount, so route it to TRANSFER_IN/OUT
+    by sign. Gated to zero-quantity / no-symbol so a SHARE journal or corporate
+    action is never turned into phantom cash — those stay OTHER.
+    """
+    if (transaction_type == "OTHER"
+            and "journal" in full_transaction_type.lower()
+            and not symbol
+            and (quantity is None or quantity == 0)
+            and amount is not None and amount != 0):
+        return "TRANSFER_IN" if amount > 0 else "TRANSFER_OUT"
+    return transaction_type
+
 
 def _classify_security_type(transaction_type: str, description: str) -> SecurityType:
     """
@@ -462,8 +491,9 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 # Combine Type and Cash Activity to form full transaction type string
                 full_transaction_type = f"{txn_type} {cash_activity}".strip() if txn_type or cash_activity else "Unknown"
 
-                # Normalize to standard transaction type
-                transaction_type = _normalize_transaction_type(full_transaction_type, description)
+                # Normalize to standard transaction type (signed amount resolves
+                # interest charge vs income — see _normalize_transaction_type).
+                transaction_type = _normalize_transaction_type(full_transaction_type, description, clean_decimal(amount_str))
 
                 # Classify security type (temporarily for symbol extraction)
                 temp_security_type = _classify_security_type(full_transaction_type, description)
@@ -486,6 +516,10 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 clean_quantity = clean_decimal(quantity_str)
                 clean_price = clean_decimal(price_str)
                 clean_amount = clean_decimal(amount_str)
+
+                # Gated journal recovery (#80) — see _maybe_recover_cash_journal.
+                transaction_type = _maybe_recover_cash_journal(
+                    transaction_type, full_transaction_type, symbol, clean_quantity, clean_amount)
 
                 # #71: a share-trade row must carry quantity, price, AND amount — a
                 # null here is a real BUY/SELL/REINVESTMENT that parsed wrong, so

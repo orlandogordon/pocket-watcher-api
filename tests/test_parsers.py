@@ -125,6 +125,27 @@ class TestSchwabNormalize(unittest.TestCase):
         self.assertEqual(_normalize_transaction_type("Buy"), "BUY")
         self.assertEqual(_normalize_transaction_type("Sell"), "SELL")
 
+    def test_margin_interest_is_fee(self):
+        # Margin interest is a cash debit; must be FEE (replay subtracts it), not
+        # INTEREST (replay treats every INTEREST row as a credit).
+        from src.parser.schwab import _normalize_transaction_type
+        self.assertEqual(_normalize_transaction_type("Margin Interest"), "FEE")
+
+    def test_credit_interest_still_interest(self):
+        from src.parser.schwab import _normalize_transaction_type
+        self.assertEqual(_normalize_transaction_type("Credit Interest"), "INTEREST")
+
+    def test_interest_charge_by_negative_sign_is_fee(self):
+        # A negative amount marks a charge even without "margin" wording -> FEE.
+        from decimal import Decimal
+        from src.parser.schwab import _normalize_transaction_type
+        self.assertEqual(_normalize_transaction_type("Credit Interest", Decimal("-5.00")), "FEE")
+
+    def test_interest_income_by_positive_sign_is_interest(self):
+        from decimal import Decimal
+        from src.parser.schwab import _normalize_transaction_type
+        self.assertEqual(_normalize_transaction_type("Credit Interest", Decimal("0.09")), "INTEREST")
+
 
 class TestSchwabStatementSymbolIntegrity(unittest.TestCase):
     """End-to-end #79 regression on the real corpus statement that exhibits the
@@ -167,6 +188,78 @@ class TestTDAmeritradeNormalize(unittest.TestCase):
     def test_ach_out(self):
         from src.parser.tdameritrade import _normalize_transaction_type
         self.assertEqual(_normalize_transaction_type("Other", "ach out to bank"), "TRANSFER_OUT")
+
+    def test_margin_interest_charge_is_fee(self):
+        # Margin interest is a cash debit; must be FEE (replay subtracts it), not
+        # INTEREST (replay treats every INTEREST row as a credit). The marker is
+        # in the description on real TDA statements.
+        from src.parser.tdameritrade import _normalize_transaction_type
+        self.assertEqual(
+            _normalize_transaction_type("Div/Int", "MARGIN INTEREST CHARGE - Payable: 02/26/2021"),
+            "FEE",
+        )
+
+    def test_interest_credit_still_interest(self):
+        from src.parser.tdameritrade import _normalize_transaction_type
+        self.assertEqual(
+            _normalize_transaction_type("Div/Int", "INTEREST CREDIT - Payable: 02/26/2021"),
+            "INTEREST",
+        )
+
+    def test_interest_charge_by_negative_sign_is_fee(self):
+        # A negative amount marks a charge even without "margin" wording -> FEE.
+        from decimal import Decimal
+        from src.parser.tdameritrade import _normalize_transaction_type
+        self.assertEqual(_normalize_transaction_type("Div/Int", "INTEREST", Decimal("-2.50")), "FEE")
+
+    def test_interest_income_by_positive_sign_is_interest(self):
+        from decimal import Decimal
+        from src.parser.tdameritrade import _normalize_transaction_type
+        self.assertEqual(_normalize_transaction_type("Div/Int", "INTEREST", Decimal("2.50")), "INTEREST")
+
+
+class TestTDAmeritradeCashJournalRecovery(unittest.TestCase):
+    """#80: a cash-only journal ("Margin Journal - Other" courtesy adjustments)
+    is recovered to a signed transfer; share journals / corporate actions are
+    not, so they can't become phantom cash."""
+
+    def _recover(self, full_type, symbol, qty, amount):
+        from decimal import Decimal
+        from src.parser.tdameritrade import _maybe_recover_cash_journal
+        q = None if qty is None else Decimal(str(qty))
+        a = None if amount is None else Decimal(str(amount))
+        return _maybe_recover_cash_journal("OTHER", full_type, symbol, q, a)
+
+    def test_cash_credit_journal_becomes_transfer_in(self):
+        self.assertEqual(self._recover("Margin Journal - Other", None, 0, "0.01"), "TRANSFER_IN")
+
+    def test_cash_debit_journal_becomes_transfer_out(self):
+        self.assertEqual(self._recover("Margin Journal - Other", None, 0, "-0.01"), "TRANSFER_OUT")
+
+    def test_null_quantity_cash_journal_recovers(self):
+        self.assertEqual(self._recover("Cash Journal - Other", None, None, "5.00"), "TRANSFER_IN")
+
+    def test_share_journal_stays_other(self):
+        # Non-zero quantity = a position move; must NOT become cash.
+        self.assertEqual(self._recover("Margin Journal - Other", "AAPL", 10, "0.00"), "OTHER")
+
+    def test_journal_with_symbol_stays_other(self):
+        self.assertEqual(self._recover("Margin Journal - Other", "AAPL", 0, "100.00"), "OTHER")
+
+    def test_zero_amount_journal_stays_other(self):
+        self.assertEqual(self._recover("Margin Journal - Other", None, 0, "0.00"), "OTHER")
+
+    def test_non_journal_other_unchanged(self):
+        self.assertEqual(self._recover("Some Other Activity", None, 0, "5.00"), "OTHER")
+
+    def test_non_other_type_unchanged(self):
+        # Only OTHER rows are eligible; a real type is never rewritten.
+        from decimal import Decimal
+        from src.parser.tdameritrade import _maybe_recover_cash_journal
+        self.assertEqual(
+            _maybe_recover_cash_journal("DIVIDEND", "Margin Journal - Other", None, Decimal("0"), Decimal("5.00")),
+            "DIVIDEND",
+        )
 
 
 class TestTDAmeritradeRecoverSplit(unittest.TestCase):

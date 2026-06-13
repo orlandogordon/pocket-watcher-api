@@ -32,7 +32,7 @@ def _parse_date(date_str: str, year: Optional[str] = None) -> Optional[datetime.
     logger.warning(f"Could not parse date: {date_str} (year={year})")
     return None
 
-def _normalize_transaction_type(category: str) -> str:
+def _normalize_transaction_type(category: str, amount: Optional[Decimal] = None) -> str:
     """
     Normalize Schwab transaction types to standard format.
 
@@ -40,10 +40,14 @@ def _normalize_transaction_type(category: str) -> str:
     - BUY: Purchase of securities
     - SELL: Sale of securities
     - DIVIDEND: Dividend payments
-    - INTEREST: Interest income/charges
-    - FEE: Fees and charges
+    - INTEREST: Interest income (credit)
+    - FEE: Fees and charges, incl. interest CHARGED (debit)
     - TRANSFER: Deposits, withdrawals, fund transfers
     - OTHER: Corporate actions, adjustments, etc.
+
+    Interest direction follows the SIGNED amount: a charge is a cash debit, income
+    a credit. The replay encodes direction by type (INTEREST always credits), so
+    an interest charge must map to a debit type (FEE).
     """
     category_lower = category.lower()
 
@@ -61,6 +65,10 @@ def _normalize_transaction_type(category: str) -> str:
 
     # Interest
     if 'interest' in category_lower:
+        # Charge (negative amount) -> FEE (debit); income -> INTEREST (credit).
+        # Fall back to charge wording when the amount is unavailable.
+        if (amount is not None and amount < 0) or 'margin interest' in category_lower:
+            return "FEE"
         return "INTEREST"
 
     # Expiration
@@ -498,8 +506,9 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                         continue
                     parsed_date = current_date
 
-                # Normalize transaction type
-                transaction_type = _normalize_transaction_type(category)
+                # Normalize transaction type (signed amount resolves interest
+                # charge vs income — see _normalize_transaction_type).
+                transaction_type = _normalize_transaction_type(category, clean_decimal(amount_str))
 
                 # Extract symbol (only for BUY/SELL) - just the underlying ticker
                 symbol = _extract_symbol(symbol_cusip, category)
@@ -703,8 +712,9 @@ def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                 logger.warning(f"Could not parse date: {date_str}")
                 continue
 
-            # Normalize transaction type
-            transaction_type = _normalize_transaction_type(action)
+            # Normalize transaction type (signed amount resolves interest charge
+            # vs income — see _normalize_transaction_type).
+            transaction_type = _normalize_transaction_type(action, clean_decimal(amount_str))
 
             # Extract symbol (underlying ticker only)
             symbol = _extract_symbol(symbol_raw, action) if symbol_raw else None
