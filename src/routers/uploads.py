@@ -218,6 +218,7 @@ def _batch_progress(db: Session, batch: BulkImportBatchDB) -> Dict:
         "investment_transactions_created": j.investment_transactions_created,
         "investment_transactions_skipped": j.investment_transactions_skipped,
         "llm_degraded": j.llm_degraded,
+        **_reconciliation_fields(j.reconciliation_warning, j.reconciliation_delta, j.reconciliation_detail),
         "error_message": j.error_message,
     } for j in children]
     current = next((j.file_path for j in children if j.status == "PROCESSING"), None)
@@ -233,6 +234,9 @@ def _batch_progress(db: Session, batch: BulkImportBatchDB) -> Dict:
         # Batch-level AI signal: true if any file imported un-enriched (#60).
         # Canonical `llm_degraded`, uniform with the single-file/document responses.
         "llm_degraded": any(j.llm_degraded for j in children),
+        # Batch-level reconciliation signal: true if any file didn't reconcile
+        # (#78); the offending files carry their own delta/detail in per_file.
+        "reconciliation_warning": any(j.reconciliation_warning for j in children),
         "per_file": per_file,
         "created_at": batch.created_at,
         "completed_at": batch.completed_at,
@@ -313,6 +317,7 @@ def _document_summary(job: UploadJobDB) -> Dict:
         "institution": job.institution,
         "status": job.status,
         "llm_degraded": job.llm_degraded,
+        **_reconciliation_fields(job.reconciliation_warning, job.reconciliation_delta, job.reconciliation_detail),
         "account_uuid": str(job.account.uuid) if job.account else None,
         "transactions_created": job.transactions_created,
         "transactions_skipped": job.transactions_skipped,
@@ -484,6 +489,7 @@ def get_upload_job_status(
         "investment_transactions_created": job.investment_transactions_created,
         "investment_transactions_skipped": job.investment_transactions_skipped,
         "llm_degraded": job.llm_degraded,
+        **_reconciliation_fields(job.reconciliation_warning, job.reconciliation_delta, job.reconciliation_detail),
         "error_message": job.error_message,
         "created_at": job.created_at,
         "started_at": job.started_at,
@@ -620,6 +626,29 @@ def _llm_degraded_flag(llm_summary: Optional[dict]) -> bool:
     the frontend reads the same ``llm_degraded`` field across the single-file
     preview/confirm, bulk status, document, and job responses (#60)."""
     return bool((llm_summary or {}).get("degraded"))
+
+
+def _reconciliation_fields(warning: bool, delta, detail: Optional[str]) -> dict:
+    """Canonical reconciliation block for every job/preview response (#78).
+    Mirrors ``llm_degraded``: a top-level ``reconciliation_warning`` bool plus a
+    ``reconciliation`` object carrying the off-by amount/detail for the UI badge
+    (null when there's no warning)."""
+    return {
+        "reconciliation_warning": bool(warning),
+        "reconciliation": (
+            {"delta": str(delta) if delta is not None else None, "detail": detail}
+            if warning else None
+        ),
+    }
+
+
+def _session_reconciliation_fields(session: Optional[dict]) -> dict:
+    """Reconciliation block built from a preview session's stored ``reconciliation``
+    dict ({delta, detail} or None), for the preview-session and confirm responses."""
+    rec = (session or {}).get("reconciliation")
+    if not rec:
+        return _reconciliation_fields(False, None, None)
+    return _reconciliation_fields(True, rec.get("delta"), rec.get("detail"))
 
 
 @router.post("/statement/preview", status_code=201)
@@ -772,6 +801,14 @@ async def create_statement_preview(
     storage_key = build_key(user_id, uuid4(), file.filename or "")
     get_storage().save(file_bytes, storage_key)
 
+    # Statement reconciliation (#78): a numeric mismatch is a non-blocking
+    # warning carried through to confirm (and the UI badge). None when the parser
+    # had no control totals to check (e.g. CSVs).
+    rec = parsed_data.reconciliation
+    reconciliation_dict = None
+    if rec is not None and not rec.reconciled:
+        reconciliation_dict = {"delta": str(rec.delta), "detail": rec.detail}
+
     # Store in Redis
     session_id, expires_at = create_preview_session(
         r=r,
@@ -785,6 +822,7 @@ async def create_statement_preview(
         summary=summary,
         account_info=account_info_dict,
         llm_summary=llm_summary,
+        reconciliation=reconciliation_dict,
         storage_key=storage_key,
         file_size=len(file_bytes),
         content_type=file.content_type,
@@ -799,6 +837,11 @@ async def create_statement_preview(
         "ready_to_import": {"transactions": ready_txns, "investment_transactions": ready_inv},
         "llm_summary": llm_summary,
         "llm_degraded": _llm_degraded_flag(llm_summary),
+        **_reconciliation_fields(
+            reconciliation_dict is not None,
+            rec.delta if reconciliation_dict else None,
+            reconciliation_dict["detail"] if reconciliation_dict else None,
+        ),
     }
 
 
@@ -905,6 +948,7 @@ async def get_preview(
         "ready_to_import": session["ready_to_import"],
         "llm_summary": session.get("llm_summary"),
         "llm_degraded": _llm_degraded_flag(session.get("llm_summary")),
+        **_session_reconciliation_fields(session),
     }
 
 
@@ -955,6 +999,7 @@ async def reject_item(
         "ready_to_import": session["ready_to_import"],
         "llm_summary": session.get("llm_summary"),
         "llm_degraded": _llm_degraded_flag(session.get("llm_summary")),
+        **_session_reconciliation_fields(session),
     }
 
 
@@ -1005,6 +1050,7 @@ async def restore_item(
         "ready_to_import": session["ready_to_import"],
         "llm_summary": session.get("llm_summary"),
         "llm_degraded": _llm_degraded_flag(session.get("llm_summary")),
+        **_session_reconciliation_fields(session),
     }
 
 
@@ -1058,6 +1104,7 @@ async def bulk_reject_item(
         "ready_to_import": session["ready_to_import"],
         "llm_summary": session.get("llm_summary"),
         "llm_degraded": _llm_degraded_flag(session.get("llm_summary")),
+        **_session_reconciliation_fields(session),
         "processed": processed,
         "not_found": not_found,
     }
@@ -1113,6 +1160,7 @@ async def bulk_restore_item(
         "ready_to_import": session["ready_to_import"],
         "llm_summary": session.get("llm_summary"),
         "llm_degraded": _llm_degraded_flag(session.get("llm_summary")),
+        **_session_reconciliation_fields(session),
         "processed": processed,
         "not_found": not_found,
     }
@@ -1280,6 +1328,14 @@ async def confirm_statement_import(
         status="COMPLETED",
         # AI-offline signal for the document, mirroring the bulk path (#60).
         llm_degraded=bool((session.get("llm_summary") or {}).get("degraded")),
+        # Statement-reconciliation warning, mirroring the bulk path (#78).
+        reconciliation_warning=bool(session.get("reconciliation")),
+        reconciliation_delta=(
+            Decimal(session["reconciliation"]["delta"]) if session.get("reconciliation") else None
+        ),
+        reconciliation_detail=(
+            session["reconciliation"]["detail"] if session.get("reconciliation") else None
+        ),
         # Archived original file (#59) — makes this import a viewable document.
         storage_key=session.get("storage_key"),
         file_size=session.get("file_size"),
@@ -1591,6 +1647,7 @@ async def confirm_statement_import(
         "suggestion_accepted": suggestion_accept_count,
         "suggestion_overridden": suggestion_override_count,
         "llm_degraded": _llm_degraded_flag(session.get("llm_summary")),
+        **_session_reconciliation_fields(session),
     }
 
 

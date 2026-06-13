@@ -189,6 +189,43 @@ def test_process_file_marks_degraded_when_llm_unavailable(db, test_user, monkeyp
     assert result.degraded is True
 
 
+def test_process_file_flags_reconciliation_warning(db, test_user, fake_llm, monkeypatch):
+    """A statement whose rows don't reconcile to its control totals still imports
+    (non-blocking), but the per-file result carries the off-by delta/detail (#78)."""
+    from src.parser.models import ParsedData, ParsedTransaction, ReconciliationResult
+
+    class _FakeParser:
+        def parse(self, file_obj, is_csv=False):
+            return ParsedData(
+                transactions=[
+                    ParsedTransaction(
+                        transaction_date=date(2026, 5, 1), description="COFFEE",
+                        amount=Decimal("10.00"), transaction_type="PURCHASE",
+                    ),
+                ],
+                reconciliation=ReconciliationResult(
+                    reconciled=False,
+                    expected_net_change=Decimal("-100.00"),
+                    parsed_net=Decimal("10.00"),
+                    delta=Decimal("110.00"),
+                    detail="off by +110.00",
+                ),
+            )
+
+    monkeypatch.setitem(bulk_import.PARSER_MAPPING, "fakebank", _FakeParser())
+    account = _amex_account(db, test_user)
+    result = bulk_import.process_file(
+        db, file_bytes=b"ignored", filename="stmt.pdf", institution="fakebank",
+        account_id=account.db_id, user_id=test_user.db_id,
+    )
+
+    assert result.ok
+    assert result.transactions_created == 1  # rows still import despite the mismatch
+    assert result.reconciliation_warning is True
+    assert result.reconciliation_delta == Decimal("110.00")
+    assert "off by" in result.reconciliation_detail
+
+
 def _mta_pair():
     """Two genuinely identical same-day rows (e.g. two MTA pay-go taps)."""
     return [

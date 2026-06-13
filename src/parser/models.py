@@ -5,6 +5,10 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class StatementParseError(Exception):
     """A real transaction row could not be parsed.
@@ -195,7 +199,88 @@ class ParsedInvestmentTransaction(BaseModel):
 class ParsedAccountInfo(BaseModel):
     account_number_last4: str
 
+class ReconciliationResult(BaseModel):
+    """Outcome of checking parsed rows against a statement's own control totals.
+
+    ``reconciled=False`` is a *non-fatal* warning the import surfaces (a yellow
+    badge), not a block — the rows still import. Carries the numbers so the UI
+    can show "off by $X". An unclassified transaction type never reaches here;
+    that raises ``StatementParseError`` instead (a parser bug, not statement drift).
+    """
+    reconciled: bool
+    expected_net_change: Decimal
+    parsed_net: Decimal
+    delta: Decimal
+    detail: str = ""
+
+
 class ParsedData(BaseModel):
     account_info: Optional[ParsedAccountInfo] = None
     transactions: List[ParsedTransaction] = Field(default_factory=list)
     investment_transactions: List[ParsedInvestmentTransaction] = Field(default_factory=list)
+    # Set by parsers that have statement control totals (PDF begin/end balance);
+    # None when not checked (e.g. CSVs). reconciled=False → import-with-warning.
+    reconciliation: Optional[ReconciliationResult] = None
+
+
+def reconcile_statement_balance(
+    transactions: List[ParsedTransaction],
+    *,
+    expected_net_change: Decimal,
+    credit_types: frozenset,
+    debit_types: frozenset,
+    context: str = "",
+    tolerance: Decimal = Decimal("0.01"),
+) -> ReconciliationResult:
+    """Check parsed rows against a statement's own control totals.
+
+    The statement prints a trustworthy net balance move (e.g. a checking
+    statement's ``EndingBalance - BeginningBalance``); the parsed rows must sum to
+    it. ``credit_types`` move the balance up by ``abs(amount)``, ``debit_types``
+    move it down, both in the statement's own balance convention (for a credit
+    card that's debt: charges are credits, payments are debits).
+
+    Two distinct outcomes, deliberately handled differently (todo #78):
+
+    - **Numeric mismatch** (rows don't sum to the statement's net move): returned
+      as ``reconciled=False`` — a *non-fatal* warning. Most likely a dropped or
+      duplicated row; the user can re-check, so we import-and-flag rather than
+      block a possibly-benign edge case.
+    - **Unclassified transaction type** (a type in neither set): raises
+      ``StatementParseError``. That's a parser/coverage bug, not statement drift —
+      it can't be reconciled at all, and silently skipping it is exactly how a
+      dropped row hides. Fail loud so it gets fixed.
+
+    Callers invoke this only when control totals were found (skip otherwise, e.g.
+    CSVs with no balances).
+    """
+    net = Decimal("0")
+    for t in transactions:
+        tt = t.transaction_type.upper()
+        amt = abs(t.amount)
+        if tt in credit_types:
+            net += amt
+        elif tt in debit_types:
+            net -= amt
+        else:
+            raise StatementParseError(
+                f"{context}: transaction type {t.transaction_type!r} is not "
+                f"classified for balance reconciliation (credit or debit)"
+            )
+    delta = net - expected_net_change
+    reconciled = abs(delta) <= tolerance
+    detail = ""
+    if not reconciled:
+        detail = (
+            f"{context}: parsed transactions net to {net:+.2f} but the statement "
+            f"balance moved {expected_net_change:+.2f} (off by {delta:+.2f}) — a "
+            f"transaction was likely dropped or duplicated during parsing"
+        )
+        logger.warning(detail)
+    return ReconciliationResult(
+        reconciled=reconciled,
+        expected_net_change=expected_net_change,
+        parsed_net=net,
+        delta=delta,
+        detail=detail,
+    )

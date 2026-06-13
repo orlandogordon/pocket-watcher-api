@@ -995,6 +995,13 @@ class UploadJobDB(Base):
     # AI-offline flag the bulk/onboarding UI shows, mirroring the single-file
     # llm_summary.degraded signal.
     llm_degraded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Statement reconciliation signal (#78): True when the parsed rows didn't sum
+    # to the statement's own begin->end balance move — a non-blocking warning
+    # (job still COMPLETED), mirroring llm_degraded. delta/detail carry the
+    # "off by $X" numbers for the UI badge tooltip. Null delta when not checked.
+    reconciliation_warning: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="0")
+    reconciliation_delta: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(15, 2))
+    reconciliation_detail: Mapped[Optional[str]] = mapped_column(Text)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)

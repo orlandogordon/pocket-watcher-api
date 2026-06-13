@@ -7,7 +7,12 @@ from datetime import datetime
 from typing import List, Optional, Union, IO
 import io
 
-from src.parser.models import ParsedData, ParsedTransaction, ParsedAccountInfo
+from src.parser.models import (
+    ParsedData,
+    ParsedTransaction,
+    ParsedAccountInfo,
+    reconcile_statement_balance,
+)
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -89,7 +94,14 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     
     # Keywords for section detection
     start_parse_purchases_keywords = ['Payments', 'ElectronicPayments', 'ElectronicPayments(continued)', 'OtherWithdrawals']
-    end_parse_keywords = ['Call 1-800-937-2000', 'Subtotal:']
+    # A section ends at its `Subtotal:` or at the page footer. The footer flush
+    # is what closes a section's *first* chunk when it spills onto a later page
+    # (the chunk has no Subtotal of its own). The footer is the Bank-by-Phone
+    # line; match it by pattern, not a literal number — TD rotates the number
+    # (was 1-800-937-2000, now 1-888-751-9000) and a stale literal silently
+    # drops every payment before a page break (see todo #78).
+    end_parse_keywords = ['Subtotal:']
+    end_parse_footer_re = re.compile(r'^Call 1-\d{3}-\d{3}-\d{4}\b')
     start_parse_deposits_keywords = ['Deposits', 'ElectronicDeposits', 'ElectronicDeposits(continued)', 'OtherCredits']
     
     # Data storage
@@ -100,6 +112,10 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     deposit_data = []
     purchase_data = []
     transactions: List[ParsedTransaction] = []
+
+    # Statement control totals, for post-parse reconciliation (see todo #78).
+    beginning_balance = None
+    ending_balance = None
     
     # Table detection variables
     horizontal_lines = []
@@ -147,6 +163,18 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                         account_number = text_split[-1]
                         # Clean account number
                         account_number = re.sub(r'[^0-9]', '', account_number)
+
+                # Extract begin/end balance from the ACCOUNTSUMMARY block (the
+                # number can share a line with a second summary field, so anchor
+                # on the label and take the first money token after it).
+                if beginning_balance is None:
+                    m = re.search(r'BeginningBalance\s*\$?([\d,]+\.\d{2})', line_text)
+                    if m:
+                        beginning_balance = Decimal(m.group(1).replace(',', ''))
+                if ending_balance is None:
+                    m = re.search(r'EndingBalance\s*\$?([\d,]+\.\d{2})', line_text)
+                    if m:
+                        ending_balance = Decimal(m.group(1).replace(',', ''))
         
         logger.debug(f"Final months: {months}, years: {years}")
         logger.debug(f"Account number: {account_number[-4:] if account_number else 'null'}")
@@ -199,7 +227,10 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
                     horizontal_lines.append(line['top'])
                 
                 # End section detection
-                if (tracking_deposits or tracking_purchases) and any(line_text.startswith(prefix) for prefix in end_parse_keywords):
+                if (tracking_deposits or tracking_purchases) and (
+                    any(line_text.startswith(prefix) for prefix in end_parse_keywords)
+                    or end_parse_footer_re.match(line_text)
+                ):
                     if horizontal_lines and vertical_lines:
                         horizontal_lines.append(line['top'])
                         
@@ -357,12 +388,32 @@ def parse_statement(file_source: Union[Path, IO[bytes]]) -> ParsedData:
     
     logger.info(f"Successfully parsed {len(transactions)} transactions from TD Bank statement")
 
+    # Reconcile against the statement's own begin/end balance — a TD checking
+    # statement is an asset account, so deposits raise the balance and
+    # payments/withdrawals lower it. A numeric mismatch returns a non-fatal
+    # warning carried on ParsedData (import-and-flag); an unclassified type still
+    # raises (todo #78). Only runs when both balances were found (always true for
+    # these PDFs; never for the CSV path).
+    reconciliation = None
+    if beginning_balance is not None and ending_balance is not None:
+        reconciliation = reconcile_statement_balance(
+            transactions,
+            expected_net_change=ending_balance - beginning_balance,
+            credit_types=frozenset({"DEPOSIT", "CREDIT", "INTEREST", "TRANSFER_IN"}),
+            debit_types=frozenset({"PURCHASE", "WITHDRAWAL", "FEE", "TRANSFER_OUT"}),
+            context="TD Bank statement",
+        )
+
     # Create account info
     account_info = None
     if account_number and len(account_number) >= 4:
         account_info = ParsedAccountInfo(account_number_last4=account_number[-4:])
-    
-    return ParsedData(account_info=account_info, transactions=transactions)
+
+    return ParsedData(
+        account_info=account_info,
+        transactions=transactions,
+        reconciliation=reconciliation,
+    )
 
 
 def parse_csv(file_source: Union[Path, IO[bytes]]) -> ParsedData:
