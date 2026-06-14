@@ -108,6 +108,7 @@ def update_account(
 def delete_account(
     account_uuid: UUID,
     force: bool = Query(False),
+    purge_statements: bool = Query(False),
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
@@ -117,6 +118,11 @@ def delete_account(
     Without ?force=true, returns 409 if the account has associated data, else
     204 No Content. With ?force=true, cascade-deletes all associated records and
     returns 200 with the deletion counts (the cascade receipt).
+
+    By default force-delete keeps uploaded statements as user-level documents
+    (just unlinks them from the account). Pass ?purge_statements=true alongside
+    ?force=true to also delete those statements and their archived files from
+    storage. Ignored without force.
     """
     db_account = crud_account.read_db_account_by_uuid(db=db, account_uuid=account_uuid, user_id=user_id)
     if db_account is None:
@@ -124,7 +130,8 @@ def delete_account(
 
     try:
         deleted = crud_account.delete_db_account_by_uuid(
-            db=db, account_uuid=account_uuid, user_id=user_id, force=force
+            db=db, account_uuid=account_uuid, user_id=user_id, force=force,
+            purge_statements=purge_statements,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))

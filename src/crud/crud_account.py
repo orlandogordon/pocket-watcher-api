@@ -14,9 +14,10 @@ from src.db.core import (
     InvestmentTransactionDB, InvestmentHoldingDB,
     DebtPaymentDB, DebtPlanAccountLinkDB, DebtRepaymentScheduleDB,
     AccountValueHistoryDB, SnapshotBackfillJobDB,
-    UploadJobDB, SkippedTransactionDB,
+    UploadJobDB, SkippedTransactionDB, ParsedImportDB,
 )
 from src.models.account import AccountCreate, AccountUpdate, AccountStats, AccountTypeEnum
+from src.services.file_storage import get_storage
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -338,11 +339,24 @@ def update_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int, acc
         raise ValueError("Account update failed due to database constraint")
 
 
-def delete_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int, force: bool = False) -> Dict:
+def delete_db_account_by_uuid(
+    db: Session,
+    account_uuid: UUID,
+    user_id: int,
+    force: bool = False,
+    purge_statements: bool = False,
+) -> Dict:
     """Delete an account by UUID.
 
     If force=False (default), raises ValueError if the account has associated data.
     If force=True, cascade-deletes all associated records and returns deletion counts.
+
+    Upload-job (statement document) handling during a force delete:
+    - purge_statements=False (default): the account_id is nulled out, unlinking
+      the statements from the account but keeping them as user-level documents
+      (still browsable/openable via /uploads/documents) and their files on disk.
+    - purge_statements=True: the linked upload jobs and their archived files are
+      deleted outright — use to reclaim disk for statements you no longer want.
     """
     db_account = db.query(AccountDB).filter(
         AccountDB.uuid == account_uuid,
@@ -464,15 +478,52 @@ def delete_db_account_by_uuid(db: Session, account_uuid: UUID, user_id: int, for
             SnapshotBackfillJobDB.account_id == account_id
         ).delete(synchronize_session="fetch")
 
-        # 14. Upload jobs — null out account_id (preserves audit trail)
-        nulled_upload_jobs = db.query(UploadJobDB).filter(
-            UploadJobDB.account_id == account_id
-        ).update({"account_id": None}, synchronize_session="fetch")
-        deleted["upload_jobs_nulled"] = nulled_upload_jobs
+        # 14. Upload jobs (statement documents)
+        if purge_statements:
+            # Delete the linked jobs and reclaim their archived files. Collect
+            # storage keys before deleting the rows; remove files only after the
+            # commit succeeds so a rollback can't leave dangling DB rows.
+            account_jobs = db.query(UploadJobDB).filter(
+                UploadJobDB.account_id == account_id
+            ).all()
+            job_ids = [j.db_id for j in account_jobs]
+            storage_keys = [j.storage_key for j in account_jobs if j.storage_key]
+
+            if job_ids:
+                # Child rows referencing these jobs. Done explicitly so the
+                # delete is portable across SQLite/PG regardless of FK
+                # enforcement: skipped_transactions has a NOT NULL FK (must be
+                # removed); parsed_imports is an audit record we keep but
+                # detach (its FK is ON DELETE SET NULL).
+                db.query(SkippedTransactionDB).filter(
+                    SkippedTransactionDB.upload_job_id.in_(job_ids)
+                ).delete(synchronize_session="fetch")
+                db.query(ParsedImportDB).filter(
+                    ParsedImportDB.upload_job_id.in_(job_ids)
+                ).update({"upload_job_id": None}, synchronize_session="fetch")
+
+            deleted["upload_jobs_deleted"] = db.query(UploadJobDB).filter(
+                UploadJobDB.account_id == account_id
+            ).delete(synchronize_session="fetch")
+        else:
+            # Null out account_id — unlinks but preserves them as user documents.
+            storage_keys = []
+            deleted["upload_jobs_nulled"] = db.query(UploadJobDB).filter(
+                UploadJobDB.account_id == account_id
+            ).update({"account_id": None}, synchronize_session="fetch")
 
         # 15. Delete the account
         db.delete(db_account)
         db.commit()
+
+        # Files come off disk only after the DB commit lands.
+        if storage_keys:
+            storage = get_storage()
+            for key in storage_keys:
+                try:
+                    storage.delete(key)
+                except Exception:
+                    logger.exception("Failed to delete statement file %s during account purge", key)
 
         # Strip zero counts
         deleted = {k: v for k, v in deleted.items() if v > 0}

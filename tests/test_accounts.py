@@ -221,6 +221,58 @@ def test_delete_force_cascades_200(client, db, test_user):
     assert client.get(f"/accounts/{acct.uuid}").status_code == 404
 
 
+def _make_statement_doc(db, user, account, *, institution="tdbank"):
+    """Persist an upload-job document with a real file in isolated storage,
+    linked to ``account``. Returns (job, storage_key)."""
+    from src.db.core import UploadJobDB
+    from src.services import file_storage
+
+    key = file_storage.build_key(user.db_id, uuid4(), "stmt.pdf")
+    file_storage.get_storage().save(b"%PDF-1.4 fake", key)
+    job = UploadJobDB(
+        uuid=uuid4(), user_id=user.db_id, account_id=account.db_id,
+        institution=institution, storage_key=key, status="COMPLETED",
+    )
+    db.add(job)
+    db.commit()
+    return job, key
+
+
+def test_delete_force_unlinks_statements_by_default(client, db, test_user):
+    """Force-delete keeps statements as user docs: account_id nulled, file kept."""
+    from src.services import file_storage
+
+    acct = make_account(db, test_user, account_name="HasStmt")
+    job, key = _make_statement_doc(db, test_user, acct)
+
+    resp = client.delete(f"/accounts/{acct.uuid}", params={"force": "true"})
+    assert resp.status_code == 200
+    assert resp.json()["deleted"].get("upload_jobs_nulled") == 1
+    # Document survives, unlinked, and its file is still on disk.
+    db.refresh(job)
+    assert job.account_id is None
+    assert file_storage.get_storage().exists(key)
+
+
+def test_delete_force_purge_statements_removes_files(client, db, test_user):
+    """?purge_statements=true deletes the linked docs and their stored files."""
+    from src.db.core import UploadJobDB
+    from src.services import file_storage
+
+    acct = make_account(db, test_user, account_name="PurgeStmt")
+    job, key = _make_statement_doc(db, test_user, acct)
+    job_id = job.db_id
+
+    resp = client.delete(
+        f"/accounts/{acct.uuid}", params={"force": "true", "purge_statements": "true"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["deleted"].get("upload_jobs_deleted") == 1
+    # Row gone and file reclaimed.
+    assert db.query(UploadJobDB).filter(UploadJobDB.db_id == job_id).first() is None
+    assert not file_storage.get_storage().exists(key)
+
+
 def test_delete_unknown_uuid_404(client):
     assert client.delete(f"/accounts/{uuid4()}").status_code == 404
 
