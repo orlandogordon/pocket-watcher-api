@@ -12,7 +12,9 @@ from uuid import uuid4
 
 import pytest
 
-from src.db.core import AccountType, TransactionType
+from src.db.core import AccountType, TagDB, TransactionTagDB, TransactionType
+from src.services.system_tags import ensure_system_tags
+from src.utils.time import utcnow
 from tests.factories import make_account, make_category, make_transaction, make_user
 
 pytestmark = pytest.mark.integration
@@ -349,26 +351,177 @@ def test_delete_relationship_204(client, db, test_user):
     assert client.delete(f"/transactions/relationships/{rel['id']}").status_code == 204
 
 
-# ===== BULK UPDATE =====
+# ===== BULK PATCH (#81) =====
 
-def test_bulk_update_category(client, db, test_user):
+def _make_tag(db, user, name="MyTag"):
+    tag = TagDB(uuid=uuid4(), user_id=user.db_id, tag_name=name, color="#FFFFFF", is_system=False, created_at=utcnow())
+    db.add(tag)
+    db.flush()
+    return tag
+
+
+def _attach_needs_review(db, user, txn):
+    needs_review = next(t for t in ensure_system_tags(user.db_id, db) if t.tag_name == "Needs Review")
+    db.add(TransactionTagDB(transaction_id=txn.db_id, tag_id=needs_review.db_id, created_at=utcnow()))
+    db.flush()
+    return needs_review.db_id
+
+
+def _tag_ids_in_db(db, txn):
+    # Assert tag membership via the DB session (source of truth). A re-GET over
+    # HTTP can't be trusted for relationship collections here: the suite shares
+    # one Session across requests, so a previously-loaded collection serves stale
+    # rows. Production uses a fresh session per request, so this reflects reality.
+    db.expire_all()
+    return {link.tag_id for link in db.query(TransactionTagDB).filter_by(transaction_id=txn.db_id).all()}
+
+
+def test_bulk_patch_category(client, db, test_user):
     acct = make_account(db, test_user)
     cat = make_category(db, name="Reassigned")
     t1 = make_transaction(db, test_user, acct)
     t2 = make_transaction(db, test_user, acct)
 
     resp = client.patch(
-        "/transactions/bulk-update",
-        json={"transaction_uuids": [str(t1.uuid), str(t2.uuid)], "category_uuid": str(cat.uuid)},
+        "/transactions/bulk",
+        json={"uuids": [str(t1.uuid), str(t2.uuid)], "patch": {"category_uuid": str(cat.uuid)}},
     )
     assert resp.status_code == 200
+    assert resp.json() == {"updated": 2}
     assert client.get(f"/transactions/{t1.uuid}").json()["category"]["id"] == str(cat.uuid)
+    assert client.get(f"/transactions/{t2.uuid}").json()["category"]["id"] == str(cat.uuid)
 
 
-def test_bulk_update_no_fields_400(client, db, test_user):
+def test_bulk_patch_only_present_keys_change(client, db, test_user):
     acct = make_account(db, test_user)
-    t1 = make_transaction(db, test_user, acct)
-    resp = client.patch("/transactions/bulk-update", json={"transaction_uuids": [str(t1.uuid)]})
+    txn = make_transaction(db, test_user, acct, merchant_name="Old", comments="keep me")
+    resp = client.patch(
+        "/transactions/bulk",
+        json={"uuids": [str(txn.uuid)], "patch": {"merchant_name": "Amazon"}},
+    )
+    assert resp.status_code == 200
+    body = client.get(f"/transactions/{txn.uuid}").json()
+    assert body["merchant_name"] == "Amazon"
+    assert body["comments"] == "keep me"
+
+
+def test_bulk_patch_explicit_null_clears(client, db, test_user):
+    acct = make_account(db, test_user)
+    txn = make_transaction(db, test_user, acct, merchant_name="Old")
+    resp = client.patch(
+        "/transactions/bulk",
+        json={"uuids": [str(txn.uuid)], "patch": {"merchant_name": None}},
+    )
+    assert resp.status_code == 200
+    assert client.get(f"/transactions/{txn.uuid}").json()["merchant_name"] is None
+
+
+def test_bulk_patch_clear_review_strips_tag(client, db, test_user):
+    acct = make_account(db, test_user)
+    txn = make_transaction(db, test_user, acct)
+    nr_id = _attach_needs_review(db, test_user, txn)
+    assert nr_id in _tag_ids_in_db(db, txn)
+
+    resp = client.patch("/transactions/bulk", json={"uuids": [str(txn.uuid)], "clear_review": True})
+    assert resp.status_code == 200
+    assert nr_id not in _tag_ids_in_db(db, txn)
+
+
+def test_bulk_patch_clear_review_false_keeps_tag_but_applies_patch(client, db, test_user):
+    acct = make_account(db, test_user)
+    cat = make_category(db, name="Groceries")
+    txn = make_transaction(db, test_user, acct)
+    nr_id = _attach_needs_review(db, test_user, txn)
+
+    resp = client.patch(
+        "/transactions/bulk",
+        json={"uuids": [str(txn.uuid)], "patch": {"category_uuid": str(cat.uuid)}, "clear_review": False},
+    )
+    assert resp.status_code == 200
+    assert client.get(f"/transactions/{txn.uuid}").json()["category"]["id"] == str(cat.uuid)
+    assert nr_id in _tag_ids_in_db(db, txn)
+
+
+def test_bulk_patch_add_and_remove_tags_idempotent(client, db, test_user):
+    acct = make_account(db, test_user)
+    tag = _make_tag(db, test_user, name="Vacation")
+    txn = make_transaction(db, test_user, acct)
+
+    # Add twice — second add is a no-op, not an error, and doesn't duplicate
+    for _ in range(2):
+        resp = client.patch("/transactions/bulk", json={"uuids": [str(txn.uuid)], "add_tag_uuids": [str(tag.uuid)]})
+        assert resp.status_code == 200
+    assert _tag_ids_in_db(db, txn) == {tag.db_id}
+
+    # Remove it, then remove again — both succeed
+    for _ in range(2):
+        resp = client.patch("/transactions/bulk", json={"uuids": [str(txn.uuid)], "remove_tag_uuids": [str(tag.uuid)]})
+        assert resp.status_code == 200
+    assert tag.db_id not in _tag_ids_in_db(db, txn)
+
+
+def test_bulk_patch_atomic_rollback_on_bad_uuid(client, db, test_user):
+    acct = make_account(db, test_user)
+    cat = make_category(db, name="ShouldNotStick")
+    good = make_transaction(db, test_user, acct)
+
+    resp = client.patch(
+        "/transactions/bulk",
+        json={"uuids": [str(good.uuid), str(uuid4())], "patch": {"category_uuid": str(cat.uuid)}},
+    )
+    assert resp.status_code == 404
+    assert client.get(f"/transactions/{good.uuid}").json()["category"] is None
+
+
+def test_bulk_patch_foreign_uuid_rolls_back_404(client, db, test_user):
+    acct = make_account(db, test_user)
+    cat = make_category(db, name="Nope")
+    good = make_transaction(db, test_user, acct)
+    other = make_user(db)
+    other_acct = make_account(db, other)
+    foreign = make_transaction(db, other, other_acct)
+
+    resp = client.patch(
+        "/transactions/bulk",
+        json={"uuids": [str(good.uuid), str(foreign.uuid)], "patch": {"category_uuid": str(cat.uuid)}},
+    )
+    assert resp.status_code == 404
+    assert client.get(f"/transactions/{good.uuid}").json()["category"] is None
+
+
+def test_bulk_patch_no_changes_400(client, db, test_user):
+    acct = make_account(db, test_user)
+    txn = make_transaction(db, test_user, acct)
+    resp = client.patch("/transactions/bulk", json={"uuids": [str(txn.uuid)]})
+    assert resp.status_code == 400
+
+
+def test_bulk_patch_empty_uuids_422(client, db, test_user):
+    resp = client.patch("/transactions/bulk", json={"uuids": [], "patch": {"merchant_name": "X"}})
+    assert resp.status_code == 422
+
+
+def test_bulk_patch_unknown_category_404(client, db, test_user):
+    acct = make_account(db, test_user)
+    txn = make_transaction(db, test_user, acct)
+    resp = client.patch(
+        "/transactions/bulk",
+        json={"uuids": [str(txn.uuid)], "patch": {"category_uuid": str(uuid4())}},
+    )
+    assert resp.status_code == 404
+
+
+def test_bulk_patch_subcategory_mismatch_400(client, db, test_user):
+    acct = make_account(db, test_user)
+    parent_a = make_category(db, name="ParentA")
+    parent_b = make_category(db, name="ParentB")
+    sub_b = make_category(db, name="SubB", parent_category_id=parent_b.db_id)
+    txn = make_transaction(db, test_user, acct)
+
+    resp = client.patch(
+        "/transactions/bulk",
+        json={"uuids": [str(txn.uuid)], "patch": {"category_uuid": str(parent_a.uuid), "subcategory_uuid": str(sub_b.uuid)}},
+    )
     assert resp.status_code == 400
 
 
@@ -535,19 +688,6 @@ def test_guard_update_allows_field_edit_without_account_change(client, db, test_
     resp = client.put(f"/transactions/{txn.uuid}", json={"description": "edited"})
     assert resp.status_code == 200
     assert resp.json()["description"] == "edited"
-
-
-def test_guard_bulk_update_rejects_investment_target_no_partial_write(client, db, test_user):
-    checking, invest = _guard_accounts(db, test_user)
-    t1 = make_transaction(db, test_user, checking, description="t1")
-    t2 = make_transaction(db, test_user, checking, description="t2")
-    resp = client.patch("/transactions/bulk-update", json={
-        "transaction_uuids": [str(t1.uuid), str(t2.uuid)], "account_uuid": str(invest.uuid),
-    })
-    assert resp.status_code == 400
-    db.refresh(t1); db.refresh(t2)
-    assert t1.account_id == checking.db_id
-    assert t2.account_id == checking.db_id
 
 
 def test_guard_bulk_upload_rejects_investment_target(client, db, test_user):

@@ -10,7 +10,7 @@ from src.db.core import AccountType, NotFoundError, get_db
 from src.models.transaction import (
     TransactionCreate, TransactionUpdate, TransactionResponse, TransactionImport,
     TransactionRelationshipCreateByUUID, TransactionRelationshipUpdate, TransactionRelationship,
-    TransactionBulkUpdate, TransactionFilter, TransactionStats, TransactionTypeEnum,
+    TransactionBulkPatch, TransactionFilter, TransactionStats, TransactionTypeEnum,
     TransactionSplitRequest, SplitAllocationResponse,
     AmortizationScheduleCreate, AmortizationScheduleResponse,
     MonthlyAverageResponse,
@@ -28,7 +28,7 @@ from src.crud.crud_transaction import (
     read_transaction_relationships_by_uuid,
     update_transaction_relationship_by_uuid,
     delete_transaction_relationship_by_uuid,
-    bulk_update_db_transactions,
+    bulk_patch_transactions,
     set_transaction_splits,
     get_transaction_splits,
     delete_transaction_splits,
@@ -247,47 +247,72 @@ def create_transaction(transaction: TransactionCreate, db: Session = Depends(get
         raise HTTPException(status_code=400, detail="Database integrity error.") from e
     return TransactionResponse.model_validate(db_transaction)
 
-@router.patch("/bulk-update")
-def bulk_update_transactions(bulk_update_data: TransactionBulkUpdate, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)) -> Dict[str, Any]:
-    # Resolve transaction UUIDs - bulk_update_db_transactions filters by TransactionDB.uuid (UUID)
-    transaction_ids = list(bulk_update_data.transaction_uuids)
+def _resolve_tag_ids(db: Session, user_id: int, tag_uuids: List[UUID]) -> List[int]:
+    """Resolve tag UUIDs to int ids, verifying all belong to the user. Any
+    unknown/foreign tag uuid → 404 (don't-leak)."""
+    if not tag_uuids:
+        return []
+    unique = list(dict.fromkeys(tag_uuids))
+    tags = read_db_tags_by_uuids(db, unique, user_id)
+    if len(tags) != len(unique):
+        raise HTTPException(status_code=404, detail="One or more tags not found")
+    return [t.db_id for t in tags]
 
-    # Build update payload with resolved int IDs
-    update_payload = {}
-    if bulk_update_data.comments is not None:
-        update_payload["comments"] = bulk_update_data.comments
-    if bulk_update_data.account_uuid is not None:
-        account = read_db_account_by_uuid(db, bulk_update_data.account_uuid, user_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Account not found")
-        _reject_if_investment_account(account)
-        update_payload["account_id"] = account.db_id
-    if bulk_update_data.category_uuid is not None:
-        cat = read_db_category_by_uuid(db, bulk_update_data.category_uuid)
-        if not cat:
-            raise HTTPException(status_code=404, detail="Category not found")
-        update_payload["category_id"] = cat.db_id
-    if bulk_update_data.subcategory_uuid is not None:
-        subcat = read_db_category_by_uuid(db, bulk_update_data.subcategory_uuid)
-        if not subcat:
-            raise HTTPException(status_code=404, detail="Subcategory not found")
-        update_payload["subcategory_id"] = subcat.db_id
 
-    if not update_payload:
-        raise HTTPException(status_code=400, detail="No update fields provided.")
+@router.patch("/bulk")
+def patch_transactions_bulk(body: TransactionBulkPatch, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)) -> Dict[str, Any]:
+    patch = body.patch
+    present = patch.model_fields_set
+
+    if not present and not body.add_tag_uuids and not body.remove_tag_uuids and not body.clear_review:
+        raise HTTPException(status_code=400, detail="No changes requested.")
+
+    # Scalar passthrough fields mirror single-row PUT semantics; building a
+    # TransactionUpdate keeps only the present keys "set" so omitted keys stay
+    # untouched and explicit nulls clear.
+    scalar_kwargs = {f: getattr(patch, f) for f in ("transaction_type", "merchant_name", "comments") if f in present}
+    transaction_updates = TransactionUpdate(**scalar_kwargs)
+
+    category_id = None
+    clear_category = False
+    if "category_uuid" in present:
+        if patch.category_uuid is not None:
+            cat = read_db_category_by_uuid(db, patch.category_uuid)
+            if not cat:
+                raise HTTPException(status_code=404, detail="Category not found")
+            category_id = cat.db_id
+        else:
+            clear_category = True
+
+    subcategory_id = None
+    clear_subcategory = False
+    if "subcategory_uuid" in present:
+        if patch.subcategory_uuid is not None:
+            subcat = read_db_category_by_uuid(db, patch.subcategory_uuid)
+            if not subcat:
+                raise HTTPException(status_code=404, detail="Subcategory not found")
+            subcategory_id = subcat.db_id
+        else:
+            clear_subcategory = True
+
+    add_tag_ids = _resolve_tag_ids(db, user_id, body.add_tag_uuids)
+    remove_tag_ids = _resolve_tag_ids(db, user_id, body.remove_tag_uuids)
 
     try:
-        updated_count = bulk_update_db_transactions(
-            db=db,
-            user_id=user_id,
-            transaction_ids=transaction_ids,
-            updates=update_payload
+        updated = bulk_patch_transactions(
+            db, user_id,
+            transaction_uuids=body.uuids,
+            transaction_updates=transaction_updates,
+            category_id=category_id, clear_category=clear_category,
+            subcategory_id=subcategory_id, clear_subcategory=clear_subcategory,
+            add_tag_ids=add_tag_ids, remove_tag_ids=remove_tag_ids,
+            clear_review=body.clear_review,
         )
-        return {"message": f"Successfully updated {updated_count} transactions."}
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    return {"updated": updated}
 
 @router.post("/bulk-upload/", status_code=201)
 def create_transactions(transaction_import: TransactionImport, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)) -> List[TransactionResponse]:

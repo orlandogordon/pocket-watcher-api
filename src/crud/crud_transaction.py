@@ -22,6 +22,7 @@ from src.models.transaction import (
 from src.parser.models import ParsedTransaction
 from src.crud.crud_account import update_account_balance
 from src.crud.crud_category import read_db_categories_by_uuids
+from src.services.system_tags import get_system_tag
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -571,6 +572,53 @@ def update_db_transaction(db: Session, transaction_id: int, user_id: int,
     if not db_transaction:
         raise NotFoundError(f"Transaction with id {transaction_id} not found")
 
+    old_amount, old_account_id, old_account, old_txn_type, update_data = _apply_transaction_updates(
+        db, db_transaction, transaction_updates,
+        account_id=account_id, clear_account=clear_account,
+        category_id=category_id, subcategory_id=subcategory_id,
+        clear_category=clear_category, clear_subcategory=clear_subcategory,
+    )
+
+    try:
+        db.commit()
+        db.refresh(db_transaction)
+
+        # Update account balances if amount or account changed
+        amount_changed = 'amount' in update_data and update_data['amount'] != old_amount
+        account_changed = old_account_id != db_transaction.account_id
+
+        if amount_changed or account_changed:
+            # Reverse old effect from OLD account
+            if old_account:
+                reversed_balance = _reverse_balance_effect(old_account, old_txn_type, old_amount)
+                update_account_balance(db, old_account.db_id, reversed_balance)
+            # Apply new effect to NEW account
+            if db_transaction.account_id:
+                new_account = db.query(AccountDB).filter(AccountDB.db_id == db_transaction.account_id).first()
+                if new_account:
+                    update_account_balance_from_transaction(db, new_account, db_transaction)
+
+        return db_transaction
+    except IntegrityError:
+        db.rollback()
+        raise ValueError("Transaction update failed due to database constraint")
+
+
+def _apply_transaction_updates(db: Session, db_transaction: TransactionDB,
+                               transaction_updates: TransactionUpdate, *,
+                               account_id: Optional[int] = None,
+                               clear_account: bool = False,
+                               category_id: Optional[int] = None,
+                               subcategory_id: Optional[int] = None,
+                               clear_category: bool = False,
+                               clear_subcategory: bool = False):
+    """Apply field changes to a transaction in-memory. Does NOT commit and does
+    NOT touch account balances — the caller owns the transaction boundary and any
+    balance recompute. Returns the pre-change snapshot
+    ``(old_amount, old_account_id, old_account, old_txn_type, update_data)`` needed
+    to adjust balances afterward. Shared by the single-row PUT and the bulk PATCH
+    (#81) so both apply identical field semantics."""
+
     # Store old state for balance adjustment
     old_amount = db_transaction.amount
     old_account_id = db_transaction.account_id
@@ -653,29 +701,77 @@ def update_db_transaction(db: Session, transaction_id: int, user_id: int,
     # Always update the updated_at timestamp
     db_transaction.updated_at = utcnow()
 
+    return old_amount, old_account_id, old_account, old_txn_type, update_data
+
+
+def bulk_patch_transactions(db: Session, user_id: int, *,
+                            transaction_uuids: List[UUID],
+                            transaction_updates: TransactionUpdate,
+                            category_id: Optional[int] = None,
+                            clear_category: bool = False,
+                            subcategory_id: Optional[int] = None,
+                            clear_subcategory: bool = False,
+                            add_tag_ids: Optional[List[int]] = None,
+                            remove_tag_ids: Optional[List[int]] = None,
+                            clear_review: bool = False) -> int:
+    """Atomically apply one partial patch (+ tag add/remove + optional review-clear)
+    to many transactions (#81). All rows succeed or the whole call rolls back.
+
+    Field handling reuses ``_apply_transaction_updates`` so behavior matches the
+    single-row PUT. The patch carries no ``amount`` or account move, so it can't
+    change an account balance — no balance recompute is needed here."""
+    add_tag_ids = add_tag_ids or []
+    remove_ids = set(remove_tag_ids or [])
+    if clear_review:
+        review_tag = get_system_tag(user_id, db, "Needs Review")
+        if review_tag is not None:
+            remove_ids.add(review_tag.db_id)
+
+    rows = db.query(TransactionDB).filter(
+        TransactionDB.user_id == user_id,
+        TransactionDB.uuid.in_(transaction_uuids),
+    ).all()
+    found = {r.uuid for r in rows}
+    missing = set(transaction_uuids) - found
+    if missing:
+        raise NotFoundError(f"Transactions not found or not owned by user: {sorted(str(m) for m in missing)}")
+
+    for db_transaction in rows:
+        _apply_transaction_updates(
+            db, db_transaction, transaction_updates,
+            category_id=category_id, clear_category=clear_category,
+            subcategory_id=subcategory_id, clear_subcategory=clear_subcategory,
+        )
+        for tag_id in add_tag_ids:
+            already = db.query(TransactionTagDB).filter(
+                TransactionTagDB.transaction_id == db_transaction.db_id,
+                TransactionTagDB.tag_id == tag_id,
+            ).first()
+            if not already:
+                db.add(TransactionTagDB(
+                    transaction_id=db_transaction.db_id,
+                    tag_id=tag_id,
+                    created_at=utcnow(),
+                ))
+        if remove_ids:
+            # ORM-delete (not a bulk query delete) so the row is removed from the
+            # parent's loaded collection — otherwise the commit's save-update
+            # cascade would re-insert it.
+            existing = db.query(TransactionTagDB).filter(
+                TransactionTagDB.transaction_id == db_transaction.db_id,
+                TransactionTagDB.tag_id.in_(remove_ids),
+            ).all()
+            for link in existing:
+                db.delete(link)
+
     try:
         db.commit()
-        db.refresh(db_transaction)
-
-        # Update account balances if amount or account changed
-        amount_changed = 'amount' in update_data and update_data['amount'] != old_amount
-        account_changed = old_account_id != db_transaction.account_id
-
-        if amount_changed or account_changed:
-            # Reverse old effect from OLD account
-            if old_account:
-                reversed_balance = _reverse_balance_effect(old_account, old_txn_type, old_amount)
-                update_account_balance(db, old_account.db_id, reversed_balance)
-            # Apply new effect to NEW account
-            if db_transaction.account_id:
-                new_account = db.query(AccountDB).filter(AccountDB.db_id == db_transaction.account_id).first()
-                if new_account:
-                    update_account_balance_from_transaction(db, new_account, db_transaction)
-        
-        return db_transaction
     except IntegrityError:
         db.rollback()
-        raise ValueError("Transaction update failed due to database constraint")
+        raise ValueError("Bulk update failed due to database constraint")
+
+    logger.info(f"Bulk-patched {len(rows)} transactions for user {user_id}")
+    return len(rows)
 
 
 def delete_db_transaction(db: Session, transaction_id: int, user_id: int) -> bool:
@@ -1477,46 +1573,6 @@ def bulk_create_transactions_from_parsed_data(
     except Exception as e:
         db.rollback()
         raise ValueError(f"Bulk transaction import failed: {str(e)}")
-
-def bulk_update_db_transactions(db: Session, user_id: int, transaction_ids: List[int], updates: Dict[str, Any]) -> int:
-    """Bulk update transactions for a user."""
-    
-    if not transaction_ids:
-        return 0
-        
-    # Fetch transactions to ensure they belong to the user and exist
-    transactions_to_update = db.query(TransactionDB).filter(
-        TransactionDB.user_id == user_id,
-        TransactionDB.uuid.in_(transaction_ids)
-    ).all()
-    
-    if len(transactions_to_update) != len(transaction_ids):
-        # This indicates that some transaction IDs were not found or didn't belong to the user
-        found_ids = {t.uuid for t in transactions_to_update}
-        missing_ids = set(transaction_ids) - found_ids
-        raise NotFoundError(f"Transactions with IDs {missing_ids} not found or not owned by user.")
-
-    # Perform the update
-    # Note: This performs a bulk update, which is more efficient than updating one by one.
-    # However, it does not trigger individual object lifecycle events (e.g., before_update).
-    # For this use case, it's acceptable.
-    update_query = db.query(TransactionDB).filter(
-        TransactionDB.user_id == user_id,
-        TransactionDB.uuid.in_(transaction_ids)
-    )
-    
-    # Add updated_at timestamp
-    updates_with_timestamp = {**updates, "updated_at": utcnow()}
-    
-    updated_count = update_query.update(updates_with_timestamp, synchronize_session=False)
-    
-    try:
-        db.commit()
-        return updated_count
-    except Exception as e:
-        db.rollback()
-        raise ValueError(f"Bulk transaction update failed: {str(e)}")
-
 
 # ===== UUID-BASED OPERATIONS FOR API ENDPOINTS =====
 

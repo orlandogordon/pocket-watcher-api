@@ -68,11 +68,19 @@ def _isolated_storage(tmp_path, monkeypatch):
 
 @pytest.fixture(scope="session")
 def engine():
-    eng = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
+    # Default to in-memory SQLite, but allow pointing the suite at a real
+    # database (e.g. the dev Postgres container) via TEST_DATABASE_URL to verify
+    # PG-specific behavior before shipping. Use a DEDICATED test database — the
+    # per-test savepoint rolls back, but create_all/drop_all touch the schema.
+    test_url = os.environ.get("TEST_DATABASE_URL")
+    if test_url:
+        eng = create_engine(test_url)
+    else:
+        eng = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
     Base.metadata.create_all(eng)
     yield eng
     eng.dispose()

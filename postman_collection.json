@@ -410,7 +410,7 @@
                     "response": []
                 },
                 {
-                    "name": "Bulk Update Transactions",
+                    "name": "Bulk Patch Transactions",
                     "request": {
                         "method": "PATCH",
                         "header": [
@@ -421,16 +421,16 @@
                         ],
                         "body": {
                             "mode": "raw",
-                            "raw": "{\n    \"transaction_ids\": [\"f47ac10b-58cc-4372-a567-0e02b2c3d479\"],\n    \"category_id\": 1,\n    \"needs_review\": false\n}"
+                            "raw": "{\n    \"uuids\": [\"f47ac10b-58cc-4372-a567-0e02b2c3d479\"],\n    \"patch\": {\n        \"category_uuid\": \"f47ac10b-58cc-4372-a567-0e02b2c3d479\",\n        \"merchant_name\": \"Amazon\"\n    },\n    \"add_tag_uuids\": [],\n    \"remove_tag_uuids\": [],\n    \"clear_review\": true\n}"
                         },
                         "url": {
-                            "raw": "{{baseUrl}}/transactions/bulk-update",
+                            "raw": "{{baseUrl}}/transactions/bulk",
                             "host": [
                                 "{{baseUrl}}"
                             ],
                             "path": [
                                 "transactions",
-                                "bulk-update"
+                                "bulk"
                             ]
                         }
                     },

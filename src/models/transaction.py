@@ -94,19 +94,37 @@ class TransactionUpdate(BaseModel):
         return v.strip() if v else v
 
 
-class TransactionBulkUpdate(BaseModel):
-    """Model for bulk updating transactions."""
-    transaction_uuids: List[UUID] = Field(..., description="A list of transaction UUIDs to update.")
-    account_uuid: Optional[UUID] = Field(None, description="Set a new account for all specified transactions.")
-    category_uuid: Optional[UUID] = Field(None, description="Set a new category for all specified transactions.")
-    subcategory_uuid: Optional[UUID] = Field(None, description="Set a new sub-category for all specified transactions.")
-    comments: Optional[str] = Field(None, description="Add or overwrite comments for all specified transactions.")
+class TransactionPatch(BaseModel):
+    """Fields a bulk PATCH can write. Only keys *present* in the request are
+    applied; an explicit ``null`` clears the column. The endpoint relies on
+    ``model_fields_set`` to tell an omitted key from an explicit null."""
+    transaction_type: Optional[TransactionTypeEnum] = None
+    merchant_name: Optional[str] = Field(None, max_length=255)
+    category_uuid: Optional[UUID] = Field(None, description="UUID of the category to set; null clears it.")
+    subcategory_uuid: Optional[UUID] = Field(None, description="UUID of the sub-category to set; null clears it.")
+    comments: Optional[str] = None
 
-    @field_validator('transaction_uuids')
+    @field_validator('merchant_name')
     @classmethod
-    def validate_transaction_uuids(cls, v: List[UUID]) -> List[UUID]:
+    def validate_merchant_name(cls, v: Optional[str]) -> Optional[str]:
+        return v.strip() if v else v
+
+
+class TransactionBulkPatch(BaseModel):
+    """Atomic bulk partial-update for grouped inbox review (#81). Applies one
+    ``patch`` plus tag add/remove and an optional review-clear to every uuid; the
+    whole call succeeds or rolls back."""
+    uuids: List[UUID] = Field(..., description="Transaction UUIDs to patch.")
+    patch: TransactionPatch = Field(default_factory=TransactionPatch, description="Partial field updates; only present keys are applied.")
+    add_tag_uuids: List[UUID] = Field(default_factory=list, description="Tags to add to every uuid (idempotent).")
+    remove_tag_uuids: List[UUID] = Field(default_factory=list, description="Tags to remove from every uuid (idempotent).")
+    clear_review: bool = Field(False, description="Strip the 'Needs Review' system tag from every uuid.")
+
+    @field_validator('uuids')
+    @classmethod
+    def validate_uuids(cls, v: List[UUID]) -> List[UUID]:
         if not v:
-            raise ValueError("transaction_uuids list cannot be empty.")
+            raise ValueError("uuids list cannot be empty.")
         return v
 
 
