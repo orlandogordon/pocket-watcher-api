@@ -73,6 +73,24 @@ def _preview(client, account_uuid, *, institution="amex"):
     )
 
 
+def test_demo_mode_rejects_non_sample_upload(client, fake_llm, cc_account, monkeypatch):
+    # Guard is wired into the preview route: in demo mode an arbitrary file 403s.
+    monkeypatch.setenv("DEMO_MODE", "1")
+    resp = client.post(
+        "/uploads/statement/preview",
+        files={"file": ("evil.csv", b"not,a,known,sample\n1,2,3,4", "text/csv")},
+        data={"institution": "amex", "account_uuid": str(cc_account.uuid)},
+    )
+    assert resp.status_code == 403
+
+
+def test_demo_mode_allows_committed_sample(client, fake_llm, cc_account, monkeypatch):
+    # The bundled synthetic sample (allowlisted) is NOT blocked in demo mode.
+    monkeypatch.setenv("DEMO_MODE", "1")
+    resp = _preview(client, cc_account.uuid)
+    assert resp.status_code != 403
+
+
 # ===== PREVIEW (parse + duplicate analysis) =====
 
 def test_preview_parses_all_rows(client, fake_llm, cc_account):

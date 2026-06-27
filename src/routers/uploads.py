@@ -17,6 +17,7 @@ from src.db.core import (
 )
 from src.auth.dependencies import get_current_user_id
 from src.services.importer import PARSER_MAPPING
+from src.services.demo_guard import enforce_demo_upload_allowlist
 from src.services.file_storage import get_storage, build_key
 from src.services.bulk_import_runner import submit_bulk_import
 from src.services.redis_client import get_redis_dependency
@@ -139,6 +140,7 @@ async def upload_statement_file(
         raise HTTPException(status_code=400, detail="Empty file")
     if len(contents) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="File exceeds the per-file size limit")
+    enforce_demo_upload_allowlist(contents)
 
     document_uuid = uuid4()
     storage_key = build_key(user_id, document_uuid, file.filename or "")
@@ -696,6 +698,7 @@ async def create_statement_preview(
 
     # Parse the file
     file_bytes = await file.read()
+    enforce_demo_upload_allowlist(file_bytes)
     file_obj = io.BytesIO(file_bytes)
     is_csv = file.content_type == "text/csv"
     source_type = "CSV" if is_csv else "PDF"

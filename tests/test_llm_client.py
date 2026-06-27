@@ -12,7 +12,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.constants.categories import all_parent_uuids, subcategory_to_parent
-from src.services.llm_client import LlamaCppClient, LLMUnavailableError
+from src.services.llm_client import (
+    AnthropicClient,
+    LlamaCppClient,
+    LLMUnavailableError,
+)
 
 _SUB_TO_PARENT = subcategory_to_parent()
 SUB = next(iter(_SUB_TO_PARENT))
@@ -152,3 +156,105 @@ def test_health_check_online_empty_list_falls_back_to_config_model():
 
 def test_health_check_offline_on_exception_never_raises():
     assert _health_client(exc=RuntimeError("connection refused")).health_check() == (False, None)
+
+
+# ---- AnthropicClient (#82) — anthropic SDK mocked at the boundary ----
+
+class _Block:
+    """Stand-in for an anthropic content block."""
+    def __init__(self, text=None, type="text"):
+        self.type = type
+        if text is not None:
+            self.text = text
+
+
+class _Resp:
+    def __init__(self, blocks, stop_reason="end_turn"):
+        self.content = blocks
+        self.stop_reason = stop_reason
+
+
+def _anthropic(payload=None, *, content=None, blocks=None, raise_exc=None,
+               stop_reason="end_turn"):
+    c = AnthropicClient(model="claude-haiku-4-5", api_key="test-key")
+    mock = MagicMock()
+    if raise_exc is not None:
+        mock.messages.create.side_effect = raise_exc
+    else:
+        if blocks is None:
+            text = content if content is not None else json.dumps(payload)
+            blocks = [_Block(text=text)]
+        mock.messages.create.return_value = _Resp(blocks, stop_reason)
+    c._client = mock  # inject — skips lazy SDK construction
+    return c
+
+
+def test_anthropic_empty_batch_makes_no_api_call():
+    c = _anthropic(payload={"results": []})
+    assert c.process_transaction_batch([]) == []
+    c._client.messages.create.assert_not_called()
+
+
+def test_anthropic_uses_structured_outputs_and_cached_system():
+    c = _anthropic(_payload("Starbucks", SUB, CORRECT_PARENT, 0.98))
+    c.process_transaction_batch([{"description": "SBUX"}])
+    kwargs = c._client.messages.create.call_args.kwargs
+    assert kwargs["output_config"]["format"]["type"] == "json_schema"
+    # system prompt sent as a cached block (cost control, #82 §5)
+    assert kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_anthropic_parent_is_derived_from_subcategory_not_model_value():
+    c = _anthropic(_payload("Starbucks", SUB, WRONG_PARENT, 0.98))
+    [res] = c.process_transaction_batch([{"description": "SBUX"}])
+    assert res["suggested_subcategory_uuid"] == SUB
+    assert res["suggested_category_uuid"] == CORRECT_PARENT  # shared post-processing
+
+
+def test_anthropic_low_category_confidence_nulls_the_pair_and_merchant():
+    c = _anthropic(_payload("Starbucks", SUB, CORRECT_PARENT, 0.5))
+    [res] = c.process_transaction_batch([{"description": "SBUX"}])
+    assert res["suggested_subcategory_uuid"] is None
+    assert res["suggested_category_uuid"] is None
+    assert res["merchant_name"] is None
+
+
+def test_anthropic_malformed_json_raises_unavailable():
+    c = _anthropic(content="not valid json{")
+    with pytest.raises(LLMUnavailableError):
+        c.process_transaction_batch([{"description": "x"}])
+
+
+def test_anthropic_no_text_block_raises_unavailable():
+    # Refusal / truncation: empty content array, no JSON to read.
+    c = _anthropic(blocks=[], stop_reason="refusal")
+    with pytest.raises(LLMUnavailableError):
+        c.process_transaction_batch([{"description": "x"}])
+
+
+def test_anthropic_result_count_mismatch_raises_unavailable():
+    c = _anthropic(payload={"results": []})  # zero results for one input
+    with pytest.raises(LLMUnavailableError):
+        c.process_transaction_batch([{"description": "x"}])
+
+
+def test_anthropic_transport_error_raises_unavailable():
+    c = _anthropic(raise_exc=RuntimeError("connection refused"))
+    with pytest.raises(LLMUnavailableError):
+        c.process_transaction_batch([{"description": "x"}])
+
+
+def test_anthropic_health_check_online_reports_model_id():
+    c = AnthropicClient(model="claude-haiku-4-5", api_key="test-key")
+    mock = MagicMock()
+    mock.with_options.return_value.models.retrieve.return_value = _FakeModel("claude-haiku-4-5")
+    c._client = mock
+    assert c.health_check() == (True, "claude-haiku-4-5")
+
+
+def test_anthropic_health_check_offline_never_raises():
+    c = AnthropicClient(model="claude-haiku-4-5", api_key="test-key")
+    mock = MagicMock()
+    mock.with_options.return_value.models.retrieve.side_effect = RuntimeError("down")
+    c._client = mock
+    assert c.health_check() == (False, None)

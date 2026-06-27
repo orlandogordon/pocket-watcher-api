@@ -326,6 +326,66 @@ _SYSTEM_PROMPT = _build_system_prompt()
 _SUB_TO_PARENT = subcategory_to_parent()
 
 
+def _postprocess_results(results: list) -> list[TransactionBatchResult]:
+    """Apply the backend-agnostic post-processing to raw model rows.
+
+    Shared by every ``LLMClient`` backend so a suggestion is identical
+    regardless of ``LLM_BACKEND``: the subcategory->parent correction (trust the
+    harder subcategory pick, derive the parent — the schema constrains each UUID
+    to its own enum but not parent-child consistency), the independent category
+    (``_CATEGORY_CONFIDENCE_FLOOR``) and merchant (``_MERCHANT_CONFIDENCE_FLOOR``)
+    confidence floors, and null passthrough. The caller is responsible for the
+    count check (``len(results) == len(parsed)``) before calling this.
+
+    Raises ``LLMUnavailableError`` if any row is missing an expected field.
+    """
+    out: list[TransactionBatchResult] = []
+    for r in results:
+        try:
+            confidence = float(r.get("confidence", 0.0))
+
+            # Category nullability: the model can emit null for either or both
+            # UUID fields. Treat them as a pair — if either is null, both go to
+            # None. Apply the confidence floor too: low-confidence category
+            # guesses route through the Needs Review tag instead of being filed
+            # at face value (#34).
+            raw_sub = r["suggested_subcategory_uuid"]
+            raw_cat = r["suggested_category_uuid"]
+            if raw_sub is None or raw_cat is None or confidence < _CATEGORY_CONFIDENCE_FLOOR:
+                sub_uuid: Optional[str] = None
+                cat_uuid: Optional[str] = None
+            else:
+                sub_uuid = str(raw_sub)
+                # Trust the subcategory, derive the parent — see _SUB_TO_PARENT comment.
+                cat_uuid = _SUB_TO_PARENT.get(sub_uuid, str(raw_cat))
+
+            # Merchant nullability: schema allows null, and we additionally drop
+            # merchant when confidence is below the floor (catches the noise tier
+            # — Mobile/Annual Fee/Asset-Based — even when the model emits a
+            # string for those rows).
+            raw_merchant = r["merchant_name"]
+            if raw_merchant is None:
+                merchant: Optional[str] = None
+            else:
+                stripped = str(raw_merchant).strip()
+                if not stripped or confidence < _MERCHANT_CONFIDENCE_FLOOR:
+                    merchant = None
+                else:
+                    merchant = stripped
+
+            out.append({
+                "merchant_name": merchant,
+                "suggested_category_uuid": cat_uuid,
+                "suggested_subcategory_uuid": sub_uuid,
+                "confidence": confidence,
+            })
+        except (KeyError, TypeError, ValueError) as e:
+            logger.error(f"LLM result missing expected fields: {r!r}")
+            raise LLMUnavailableError(f"Malformed result row: {e}") from e
+
+    return out
+
+
 def _build_batch_json_schema(count: int) -> dict:
     """Response must be {"results": [TransactionBatchResult, ...]} of exactly `count` items.
 
@@ -527,51 +587,7 @@ class LlamaCppClient(LLMClient):
             )
             raise LLMUnavailableError("Item count mismatch")
 
-        out: list[TransactionBatchResult] = []
-        for r in results:
-            try:
-                confidence = float(r.get("confidence", 0.0))
-
-                # Category nullability: the model can emit null for either or
-                # both UUID fields. Treat them as a pair — if either is null,
-                # both go to None. Apply the confidence floor too: low-confidence
-                # category guesses route through the Needs Review tag instead
-                # of being filed at face value (#34).
-                raw_sub = r["suggested_subcategory_uuid"]
-                raw_cat = r["suggested_category_uuid"]
-                if raw_sub is None or raw_cat is None or confidence < _CATEGORY_CONFIDENCE_FLOOR:
-                    sub_uuid: Optional[str] = None
-                    cat_uuid: Optional[str] = None
-                else:
-                    sub_uuid = str(raw_sub)
-                    # Trust the subcategory, derive the parent — see _SUB_TO_PARENT comment.
-                    cat_uuid = _SUB_TO_PARENT.get(sub_uuid, str(raw_cat))
-
-                # Merchant nullability: schema allows null, and we additionally
-                # drop merchant when confidence is below the floor (catches the
-                # noise tier — Mobile/Annual Fee/Asset-Based — even when the
-                # model emits a string for those rows).
-                raw_merchant = r["merchant_name"]
-                if raw_merchant is None:
-                    merchant: Optional[str] = None
-                else:
-                    stripped = str(raw_merchant).strip()
-                    if not stripped or confidence < _MERCHANT_CONFIDENCE_FLOOR:
-                        merchant = None
-                    else:
-                        merchant = stripped
-
-                out.append({
-                    "merchant_name": merchant,
-                    "suggested_category_uuid": cat_uuid,
-                    "suggested_subcategory_uuid": sub_uuid,
-                    "confidence": confidence,
-                })
-            except (KeyError, TypeError, ValueError) as e:
-                logger.error(f"LLM result missing expected fields: {r!r}")
-                raise LLMUnavailableError(f"Malformed result row: {e}") from e
-
-        return out
+        return _postprocess_results(results)
 
     def health_check(self) -> tuple[bool, Optional[str]]:
         # Hit GET /v1/models with a short timeout — cheap, no completion. Any
@@ -587,31 +603,122 @@ class LlamaCppClient(LLMClient):
 
 
 class AnthropicClient(LLMClient):
-    """Stub for production Anthropic backend — #30 implements this for real.
+    """Production Anthropic backend (used by the public portfolio demo, #82).
 
-    Will use the native ``anthropic`` SDK (not the OpenAI-compat layer —
-    Anthropic's OpenAI-compat layer ignores ``response_format``). Structured
-    output is enforced via tool use: define a tool whose input_schema matches
-    ``TransactionBatchResult`` with the category UUID enums, force
-    ``tool_choice={"type": "tool", "name": ...}``, read ``response.content[0].input``.
+    Uses the native ``anthropic`` SDK (not the OpenAI-compat layer — that shim
+    ignores structured-output controls). Structured output is enforced with
+    **native structured outputs** (``output_config.format`` with a json_schema),
+    which is the closest 1:1 with the llama path: the same inner schema from
+    ``_build_batch_json_schema`` is reused, so the category-UUID ``anyOf:[enum,
+    null]`` constraint transfers and the response's text block is guaranteed
+    valid JSON. Array ``minItems``/``maxItems`` are NOT enforced under structured
+    outputs, so the runtime count check is retained. Post-processing (confidence
+    floors, null-pairing, parent derivation) goes through the shared
+    ``_postprocess_results`` so suggestions match the llama backend exactly.
+
+    The large, constant ``_SYSTEM_PROMPT`` is sent as a cached system block
+    (``cache_control: ephemeral``) so steady-state input cost drops ~90% — it
+    pairs with the public key's hard monthly spend cap (#82 §5).
     """
 
-    def __init__(self, model: str, api_key: Optional[str]):
+    # Generous ceiling for the JSON response. A batch is capped at LLM_BATCH_SIZE
+    # (20) rows of ~150 tokens each, so 8192 leaves ample headroom; non-streaming
+    # at this size stays well under the SDK's HTTP-timeout guard.
+    _MAX_TOKENS = 8192
+
+    def __init__(self, model: str, api_key: Optional[str], timeout_s: float = 120.0):
         self._model = model
         self._api_key = api_key
+        self._timeout_s = timeout_s
+        # Constructed lazily so importing this module never requires the
+        # anthropic SDK or an API key unless this backend is actually used;
+        # injectable in tests by setting ``_client`` directly.
+        self._client = None
 
     @property
     def model_name(self) -> str:
         return self._model
 
+    def _get_client(self):
+        if self._client is None:
+            import anthropic
+
+            self._client = anthropic.Anthropic(
+                api_key=self._api_key, timeout=self._timeout_s
+            )
+        return self._client
+
     def process_transaction_batch(self, parsed: list) -> list[TransactionBatchResult]:
-        raise NotImplementedError(
-            "AnthropicClient is not implemented yet. Set LLM_BACKEND=llama_cpp."
+        if not parsed:
+            return []
+
+        import anthropic
+
+        client = self._get_client()
+        # Reuse the llama path's inner schema; Anthropic wants {type, schema}.
+        schema = _build_batch_json_schema(len(parsed))["schema"]
+        try:
+            response = client.messages.create(
+                model=self._model,
+                max_tokens=self._MAX_TOKENS,
+                temperature=0.0,  # Haiku 4.5 still accepts sampling params.
+                system=[{
+                    "type": "text",
+                    "text": _SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }],
+                messages=[
+                    {"role": "user", "content": _render_parsed_for_prompt(parsed)},
+                ],
+                output_config={"format": {"type": "json_schema", "schema": schema}},
+            )
+        except (anthropic.APIConnectionError, anthropic.APITimeoutError) as e:
+            logger.warning(f"Anthropic backend unreachable ({type(e).__name__}): {e}")
+            raise LLMUnavailableError(str(e)) from e
+        except Exception as e:
+            logger.error(f"Anthropic call failed: {e}", exc_info=True)
+            raise LLMUnavailableError(str(e)) from e
+
+        # output_config.format guarantees a text block of valid JSON on success;
+        # a refusal/truncation yields no usable text and surfaces as unavailable.
+        text = next(
+            (b.text for b in response.content if getattr(b, "type", None) == "text"),
+            None,
         )
+        if not text:
+            logger.error(
+                f"Anthropic returned no JSON text (stop_reason={response.stop_reason})"
+            )
+            raise LLMUnavailableError(
+                f"No structured output (stop_reason={response.stop_reason})"
+            )
+        try:
+            payload = json.loads(text)
+            results = payload["results"]
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.error(f"Anthropic returned malformed JSON: {text!r}")
+            raise LLMUnavailableError(f"Malformed JSON: {e}") from e
+
+        if len(results) != len(parsed):
+            logger.error(
+                f"Anthropic returned {len(results)} items for {len(parsed)} inputs; discarding"
+            )
+            raise LLMUnavailableError("Item count mismatch")
+
+        return _postprocess_results(results)
 
     def health_check(self) -> tuple[bool, Optional[str]]:
-        # Not implemented — the self-hosted deployment runs llama_cpp only.
-        return False, None
+        # Cheap reachability probe via GET /v1/models/{id} — no completion, per
+        # the interface contract. Any failure means offline (never raises).
+        try:
+            client = self._get_client()
+            model = client.with_options(timeout=_HEALTH_TIMEOUT_S).models.retrieve(
+                self._model
+            )
+            return True, getattr(model, "id", self._model)
+        except Exception as e:
+            logger.info("LLM health probe offline (%s: %s)", type(e).__name__, e)
+            return False, None
 
 
 _client_singleton: Optional[LLMClient] = None
@@ -647,6 +754,7 @@ def get_llm_client() -> LLMClient:
         _client_singleton = AnthropicClient(
             model=os.getenv("LLM_MODEL", "claude-haiku-4-5-20251001"),
             api_key=os.getenv("LLM_API_KEY"),
+            timeout_s=timeout_s,
         )
     else:
         raise ValueError(f"Unknown LLM_BACKEND: {backend!r}")
