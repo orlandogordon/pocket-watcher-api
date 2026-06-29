@@ -1,0 +1,8 @@
+# Demo upload samples must stay byte-identical to the sha256 allowlist in
+# src/services/demo_guard.py (and to the copies the frontend bundles). Mark them
+# binary so git never rewrites line endings (autocrlf), which would change the
+# bytes and 403 every sample in the live demo.
+tests/parsers/fixtures/amex_sample.csv binary
+tests/parsers/fixtures/schwab_sample.csv binary
+tests/parsers/fixtures/tdbank_sample.csv binary
+tests/parsers/fixtures/ameriprise_sample.csv binary

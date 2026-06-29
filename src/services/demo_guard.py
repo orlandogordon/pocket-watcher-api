@@ -26,11 +26,11 @@ from src.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# sha256 of tests/parsers/fixtures/{ameriprise,amex,schwab}_sample.csv — the
+# sha256 of tests/parsers/fixtures/{amex,tdbank,schwab}_sample.csv — the
 # synthetic statements the demo frontend offers as "Try this sample →".
 DEMO_SAMPLE_SHA256 = frozenset({
-    "cd2d0aa55f29f24cdfac788d35fb7a0948116c7b3c1544bc66de4d743db7edf2",  # ameriprise_sample.csv
     "ac69766db216eb65f5a11f4ba25c48f82aee26f195534ec80bb42c10dc3a8fdf",  # amex_sample.csv
+    "fb84c896b0ad0bc1aaae9d8304f76a0e8cddf1f019c9929ba40c295c4a4e4c76",  # tdbank_sample.csv
     "a56f271c0c2919cd12092c4e9d07dddcce361caf667be238cc9b55b7b35619a4",  # schwab_sample.csv
 })
 
