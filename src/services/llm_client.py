@@ -386,6 +386,36 @@ def _postprocess_results(results: list) -> list[TransactionBatchResult]:
     return out
 
 
+# JSON Schema validation/annotation keywords that Anthropic's native structured
+# outputs reject (or that carry no value there). The llama backend tolerates
+# them, so they're only stripped on the Anthropic path. Structural keywords
+# (type, properties, items, enum, anyOf, required, additionalProperties, …) are
+# preserved.
+_ANTHROPIC_UNSUPPORTED_SCHEMA_KEYS = frozenset({
+    "minItems", "maxItems", "uniqueItems", "contains", "minContains", "maxContains",
+    "minLength", "maxLength", "pattern", "format",
+    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+    "minProperties", "maxProperties",
+    "default", "examples",
+})
+
+
+def _strip_unsupported_anthropic_keywords(node):
+    """Recursively drop keywords Anthropic structured outputs don't accept.
+
+    Returns a new structure; the input (shared with the llama path) is untouched.
+    """
+    if isinstance(node, dict):
+        return {
+            k: _strip_unsupported_anthropic_keywords(v)
+            for k, v in node.items()
+            if k not in _ANTHROPIC_UNSUPPORTED_SCHEMA_KEYS
+        }
+    if isinstance(node, list):
+        return [_strip_unsupported_anthropic_keywords(v) for v in node]
+    return node
+
+
 def _build_batch_json_schema(count: int) -> dict:
     """Response must be {"results": [TransactionBatchResult, ...]} of exactly `count` items.
 
@@ -656,7 +686,14 @@ class AnthropicClient(LLMClient):
 
         client = self._get_client()
         # Reuse the llama path's inner schema; Anthropic wants {type, schema}.
-        schema = _build_batch_json_schema(len(parsed))["schema"]
+        # Anthropic structured outputs accept only a subset of JSON Schema and
+        # 400 on validation keywords the llama path tolerates (array
+        # minItems/maxItems > 1, numeric minimum/maximum, etc.). Strip them —
+        # the exact-count guarantee is still enforced by the runtime check on
+        # `results` below, and confidence clamping happens in post-processing.
+        schema = _strip_unsupported_anthropic_keywords(
+            _build_batch_json_schema(len(parsed))["schema"]
+        )
         try:
             response = client.messages.create(
                 model=self._model,
