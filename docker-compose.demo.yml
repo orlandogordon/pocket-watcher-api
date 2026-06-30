@@ -1,0 +1,82 @@
+# Public portfolio demo stack for the DigitalOcean droplet (#82). NOT the home
+# server — that uses docker-compose.prod.yml. Trimmed from prod: drops
+# Loki/Promtail/Grafana (home-server tooling, too heavy for the shared 2GB box)
+# and adds Caddy as the public TLS edge (Layout A: same-origin FE + API).
+#
+# Run from the repo checkout at /opt/pocket-watcher/app:
+#   docker compose -f docker-compose.demo.yml up -d --build
+#
+# Requires a sibling .env (see .env.prod.example + its DEMO DROPLET block).
+# Stateful services use named volumes; uploads are throwaway (daily reset +
+# upload allowlist) so they live in a named volume too, not a host bind.
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"  # loopback only; Caddy fronts the public edge
+    env_file:
+      - .env            # JWT_SECRET, OAUTH_ENCRYPTION_KEY, DEMO_*, LLM_*, ...
+    environment:
+      # Infra wiring — these override anything in .env (compose precedence).
+      DATABASE_URL: postgresql+psycopg2://pocketwatcher:${POSTGRES_PASSWORD}@postgres:5432/pocketwatcher
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      UPLOAD_DIR: /data/uploads
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pocketwatcher
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: pocketwatcher
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pocketwatcher -d pocketwatcher"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redisdata:/data
+
+  # Public TLS edge. Auto-provisions a Let's Encrypt cert for $DEMO_DOMAIN once
+  # DNS resolves and ports 80/443 are reachable. Serves the built frontend
+  # (mounted from /opt/pocket-watcher/frontend, populated by the FE deploy) and
+  # reverse-proxies /api/* to the api container. Started only once the domain +
+  # frontend build are in place (until then: `up -d api` brings up api/pg/redis).
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DEMO_DOMAIN: ${DEMO_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /opt/pocket-watcher/frontend:/srv/pocketwatcher:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  redisdata:
+  uploads:
+  caddydata:
+  caddyconfig:

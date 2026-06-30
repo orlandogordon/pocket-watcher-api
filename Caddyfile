@@ -1,0 +1,25 @@
+# Caddy config for the public portfolio demo droplet (#82, Layout A: the FE and
+# API share one origin so there's no CORS). Used only by docker-compose.demo.yml
+# — the home server has no Caddy. $DEMO_DOMAIN comes from the droplet .env.
+#
+# NOTE: the /api/* split + strip_prefix here is provisional and must be matched
+# to the frontend build (FE #51, VITE_API_BASE_URL). The FastAPI routes live at
+# the root (/health, /auth/login, /transactions, ...), so /api is stripped
+# before proxying. Finalize alongside the FE deploy.
+
+{$DEMO_DOMAIN} {
+	encode gzip
+
+	# API: strip the /api prefix and proxy to the api container.
+	handle /api/* {
+		uri strip_prefix /api
+		reverse_proxy api:8000
+	}
+
+	# Frontend SPA: serve the static build with client-side-routing fallback.
+	handle {
+		root * /srv/pocketwatcher
+		try_files {path} /index.html
+		file_server
+	}
+}
