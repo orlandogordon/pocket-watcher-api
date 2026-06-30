@@ -23,3 +23,8 @@
 		file_server
 	}
 }
+
+# Extra site blocks for other apps fronted by this shared edge (e.g. Wander NA).
+# Their config is kept OUTSIDE this repo (in /etc/caddy/conf.d on the droplet) so
+# it doesn't couple into pocket-watcher; this import is the only stable hook.
+import /etc/caddy/conf.d/*.caddy

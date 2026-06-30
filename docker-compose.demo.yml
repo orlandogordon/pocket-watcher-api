@@ -69,8 +69,14 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - /opt/pocket-watcher/frontend:/srv/pocketwatcher:ro
+      # Extra apps fronted by this shared edge (kept outside this repo):
+      - /opt/wander-caddy/conf.d:/etc/caddy/conf.d:ro
+      - /opt/wander-na-frontend/build:/srv/wander:ro
       - caddydata:/data
       - caddyconfig:/config
+    # Lets imported site blocks reach host services (e.g. Wander's Node on :3500).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - api
 
