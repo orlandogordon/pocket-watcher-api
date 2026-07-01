@@ -73,18 +73,44 @@ from src.utils.time import utcnow
 logger = get_logger(__name__)
 fake = Faker()
 
-# Realistic merchant names so the seeded dashboards read like real spending
-# (recruiters see "Whole Foods", not a Faker catch-phrase). Categories are
-# assigned from the live set below — pairing isn't guaranteed coherent, which is
-# fine: the LLM categorization showcase happens on the upload path, the seed just
-# needs every page to look populated and already-categorized.
-_MERCHANTS = [
-    "Whole Foods Market", "Trader Joe's", "Costco Wholesale", "Target",
-    "Starbucks", "Chipotle", "Shake Shack", "Sweetgreen", "DoorDash",
-    "Amazon", "Apple", "Netflix", "Spotify", "Uber", "Lyft", "Shell",
-    "Exxon", "Delta Air Lines", "Marriott", "CVS Pharmacy", "Walgreens",
-    "Home Depot", "IKEA", "Nike", "REI", "Verizon", "Comcast Xfinity",
-    "PSE&G", "Planet Fitness", "AMC Theatres",
+# Realistic merchant names paired with a coherent (parent, subcategory) from the
+# live taxonomy (src/constants/categories.py), so a seeded row reads like real
+# spending — "Whole Foods Market" lands under Food › Groceries, not a random
+# category (#83). Resolved to db_ids by NAME at seed time (_resolve_merchants);
+# a merchant whose mapped category no longer exists falls back to uncategorized
+# rather than crashing the seed. The LLM categorization showcase still happens on
+# the upload path — this is just the pre-seeded rows looking right.
+_MERCHANT_CATEGORIES: list[tuple[str, str, str | None]] = [
+    ("Whole Foods Market", "Food", "Groceries"),
+    ("Trader Joe's", "Food", "Groceries"),
+    ("Costco Wholesale", "Food", "Groceries"),
+    ("Target", "Shopping", "General"),
+    ("Starbucks", "Food", "Coffee Shops"),
+    ("Chipotle", "Food", "Restaurants"),
+    ("Shake Shack", "Food", "Restaurants"),
+    ("Sweetgreen", "Food", "Restaurants"),
+    ("DoorDash", "Food", "Restaurants"),
+    ("Amazon", "Shopping", "General"),
+    ("Apple", "Shopping", "Electronics"),
+    ("Netflix", "Subscriptions", "Streaming"),
+    ("Spotify", "Subscriptions", "Streaming"),
+    ("Uber", "Transportation", "Ride Share"),
+    ("Lyft", "Transportation", "Ride Share"),
+    ("Shell", "Transportation", "Gas"),
+    ("Exxon", "Transportation", "Gas"),
+    ("Delta Air Lines", "Travel", "Flights"),
+    ("Marriott", "Travel", "Lodging"),
+    ("CVS Pharmacy", "Health", "Prescriptions"),
+    ("Walgreens", "Health", "Prescriptions"),
+    ("Home Depot", "Shopping", "Home Goods"),
+    ("IKEA", "Shopping", "Home Goods"),
+    ("Nike", "Shopping", "Clothing"),
+    ("REI", "Shopping", "Clothing"),
+    ("Verizon", "Housing", "Utilities"),
+    ("Comcast Xfinity", "Housing", "Utilities"),
+    ("PSE&G", "Housing", "Utilities"),
+    ("Planet Fitness", "Subscriptions", "Memberships"),
+    ("AMC Theatres", "Entertainment", "Movies"),
 ]
 
 _INVESTMENTS = [
@@ -106,10 +132,13 @@ _RAW_DESCRIPTIONS = [
     "PAYPAL *INST XFER 77310",
 ]
 
-# How far back transaction history runs. > 1 year so the spending trends, budget
-# history, and net-worth chart all read as a real, lived-in account (#82).
-_HISTORY_MONTHS = "-14M"
-_HISTORY_DAYS = 420  # ~14 months, for the biweekly paycheck cadence
+# Fixed calendar anchor for the *start* of all seeded history (#83). The end is
+# always date.today() (the reset date), so the window GROWS over time (Jan 2024 →
+# reset date) instead of sliding forward — every derived range (transactions,
+# paychecks, snapshots, investment buys) is measured from this one anchor so they
+# can't drift apart. Deep multi-year history makes the trends/budget/net-worth
+# pages read as a real, lived-in account.
+ANCHOR = date(2024, 1, 1)
 
 # Biweekly direct-deposit paychecks land on the checking account. Total payroll
 # is sized to modestly exceed seeded expenses so the dashboard shows a realistic
@@ -118,10 +147,9 @@ _PAYCHECK_INTERVAL_DAYS = 14
 _INCOME_OVER_EXPENSE = (1.08, 1.18)  # target payroll / total expenses
 _EMPLOYER = "ACME CORP DIRECT DEP"
 
-# Snapshot history span (days) and cadence. Weekly points over ~14 months give
-# the net-worth chart a populated, trending series; the history endpoints
-# downsample to monthly past a year anyway.
-_SNAPSHOT_DAYS = 425
+# Snapshot cadence. Weekly points from the anchor to today give the net-worth
+# chart a populated, trending series; the history endpoints downsample to monthly
+# past a year anyway.
 _SNAPSHOT_STEP_DAYS = 7
 
 _TWO_PLACES = Decimal("0.01")
@@ -150,6 +178,34 @@ def _load_categories(db) -> dict[int, list[int]]:
         ]
         for p in parents
     }
+
+
+def _resolve_merchants(db) -> list[tuple[str, int | None, int | None]]:
+    """Resolve _MERCHANT_CATEGORIES against the live taxonomy, by NAME.
+
+    Returns (merchant_name, parent_db_id, subcategory_db_id) tuples. A merchant
+    whose mapped parent/subcategory name isn't in the DB resolves to
+    (name, None, None) — the seed leaves that row uncategorized rather than
+    crashing, so a taxonomy rename can't break the reset (#83).
+    """
+    parents = {
+        c.name: c.db_id
+        for c in db.query(CategoryDB).filter(CategoryDB.parent_category_id.is_(None))
+    }
+    subs_by_parent: dict[int, dict[str, int]] = {}
+    for c in db.query(CategoryDB).filter(CategoryDB.parent_category_id.isnot(None)):
+        subs_by_parent.setdefault(c.parent_category_id, {})[c.name] = c.db_id
+
+    resolved: list[tuple[str, int | None, int | None]] = []
+    for name, parent_name, sub_name in _MERCHANT_CATEGORIES:
+        parent_id = parents.get(parent_name)
+        sub_id = (
+            subs_by_parent.get(parent_id, {}).get(sub_name)
+            if parent_id is not None and sub_name is not None
+            else None
+        )
+        resolved.append((name, parent_id, sub_id))
+    return resolved
 
 
 def _seed_needs_review(db, user, account) -> None:
@@ -191,9 +247,10 @@ def _seed_paychecks(db, user, checking, total_expenses) -> None:
     asset account (``get_transaction_stats`` / ``get_monthly_averages``).
     """
     today = date.today()
+    history_days = (today - ANCHOR).days
     pay_dates = [
         today - timedelta(days=offset)
-        for offset in range(0, _HISTORY_DAYS + 1, _PAYCHECK_INTERVAL_DAYS)
+        for offset in range(0, history_days + 1, _PAYCHECK_INTERVAL_DAYS)
     ]
     if not pay_dates:
         return
@@ -271,15 +328,15 @@ def _seed_transfer_pairs(db, user, accounts) -> None:
 
 
 def _seed_snapshots(db, accounts) -> None:
-    """Write weekly value-history snapshots for every account over ~14 months,
-    trending from a plausible starting balance to each account's current
+    """Write weekly value-history snapshots for every account from the anchor to
+    today, trending from a plausible starting balance to each account's current
     balance, so the net-worth chart and per-account history read as real.
 
     Synthesized directly (no price fetch) — the daily EOD job pulls live prices,
     but the demo must seed offline and deterministically on a small droplet.
     """
     today = date.today()
-    start = today - timedelta(days=_SNAPSHOT_DAYS)
+    start = ANCHOR
 
     dates: list[date] = []
     d = start
@@ -352,6 +409,7 @@ def _seed_snapshots(db, accounts) -> None:
 def _seed_user(db, user) -> None:
     categories = _load_categories(db)
     parent_ids = list(categories.keys())
+    merchants = _resolve_merchants(db)
 
     # 1. Accounts — one of each type, with real institution names so the demo
     # reads like a genuine multi-bank setup (recruiters see "Chase", "Fidelity").
@@ -393,22 +451,21 @@ def _seed_user(db, user) -> None:
     purchases: list[TransactionDB] = []
     total_expenses = Decimal("0")
     for acc in (accounts[AccountType.CHECKING], accounts[AccountType.CREDIT_CARD]):
-        for _ in range(random.randint(130, 170)):
-            parent_id = random.choice(parent_ids)
-            subs = categories[parent_id]
+        for _ in range(random.randint(240, 300)):
+            merchant, parent_id, sub_id = random.choice(merchants)
             is_purchase = random.random() < 0.90
             amount = _money(6, 280) if is_purchase else _money(5, 75)
             txn = TransactionDB(
                 uuid=uuid4(),
                 user_id=user.db_id,
                 account_id=acc.db_id,
-                transaction_date=fake.date_between(start_date=_HISTORY_MONTHS, end_date="today"),
+                transaction_date=fake.date_between(start_date=ANCHOR, end_date="today"),
                 amount=amount,
                 transaction_type=TransactionType.PURCHASE if is_purchase else TransactionType.CREDIT,
                 category_id=parent_id,
-                subcategory_id=random.choice(subs) if subs else None,
-                merchant_name=random.choice(_MERCHANTS),
-                description=random.choice(_MERCHANTS),
+                subcategory_id=sub_id,
+                merchant_name=merchant,
+                description=merchant,
                 transaction_hash=uuid4().hex,
                 source_type=SourceType.MANUAL,
             )
@@ -451,7 +508,12 @@ def _seed_user(db, user) -> None:
             quantity=quantity,
             price_per_share=price,
             total_amount=(quantity * price).quantize(_TWO_PLACES),
-            transaction_date=fake.date_between(start_date="-2y", end_date="-6M"),
+            # Cluster buys just after the anchor so they predate the whole
+            # snapshot window — _seed_snapshots holds the holdings split constant
+            # across the trend on the "all buys predate it" assumption (#83).
+            transaction_date=fake.date_between(
+                start_date=ANCHOR, end_date=ANCHOR + timedelta(days=120)
+            ),
             transaction_hash=uuid4().hex,
         ))
     db.flush()

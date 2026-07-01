@@ -66,18 +66,59 @@ def test_reset_seeds_real_institution_names(db):
     assert {"TD Bank", "Charles Schwab"} <= institutions
 
 
-def test_reset_seeds_year_plus_of_history(db):
+def test_reset_anchors_history_start_to_jan_2024(db):
     from datetime import date, timedelta
+
+    from src.jobs.demo_reset import ANCHOR
 
     _seed_categories(db)
     reset_demo_data(db, **DEMO)
     user = read_db_user(db, email=DEMO["email"])
 
-    earliest = min(
+    dates = [
         t.transaction_date
         for t in db.query(TransactionDB).filter(TransactionDB.user_id == user.db_id)
-    )
+    ]
+    earliest = min(dates)
+    # Start is the FIXED calendar anchor (not a sliding today-relative window),
+    # so the earliest row sits at/just after Jan-2024 no matter when the reset
+    # runs — this is the guard against the window drifting forward over time.
+    assert ANCHOR <= earliest <= ANCHOR + timedelta(days=60)
+    # And the window still reaches back well over a year.
     assert earliest <= date.today() - timedelta(days=365)
+
+
+def test_reset_seeds_coherent_merchant_categories(db):
+    from src.db.core import CategoryDB
+    from src.jobs.demo_reset import _MERCHANT_CATEGORIES
+
+    _seed_categories(db)
+    reset_demo_data(db, **DEMO)
+    user = read_db_user(db, email=DEMO["email"])
+
+    expected = {name: (parent, sub) for name, parent, sub in _MERCHANT_CATEGORIES}
+    name_by_id = {c.db_id: c.name for c in db.query(CategoryDB)}
+
+    rows = (
+        db.query(TransactionDB)
+        .filter(
+            TransactionDB.user_id == user.db_id,
+            TransactionDB.merchant_name.isnot(None),
+            TransactionDB.category_id.isnot(None),
+        )
+        .all()
+    )
+    assert rows, "expected categorized merchant rows"
+    seen_merchants = set()
+    for t in rows:
+        exp_parent, exp_sub = expected[t.merchant_name]
+        assert name_by_id[t.category_id] == exp_parent
+        if exp_sub is not None:
+            assert name_by_id[t.subcategory_id] == exp_sub
+        assert t.description == t.merchant_name  # description tracks the merchant
+        seen_merchants.add(t.merchant_name)
+    # The random draw should exercise a good spread of the merchant table.
+    assert len(seen_merchants) >= 10
 
 
 def test_reset_seeds_inbox_items(db):
@@ -142,6 +183,8 @@ def test_reset_seeds_priced_investment_holdings(db):
 
 
 def test_reset_seeds_snapshots_for_all_accounts(db):
+    from datetime import date
+
     _seed_categories(db)
     reset_demo_data(db, **DEMO)
     user = read_db_user(db, email=DEMO["email"])
@@ -156,9 +199,12 @@ def test_reset_seeds_snapshots_for_all_accounts(db):
             .all()
         )
         assert len(snaps) > 50, "expected a year+ of weekly snapshots per account"
-        # The latest snapshot lands exactly on the account's live balance.
+        # The latest snapshot lands on the reset date and exactly on the
+        # account's live balance — so a reset always ends the series on "today",
+        # never a stale frozen date (#83).
         account = next(a for a in db.query(AccountDB) if a.db_id == account_id)
         latest = max(snaps, key=lambda s: s.value_date)
+        assert latest.value_date == date.today()
         assert latest.balance == account.balance
 
 
